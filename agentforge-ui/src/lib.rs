@@ -169,11 +169,11 @@ pub fn init(cx: &mut App) {
     // 1. Initialize gpui-component (THE required first call)
     gpui_component::init(cx);
 
-    // 2. Initialize themes (watch ./themes dir for JSON files)
-    crate::ui::framework::themes::init(cx);
-
-    // 3. Initialize global state
+    // 2. Initialize global state
     AppState::init(cx);
+
+    // 3. Initialize themes (watch ./themes dir for JSON files)
+    crate::ui::framework::themes::init(cx);
 
     if let Err(e) = AppState::global(cx).db.seed_sdg_team() {
         eprintln!("Failed to seed SDG team: {}", e);
@@ -288,12 +288,24 @@ pub fn init(cx: &mut App) {
             .cloned()
         {
             gpui_component::Theme::global_mut(cx).apply_config(&theme_config);
+            
+            // Save selected theme to DB
+            if let Err(e) = AppState::global(cx).db.set_setting("theme", name.as_ref()) {
+                eprintln!("Failed to save theme to DB: {}", e);
+            }
         }
         cx.refresh_windows();
     });
 
     cx.on_action(|switch: &SwitchThemeMode, cx: &mut App| {
         gpui_component::Theme::change(switch.0, None, cx);
+        
+        // After changing mode, save the current theme name to DB
+        let name = gpui_component::Theme::global(cx).theme_name().clone();
+        if let Err(e) = AppState::global(cx).db.set_setting("theme", name.as_ref()) {
+            eprintln!("Failed to save theme mode to DB: {}", e);
+        }
+        
         cx.refresh_windows();
     });
 }

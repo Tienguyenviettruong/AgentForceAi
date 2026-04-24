@@ -24,6 +24,8 @@ pub struct KnowledgePanel {
     hovered_node: Option<usize>,
     selected_node_idx: Option<usize>,
     dragging_node: Option<usize>,
+    is_panning_graph: bool,
+    is_panning_minimap: bool,
     last_mouse_pos: Option<gpui::Point<f32>>,
     node_positions: Vec<gpui::Point<f32>>,
     node_velocities: Vec<gpui::Point<f32>>,
@@ -227,6 +229,8 @@ impl KnowledgePanel {
             hovered_node: None,
             selected_node_idx: None,
             dragging_node: None,
+            is_panning_graph: false,
+            is_panning_minimap: false,
             last_mouse_pos: None,
             node_positions: Vec::new(),
             node_velocities: Vec::new(),
@@ -504,28 +508,47 @@ impl KnowledgePanel {
                     .h_full()
                     .overflow_hidden()
                     .relative()
+                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, e: &gpui::MouseDownEvent, _window, _cx| {
+                        if this.dragging_node.is_none() && !this.is_panning_minimap {
+                            this.is_panning_graph = true;
+                            let current_pos = gpui::Point { x: e.position.x.into(), y: e.position.y.into() };
+                            this.last_mouse_pos = Some(current_pos);
+                        }
+                    }))
                     .on_mouse_up(gpui::MouseButton::Left, cx.listener(|this, _, _window, cx| {
                         this.dragging_node = None;
+                        this.is_panning_graph = false;
+                        this.is_panning_minimap = false;
                         this.last_mouse_pos = None;
                         cx.notify();
                     }))
                     .on_mouse_move(cx.listener(|this, e: &gpui::MouseMoveEvent, _window, cx| {
                         let current_pos = gpui::Point { x: e.position.x.into(), y: e.position.y.into() };
-                        if let (Some(node_idx), Some(last_pos)) = (this.dragging_node, this.last_mouse_pos) {
-                            if node_idx >= this.node_positions.len() {
-                                this.dragging_node = None;
-                                this.last_mouse_pos = Some(current_pos);
-                                cx.notify();
-                                return;
-                            }
+                        if let Some(last_pos) = this.last_mouse_pos {
                             let dx = current_pos.x - last_pos.x;
                             let dy = current_pos.y - last_pos.y;
-                            let zoom = this.graph_zoom;
                             
-                            this.node_positions[node_idx].x += dx / zoom;
-                            this.node_positions[node_idx].y += dy / zoom;
-                            
-                            cx.notify();
+                            if let Some(node_idx) = this.dragging_node {
+                                if node_idx < this.node_positions.len() {
+                                    let zoom = this.graph_zoom;
+                                    this.node_positions[node_idx].x += dx / zoom;
+                                    this.node_positions[node_idx].y += dy / zoom;
+                                    cx.notify();
+                                } else {
+                                    this.dragging_node = None;
+                                }
+                            } else if this.is_panning_minimap {
+                                // Minimap scale is 0.05. Moving mouse by dx on minimap means 
+                                // moving viewport by dx. Since vp_x = ... - pan.x * scale, 
+                                // to move vp_x by dx we need pan.x -= dx / scale.
+                                this.graph_pan.x -= dx / 0.05;
+                                this.graph_pan.y -= dy / 0.05;
+                                cx.notify();
+                            } else if this.is_panning_graph {
+                                this.graph_pan.x += dx;
+                                this.graph_pan.y += dy;
+                                cx.notify();
+                            }
                         }
                         this.last_mouse_pos = Some(current_pos);
                     }))
@@ -705,6 +728,12 @@ impl KnowledgePanel {
             .border_color(theme.border)
             .rounded_lg()
             .overflow_hidden()
+            .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, e: &gpui::MouseDownEvent, _window, cx| {
+                this.is_panning_minimap = true;
+                let current_pos = gpui::Point { x: e.position.x.into(), y: e.position.y.into() };
+                this.last_mouse_pos = Some(current_pos);
+                cx.notify();
+            }))
             .child(
                 canvas(
                     move |_bounds, _window, _cx| {},
