@@ -5,7 +5,7 @@ use gpui::{
 };
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::WindowExt;
-use gpui_component::{h_flex, ActiveTheme as _, IconName};
+use gpui_component::{h_flex, v_flex, ActiveTheme as _, IconName};
 
 use super::TeamWorkspacePanel;
 
@@ -566,12 +566,26 @@ impl TeamWorkspacePanel {
                                                 )
                                         )
                                         .when_some(t.payload.clone(), |d, payload| {
-                                            d.child(
-                                                div()
-                                                    .text_size(px(12.))
-                                                    .text_color(theme.muted_foreground)
-                                                    .child(payload)
-                                            )
+                                            if let Ok(dag_task) = serde_json::from_str::<crate::application::orchestration::core::DagTask>(&payload) {
+                                                d.child(
+                                                    div()
+                                                        .text_size(px(12.))
+                                                        .text_color(theme.muted_foreground)
+                                                        .child(
+                                                            v_flex()
+                                                                .gap_1()
+                                                                .child(div().font_weight(gpui::FontWeight::SEMIBOLD).text_color(theme.foreground).child(dag_task.name))
+                                                                .child(div().child(dag_task.description))
+                                                        )
+                                                )
+                                            } else {
+                                                d.child(
+                                                    div()
+                                                        .text_size(px(12.))
+                                                        .text_color(theme.muted_foreground)
+                                                        .child(payload)
+                                                )
+                                            }
                                         })
                                 );
                             }
