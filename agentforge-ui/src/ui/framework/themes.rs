@@ -17,4 +17,10 @@ pub fn init(cx: &mut App) {
     {
         eprintln!("Warning: Failed to watch themes directory: {}", err);
     }
+    
+    // Set default theme to Dark mode (AgentForge Dark / default dark theme)
+    // The "agent" theme is our main dark theme according to themes/agent.json
+    if let Some(theme_config) = ThemeRegistry::global(cx).themes().get("agent").cloned() {
+        Theme::global_mut(cx).apply_config(&theme_config);
+    }
 }

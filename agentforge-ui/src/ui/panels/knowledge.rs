@@ -1,7 +1,7 @@
 use gpui::EventEmitter;
 use crate::core::traits::database::DatabasePort;
 use gpui::{StatefulInteractiveElement, Entity, 
-    div, px, App, AppContext, Context, Focusable, InteractiveElement, IntoElement, ParentElement, Render,
+    canvas, div, px, App, AppContext, Context, Focusable, InteractiveElement, IntoElement, ParentElement, Render,
     Styled, Window,
 };
 use gpui_component::dock::PanelEvent;
@@ -684,6 +684,70 @@ impl KnowledgePanel {
                         }
                         nodes_ui
                     })
+                    .child(self.render_minimap(cx))
+            )
+    }
+
+    fn render_minimap(&self, cx: &Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let nodes = self.node_positions.clone();
+        let pan = self.graph_pan;
+        let zoom = self.graph_zoom;
+
+        div()
+            .absolute()
+            .bottom_4()
+            .right_4()
+            .w(px(150.))
+            .h(px(100.))
+            .bg(theme.secondary.opacity(0.8))
+            .border_1()
+            .border_color(theme.border)
+            .rounded_lg()
+            .overflow_hidden()
+            .child(
+                canvas(
+                    move |_bounds, _window, _cx| {},
+                    move |bounds, _, window: &mut Window, _cx| {
+                        let cx_offset = bounds.size.width / 2.0;
+                        let cy_offset = bounds.size.height / 2.0;
+
+                        // Minimap scaling factor
+                        let scale = 0.05;
+
+                        // Draw nodes
+                        for pos in &nodes {
+                            let start_x = bounds.origin.x + cx_offset + gpui::px(pos.x * scale);
+                            let start_y = bounds.origin.y + cy_offset + gpui::px(pos.y * scale);
+
+                            let rect = gpui::Bounds {
+                                origin: gpui::point(start_x - gpui::px(2.0), start_y - gpui::px(2.0)),
+                                size: gpui::size(gpui::px(4.0), gpui::px(4.0)),
+                            };
+                            window.paint_quad(gpui::fill(rect, gpui::rgba(0x00d4aaff)));
+                        }
+
+                        // Viewport rectangle
+                        let vp_w = bounds.size.width / zoom;
+                        let vp_h = bounds.size.height / zoom;
+                        let vp_x = bounds.origin.x + cx_offset - gpui::px(pan.x * scale) - vp_w / 2.0;
+                        let vp_y = bounds.origin.y + cy_offset - gpui::px(pan.y * scale) - vp_h / 2.0;
+
+                        let mut builder = gpui::PathBuilder::stroke(gpui::px(1.0)).with_style(
+                            gpui::PathStyle::Stroke(gpui::StrokeOptions::default()),
+                        );
+                        builder.move_to(gpui::point(vp_x, vp_y));
+                        builder.line_to(gpui::point(vp_x + vp_w, vp_y));
+                        builder.line_to(gpui::point(vp_x + vp_w, vp_y + vp_h));
+                        builder.line_to(gpui::point(vp_x, vp_y + vp_h));
+                        builder.line_to(gpui::point(vp_x, vp_y));
+
+                        if let Ok(path) = builder.build() {
+                            window.paint_path(path, gpui::rgba(0xffffff44));
+                        }
+                    },
+                )
+                .size_full(),
             )
     }
 
