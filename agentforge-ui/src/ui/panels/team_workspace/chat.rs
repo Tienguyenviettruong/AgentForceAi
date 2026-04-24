@@ -746,7 +746,7 @@ impl TeamWorkspacePanel {
                                                 }
                                             }).detach();
                                         }))
-                                        .child(Icon::empty().path("icons/attachment.svg").size_8().text_color(theme.muted_foreground))
+                                        .child(Icon::empty().path("icons/attachment.svg").size_4().text_color(theme.muted_foreground))
                                 )
                         )
                         .child(

@@ -211,7 +211,8 @@ impl TeamWorkspacePanel {
                 h_flex()
                     .id(SharedString::from(title.to_string()))
                     .justify_between()
-                    .p(px(12.))
+                    .py(px(8.))
+                    .px(px(12.))
                     .cursor_pointer()
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if this.expanded_groups.contains(&title_clone) {
@@ -423,7 +424,7 @@ impl TeamWorkspacePanel {
                             .flex_1()
                             .justify_center()
                             .gap(px(6.))
-                            .py(px(12.))
+                            .py(px(8.))
                             .border_b(px(2.))
                             .border_color(if self.members_active_tab == 0 { theme.primary } else { theme.transparent })
                             .text_color(if self.members_active_tab == 0 { theme.foreground } else { theme.muted_foreground })
@@ -449,7 +450,7 @@ impl TeamWorkspacePanel {
                             .flex_1()
                             .justify_center()
                             .gap(px(6.))
-                            .py(px(12.))
+                            .py(px(8.))
                             .border_b(px(2.))
                             .border_color(if self.members_active_tab == 1 { theme.primary } else { theme.transparent })
                             .text_color(if self.members_active_tab == 1 { theme.foreground } else { theme.muted_foreground })

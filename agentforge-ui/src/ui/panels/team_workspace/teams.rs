@@ -142,10 +142,7 @@ impl TeamWorkspacePanel {
             _ => gpui::blue(),
         };
 
-        let title = format!(
-            "Instance {}",
-            &instance.id[..std::cmp::min(6, instance.id.len())]
-        );
+        let title = instance.id[..std::cmp::min(6, instance.id.len())].to_string();
         let desc = instance
             .config
             .as_deref()
