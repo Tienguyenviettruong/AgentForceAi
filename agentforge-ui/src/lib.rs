@@ -300,12 +300,6 @@ pub fn init(cx: &mut App) {
     cx.on_action(|switch: &SwitchThemeMode, cx: &mut App| {
         gpui_component::Theme::change(switch.0, None, cx);
         
-        // After changing mode, save the current theme name to DB
-        let name = gpui_component::Theme::global(cx).theme_name().clone();
-        if let Err(e) = AppState::global(cx).db.set_setting("theme", name.as_ref()) {
-            eprintln!("Failed to save theme mode to DB: {}", e);
-        }
-        
         // Also save the mode itself to ensure it's persisted correctly
         let mode_str = match switch.0 {
             gpui_component::ThemeMode::Light => "light",
