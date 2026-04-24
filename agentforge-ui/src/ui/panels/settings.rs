@@ -157,6 +157,16 @@ impl Render for SettingsPanel {
                                                 _ => ThemeMode::Light,
                                             };
                                             gpui_component::Theme::change(mode, None, cx);
+                                            
+                                            // Also save the mode itself to ensure it's persisted correctly
+                                            let mode_str = match mode {
+                                                ThemeMode::Light => "light",
+                                                ThemeMode::Dark => "dark",
+                                            };
+                                            if let Err(e) = crate::AppState::global(cx).db.set_setting("theme_mode", mode_str) {
+                                                eprintln!("Failed to save theme mode string to DB from settings: {}", e);
+                                            }
+                                            
                                             cx.refresh_windows();
                                         },
                                     )
