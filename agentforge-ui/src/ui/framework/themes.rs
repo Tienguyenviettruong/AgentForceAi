@@ -33,4 +33,14 @@ pub fn init(cx: &mut App) {
     if let Some(theme_config) = ThemeRegistry::global(cx).themes().get(&ts).cloned() {
         Theme::global_mut(cx).apply_config(&theme_config);
     }
+    
+    // Also restore theme mode if saved
+    if let Ok(Some(saved_mode)) = AppState::global(cx).db.get_setting("theme_mode") {
+        let mode = if saved_mode == "light" {
+            gpui_component::ThemeMode::Light
+        } else {
+            gpui_component::ThemeMode::Dark
+        };
+        Theme::change(mode, None, cx);
+    }
 }

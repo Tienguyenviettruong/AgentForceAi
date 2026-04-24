@@ -306,6 +306,15 @@ pub fn init(cx: &mut App) {
             eprintln!("Failed to save theme mode to DB: {}", e);
         }
         
+        // Also save the mode itself to ensure it's persisted correctly
+        let mode_str = match switch.0 {
+            gpui_component::ThemeMode::Light => "light",
+            gpui_component::ThemeMode::Dark => "dark",
+        };
+        if let Err(e) = AppState::global(cx).db.set_setting("theme_mode", mode_str) {
+            eprintln!("Failed to save theme mode string to DB: {}", e);
+        }
+        
         cx.refresh_windows();
     });
 }
