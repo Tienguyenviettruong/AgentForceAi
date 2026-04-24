@@ -327,9 +327,9 @@ The Knowledge Base System (referred to as \'Brains\') provides a centralized kno
 
 知识库系统（称为\'大脑\'）提供与Obsidian仓库集成的集中式知识管理能力。它以Markdown格式存储组织知识，实现与Obsidian的链接、标签和图可视化功能的兼容性。系统支持结构化知识（模板、程序、参考数据）和非结构化知识（笔记、研究发现、对话摘要）。
 
-The knowledge base provides semantic search capabilities, automatic knowledge extraction from agent interactions, and bi-directional synchronization with Obsidian vaults. Knowledge entries can be tagged, categorized, and linked to create a rich knowledge graph that agents can query during their operations.
+The knowledge base provides semantic search capabilities, automatic knowledge extraction from agent interactions, and bi-directional synchronization with Obsidian vaults. Knowledge entries can be tagged, categorized, and linked to create a rich knowledge graph that agents can query during their operations. The knowledge graph interface shall include a minimap (similar to the iFlow builder) for easier navigation and orientation within complex knowledge structures.
 
-知识库提供语义搜索能力、从智能体交互中自动提取知识以及与Obsidian仓库的双向同步。知识条目可以被标记、分类和链接，以创建智能体在运营期间可以查询的丰富知识图谱。
+知识库提供语义搜索能力、从智能体交互中自动提取知识以及与Obsidian仓库的双向同步。知识条目可以被标记、分类和链接，以创建智能体在运营期间可以查询的丰富知识图谱。知识图谱界面应包含一个迷你图（类似于iFlow构建器中的迷你图），以便在复杂的知识结构中更轻松地导航和定位。
 
 **4. Functional Requirements / 功能需求**
 
@@ -1079,9 +1079,9 @@ The system shall support bidirectional linking between knowledge entries using O
 
 REQ-KB-007: 知识图谱可视化 \[高\]
 
-The system shall provide a knowledge graph visualization showing relationships between knowledge entries, agents, and workflows. The visualization shall be interactive, allowing users to navigate and explore connections.
+The system shall provide a knowledge graph visualization showing relationships between knowledge entries, agents, and workflows. The visualization shall be interactive, allowing users to navigate and explore connections. A minimap shall be provided in the bottom-right corner to assist with navigation in complex graphs, similar to the iFlow builder.
 
-系统应提供知识图谱可视化，显示知识条目、智能体和工作流之间的关系。可视化应是交互式的，允许用户导航和探索连接。
+系统应提供知识图谱可视化，显示知识条目、智能体和工作流之间的关系。可视化应是交互式的，允许用户导航和探索连接。右下角应提供一个迷你图（类似于iFlow构建器），以协助在复杂的图谱中导航。
 
 **REQ-KB-008: Knowledge Access Control** \[High\]
 
