@@ -1,35 +1,55 @@
-# Báo cáo Phân tích và Đánh giá Hệ thống AgentForge (Nhánh `agentforce`)
+# Báo cáo Phân tích và Đánh giá Mã nguồn Thực tế Hệ thống AgentForge (Nhánh `agentforce`)
 
-Dựa trên việc đối chiếu giữa tài liệu thiết kế (PRD, SRS, Architecture) và thực trạng mã nguồn hiện tại của nhánh `agentforce`, dưới đây là báo cáo đánh giá chi tiết về logic hệ thống, khả năng phối hợp, quản lý bộ nhớ, và các công cụ bổ trợ.
+*Báo cáo này được thực hiện dựa trên việc đọc, phân tích và đối chiếu trực tiếp mã nguồn Rust (source code) hiện tại trên nhánh `agentforce`, không dựa trên các tài liệu thiết kế lý thuyết.*
+
+---
 
 ## 1. Logic, Khả năng làm việc và Phối hợp giữa 2 Team
-- **Thiết kế vs Thực tế:** Về mặt thiết kế kiến trúc, hệ thống có `TeamBus` (định tuyến tin nhắn P2P: Direct, Broadcast, Role Group) và `SharedTaskList` (quản lý công việc chung qua SQLite). Tuy nhiên, **thực tế trong mã nguồn hiện tại**, các thành phần này chưa được kết nối hoàn chỉnh vào giao diện và luồng thực thi.
-- **Vấn đề "Đường ray song song" (Parallel Rails):** Theo phân tích từ các file như `improvement_plan.md`, UI của Team Workspace đang hoạt động độc lập, gọi trực tiếp đến LLM Provider và lưu vào bảng `messages` riêng lẻ. Nó bỏ qua hoàn toàn `TeamBus` và bộ điều phối trung tâm (Coordinator).
-- **Kết luận:** Khả năng phối hợp thực tế giữa 2 team hoặc giữa các Agent trong cùng một team hiện tại chưa hoạt động. Các Agent không thực sự "nhìn thấy" công việc của nhau trong một vòng lặp cộng tác (Multi-agent collaboration loop).
+- **Thực trạng mã nguồn:** Mặc dù có các file như `TeamBusRouter` và `SharedTaskList`, nhưng trong file xử lý luồng chat chính (`src/ui/panels/team_workspace/chat.rs`), **sự phối hợp tự động giữa các Agent không hề tồn tại**.
+- **Cách hoạt động hiện tại:** Hệ thống thực chất đang hoạt động như một "phòng chat nhóm" thông thường. Khi người dùng (hoặc hệ thống) chỉ định một Agent trả lời, mã nguồn chỉ đơn giản lấy toàn bộ lịch sử tin nhắn (`current_history`), nối thêm System Prompt của Agent đó và gọi API của LLM (Claude/OpenRouter) thông qua hàm `adapter.send_message_stream(full_history).await`.
+- **Đánh giá:** Không có vòng lặp cộng tác (Multi-agent collaboration loop). Không có "Coordinator" (Người điều phối) tự động chia việc cho team khác. Các Team hiện tại hoàn toàn độc lập và không thể giao tiếp chéo với nhau một cách tự động.
 
-## 2. Quản lý Bộ nhớ, Context, Caching và Lọc thông minh (Nguyên nhân gây "quên" và "loạn")
-- **Hiện trạng Context:** Việc bộ nhớ của Agent không nhớ được thông tin từ hội thoại và context bị loạn phản ánh đúng thực trạng mã nguồn hiện tại.
-- **Nguyên nhân:**
-  - **Quản lý Phiên (Session Recovery) bị lỗi:** Logic khôi phục phiên làm việc đang bị đứt gãy. Dữ liệu chat được lưu tạm bợ và khi tải lại, ngữ cảnh không được nạp đầy đủ hoặc nạp sai thứ tự.
-  - **Thiếu Caching và Smart Filtering:** Mặc dù có logic chèn ngữ cảnh (RAG) vào prompt (`[SYSTEM KNOWLEDGE RETRIEVAL]`), nhưng luồng quản lý bộ nhớ dài hạn (Long-term memory) và cắt tỉa ngữ cảnh (Context Pruning) chưa hoàn thiện. Hệ thống đang nhồi nhét quá nhiều hoặc cắt bỏ sai thông tin khiến LLM bị mất ngữ cảnh quan trọng hoặc quên thông tin cũ.
+## 2. Quản lý Bộ nhớ, Cache, Chọn lọc thông minh và Context
+- **Nguyên nhân gây "quên" và "loạn ngữ cảnh":**
+  - Trong mã nguồn (`chat.rs` dòng ~1238 đến 1300), biến `full_history` được tạo ra bằng cách `clone()` trực tiếp toàn bộ lịch sử hội thoại hiện tại.
+  - **Không hề có code xử lý Summarization (Tóm tắt) hay Context Pruning (Cắt tỉa ngữ cảnh).** Khi cuộc hội thoại dài ra, toàn bộ tin nhắn cũ bị nhồi nhét liên tục vào API của LLM.
+  - Khi vượt quá giới hạn Token của model, hoặc khi có quá nhiều thông tin rác, model sẽ tự động bị "loạn" và không nhớ được trọng tâm.
+  - **Không có Caching:** Hệ thống không có bất kỳ cơ chế cache memory nào cho hội thoại. Mỗi lần gọi LLM là một lần gửi lại toàn bộ chuỗi text từ đầu.
 
-## 3. Cách suy nghĩ, lưu trữ và chọn lọc của Agent (Vấn đề bảng `knowledge_entries`)
-- **Về Database:** Bảng `knowledge_entries` và bảng tìm kiếm toàn văn bản `knowledge_entries_fts` **thực sự tồn tại** trong schema của `sqlite_adapter.rs`. Nó không bị thiếu ở mức cơ sở dữ liệu.
-- **Về Thực tế sử dụng:** Mã nguồn hiện tại **chưa sử dụng bảng này cho luồng suy nghĩ thực tế của Agent**. Giao diện Knowledge (Knowledge panel) chủ yếu đang hiển thị dữ liệu giả lập (Mock UI) hoặc chưa kết nối trực tiếp với Database.
-- **Cách suy nghĩ:** Agent hiện tại hoạt động theo dạng phản hồi trực tiếp (Request-Response) thay vì có một vòng lặp suy nghĩ độc lập (Thought Loop) tự động trích xuất thông tin quan trọng để lưu vào `knowledge_entries`. Do đó, thông tin chỉ nằm trong lịch sử chat thay vì trở thành "kiến thức" có thể tìm kiếm độc lập.
+## 3. Cách Suy nghĩ của Agent và Lưu trữ (Sự thật về bảng `knowledge_entries`)
+- **Sự thật về Database:** Đã kiểm tra trực tiếp file khởi tạo CSDL `src/infrastructure/database/sqlite_adapter.rs`. **Các bảng `knowledge_entries` và `knowledge_entries_fts` KHÔNG HỀ TỒN TẠI trong mã nguồn.** Hệ thống chỉ có bảng `knowledge` và `knowledge_chunks`.
+- **Cách suy nghĩ:** Agent không có quá trình "suy nghĩ" (Thought process) hay "lưu trữ chọn lọc". Nó hoạt động theo cơ chế **Request-Response (Hỏi-Đáp) thuần túy**. Nó không có khả năng tự nhận thức để trích xuất một thông tin quan trọng trong chat và tự động `INSERT` vào bảng kiến thức. 
 
-## 4. Independent Research & Websearch (Tìm kiếm Web và Chọn lọc tin tức)
-- **Thực tế:** Tính năng này **chưa được triển khai thực tế**.
-- **Mã nguồn:** Trong file `src/ui/panels/research_notebook.rs`, khi kích hoạt tính năng "Auto-Search via Agent", mã nguồn chỉ sử dụng hàm `timer` để giả lập thời gian chờ (khoảng 2 giây), sau đó trả về một mảng dữ liệu được code cứng (hardcoded) như *"Ultimate Guide to AI Agents (Real Data)"*.
-- **Kết luận:** Hệ thống hiện tại không gọi bất kỳ API tìm kiếm thực tế nào (như Google, Bing, Tavily), không có khả năng đọc web thực sự, và do đó không thể chọn lọc thông minh tin tức như thiết kế.
+## 4. Independent Research & Websearch (Tìm kiếm Web độc lập)
+- **Thực trạng:** **Hoàn toàn là Giả lập (Mocked). Không có thật.**
+- **Bằng chứng trong code:** Tại file `src/ui/panels/research_notebook.rs`, khi kích hoạt tính năng tìm kiếm ("Auto-Search via Agent"), mã nguồn thực thi như sau:
+  ```rust
+  // Mô phỏng thời gian chờ
+  cx.background_executor().timer(std::time::Duration::from_secs(2)).await;
+  
+  // Trả về dữ liệu được code cứng (hardcoded)
+  let real_results = vec![
+      SearchResult {
+          title: "Ultimate Guide to AI Agents (Real Data)".to_string(),
+          url: "https://example.com/guide".to_string(),
+          snippet: "Comprehensive overview from actual agent execution.".to_string(),
+      }, ...
+  ];
+  ```
+- **Đánh giá:** Không có API tìm kiếm nào (Google, Bing, Tavily) được kết nối. Tính năng chọn lọc tin tức thông minh hoàn toàn không tồn tại trong code.
 
-## 5. Hệ thống Công cụ (MCP, Run CLI, Websearch trong Chat)
-- **Tình trạng MCP và DB:** Bảng `mcp_tools` đã được tạo trong SQLite để lưu trữ thông tin công cụ. Tuy nhiên, luồng thực thi (Tool Loop) để LLM chủ động gọi MCP Tool, chờ kết quả từ DB/Sandbox rồi suy nghĩ tiếp **chưa được kết nối (not connected)**. Giao diện báo "Available" nhưng lõi bên dưới chưa xử lý logic gọi tool.
+## 5. Các công cụ bổ trợ (MCP, Chạy CLI, Websearch trong Chat)
+- **Sự thật về MCP Tools:**
+  - Bảng `mcp_tools` **KHÔNG TỒN TẠI** trong CSDL (`sqlite_adapter.rs`).
+  - Trong `src/infrastructure/mcp/registry.rs`, danh sách công cụ MCP đang được lưu tạm trên RAM (bộ nhớ trong) bằng cấu trúc dữ liệu `RwLock<HashMap<String, McpTool>>`. Do đó, mỗi lần tắt app, mọi thiết lập về Tool sẽ biến mất.
+  - Các công cụ MCP "Available" trên giao diện chưa được kết nối với luồng thực thi của Agent.
 - **Khả năng chạy CLI và Websearch trực tiếp trong Chat:**
-  - **Chưa chạy được thực sự.**
-  - Thay vì cung cấp công cụ (Function Calling / Tool Use) cho LLM để nó tự chạy lệnh CLI hoặc tìm kiếm web và nhận lại kết quả, hệ thống hiện tại đang dùng một cơ chế Parser thô sơ: LLM được prompt để trả về các khối Markdown đặc biệt (ví dụ: ````file:/path/to/file````). Sau đó, ứng dụng dùng Regex (Biểu thức chính quy) để bóc tách nội dung và tự động ghi đè ra file (thông qua `chat_service.parse_and_write_files`).
-  - Không có môi trường Sandbox thực thi lệnh CLI trực tiếp trả kết quả về cho LLM ngay trong lúc chat.
+  - **Không chạy được.**
+  - Khi xem file `src/application/services/chat_service.rs`, hệ thống không cấp quyền Function Calling (gọi hàm) cho LLM để thực thi lệnh Terminal (CLI) hay Websearch.
+  - Việc "chạy" duy nhất mà code đang làm là dùng Regular Expression (Regex) để tìm các khối văn bản có dạng ````file:/path/to/file````, sau đó tự động trích xuất nội dung và ghi đè ra file vật lý trên máy. Không hề có môi trường Sandbox hay Terminal thực thụ chạy trong chat.
 
-## Tổng kết Đánh giá
-**AgentForge** đang sở hữu một bộ khung kiến trúc (Architecture) và Thiết kế Cơ sở dữ liệu (Database Schema) rất đồ sộ, chuẩn mực (sẵn sàng cho RAG, MCP, Multi-Agent Routing).
-Tuy nhiên, **logic cốt lõi nối giữa giao diện UI và Core Engine đang bị đứt gãy hoặc được làm giả (Mocked) rất nhiều**. Đây chính là lý do khiến hệ thống bị "loạn ngữ cảnh", "quên trí nhớ", không thể chạy Websearch/CLI thật, và MCP báo Available nhưng không thể kết nối. Hệ thống cần được "đi dây" (wiring) lại phần Core Engine để chuyển từ UI-Driven sang Engine-Driven đúng như tài liệu đã thiết kế.
+---
+### TỔNG KẾT
+Hiện tại, nhánh `agentforce` có một giao diện (UI) rất đẹp và các tài liệu thiết kế rất hoành tráng. Tuy nhiên, **logic lõi (Core Engine) bên dưới hầu hết đang bị làm giả (Mocked) hoặc triển khai ở mức độ sơ khai nhất (chỉ là Wrapper gọi API LLM bình thường).**
+
+Để hệ thống hoạt động đúng như tài liệu (có bộ nhớ thông minh, tự động phối hợp team, tự tìm kiếm web, tự chạy CLI), dự án cần phải đập bỏ luồng gọi LLM trực tiếp hiện tại trong `chat.rs`, và xây dựng một **Agent Loop (Vòng lặp Agent)** chuẩn mực (như ReAct hoặc Plan-and-Execute) có tích hợp Function Calling thực sự.
