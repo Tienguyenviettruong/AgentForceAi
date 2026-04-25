@@ -4,10 +4,16 @@
 
 ---
 
-## 1. Logic, Khả năng làm việc và Phối hợp giữa 2 Team
-- **Thực trạng mã nguồn:** Mặc dù có các file như `TeamBusRouter` và `SharedTaskList`, nhưng trong file xử lý luồng chat chính (`src/ui/panels/team_workspace/chat.rs`), **sự phối hợp tự động giữa các Agent không hề tồn tại**.
-- **Cách hoạt động hiện tại:** Hệ thống thực chất đang hoạt động như một "phòng chat nhóm" thông thường. Khi người dùng (hoặc hệ thống) chỉ định một Agent trả lời, mã nguồn chỉ đơn giản lấy toàn bộ lịch sử tin nhắn (`current_history`), nối thêm System Prompt của Agent đó và gọi API của LLM (Claude/OpenRouter) thông qua hàm `adapter.send_message_stream(full_history).await`.
-- **Đánh giá:** Không có vòng lặp cộng tác (Multi-agent collaboration loop). Không có "Coordinator" (Người điều phối) tự động chia việc cho team khác. Các Team hiện tại hoàn toàn độc lập và không thể giao tiếp chéo với nhau một cách tự động.
+## 1. Logic, Khả năng làm việc và Phối hợp giữa các Team và giữa các Agent trong 1 Team
+- **Giữa 2 Team khác nhau:**
+  - **Thực trạng mã nguồn:** Mặc dù có các file như `TeamBusRouter` và `SharedTaskList`, nhưng trong file xử lý luồng chat chính (`src/ui/panels/team_workspace/chat.rs`), **sự phối hợp tự động giữa các Team không hề tồn tại**.
+  - **Cách hoạt động hiện tại:** Hệ thống thực chất đang hoạt động như một "phòng chat nhóm" thông thường. Khi người dùng (hoặc hệ thống) chỉ định một Agent trả lời, mã nguồn chỉ đơn giản lấy toàn bộ lịch sử tin nhắn (`current_history`), nối thêm System Prompt của Agent đó và gọi API của LLM (Claude/OpenRouter) thông qua hàm `adapter.send_message_stream(full_history).await`.
+  - **Đánh giá:** Không có vòng lặp cộng tác (Multi-agent collaboration loop). Các Team hiện tại hoàn toàn độc lập và không thể giao tiếp chéo với nhau một cách tự động.
+
+- **Giữa các Agent trong cùng 1 Team:**
+  - **Thực trạng:** Các Agent không có khả năng tự động phân chia công việc hay nhận thức về vai trò của nhau một cách chủ động.
+  - **Tính năng "Debate Mode" (Tranh luận):** Trong mã nguồn (`chat.rs` dòng ~1230), tính năng này thực chất chỉ là một vòng lặp `for` (hardcoded) ép các Agent lần lượt sinh ra câu trả lời theo thứ tự danh sách. Ở cuối prompt, hệ thống tự động chèn cứng câu lệnh bắt LLM in ra chữ `[CONSENSUS_REACHED]`. Đây không phải là một quá trình thương lượng thông minh hay chia task thực sự.
+  - **Quản lý Task:** Bảng `tasks` và cơ chế `SharedTaskList` (nhận việc độc quyền - atomic claim) có trên tài liệu nhưng không được gọi trong code thực thi. Các Agent chỉ nhận lệnh trực tiếp từ người dùng thông qua text, không có khái niệm "Agent A làm xong thì tự động đẩy kết quả cho Agent B làm tiếp".
 
 ## 2. Quản lý Bộ nhớ, Cache, Chọn lọc thông minh và Context
 - **Nguyên nhân gây "quên" và "loạn ngữ cảnh":**
