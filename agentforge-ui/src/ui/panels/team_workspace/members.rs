@@ -5,7 +5,7 @@ use gpui::{
 };
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::WindowExt;
-use gpui_component::{h_flex, ActiveTheme as _, IconName};
+use gpui_component::{h_flex, v_flex, ActiveTheme as _, IconName};
 
 use super::TeamWorkspacePanel;
 
@@ -211,7 +211,8 @@ impl TeamWorkspacePanel {
                 h_flex()
                     .id(SharedString::from(title.to_string()))
                     .justify_between()
-                    .p(px(12.))
+                    .py(px(8.))
+                    .px(px(12.))
                     .cursor_pointer()
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if this.expanded_groups.contains(&title_clone) {
@@ -423,7 +424,7 @@ impl TeamWorkspacePanel {
                             .flex_1()
                             .justify_center()
                             .gap(px(6.))
-                            .py(px(12.))
+                            .py(px(8.))
                             .border_b(px(2.))
                             .border_color(if self.members_active_tab == 0 { theme.primary } else { theme.transparent })
                             .text_color(if self.members_active_tab == 0 { theme.foreground } else { theme.muted_foreground })
@@ -449,7 +450,7 @@ impl TeamWorkspacePanel {
                             .flex_1()
                             .justify_center()
                             .gap(px(6.))
-                            .py(px(12.))
+                            .py(px(8.))
                             .border_b(px(2.))
                             .border_color(if self.members_active_tab == 1 { theme.primary } else { theme.transparent })
                             .text_color(if self.members_active_tab == 1 { theme.foreground } else { theme.muted_foreground })
@@ -566,12 +567,26 @@ impl TeamWorkspacePanel {
                                                 )
                                         )
                                         .when_some(t.payload.clone(), |d, payload| {
-                                            d.child(
-                                                div()
-                                                    .text_size(px(12.))
-                                                    .text_color(theme.muted_foreground)
-                                                    .child(payload)
-                                            )
+                                            if let Ok(dag_task) = serde_json::from_str::<crate::application::orchestration::core::DagTask>(&payload) {
+                                                d.child(
+                                                    div()
+                                                        .text_size(px(12.))
+                                                        .text_color(theme.muted_foreground)
+                                                        .child(
+                                                            v_flex()
+                                                                .gap_1()
+                                                                .child(div().font_weight(gpui::FontWeight::SEMIBOLD).text_color(theme.foreground).child(dag_task.name))
+                                                                .child(div().child(dag_task.description))
+                                                        )
+                                                )
+                                            } else {
+                                                d.child(
+                                                    div()
+                                                        .text_size(px(12.))
+                                                        .text_color(theme.muted_foreground)
+                                                        .child(payload)
+                                                )
+                                            }
                                         })
                                 );
                             }

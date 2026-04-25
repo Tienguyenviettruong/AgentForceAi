@@ -257,6 +257,12 @@ impl Render for TeamWorkspacePanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
 
+        let breadcrumb_title = if let Some(instance_id) = &self.selected_instance_id {
+            instance_id[..std::cmp::min(6, instance_id.len())].to_string()
+        } else {
+            "Agent Workspaces".to_string()
+        };
+
         let header = h_flex()
             .w_full()
             .h(px(40.))
@@ -271,7 +277,7 @@ impl Render for TeamWorkspacePanel {
                     .gap(px(8.))
                     .child(div().text_color(theme.muted_foreground).child("Teams"))
                     .child(div().text_color(theme.muted_foreground).child(">"))
-                    .child(div().child("Agent Workspaces")),
+                    .child(div().child(breadcrumb_title)),
             )
             .child(
                 h_flex()

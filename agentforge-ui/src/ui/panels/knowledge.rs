@@ -1,7 +1,7 @@
 use gpui::EventEmitter;
 use crate::core::traits::database::DatabasePort;
 use gpui::{StatefulInteractiveElement, Entity, 
-    div, px, App, AppContext, Context, Focusable, InteractiveElement, IntoElement, ParentElement, Render,
+    canvas, div, px, App, AppContext, Context, Focusable, InteractiveElement, IntoElement, ParentElement, Render,
     Styled, Window,
 };
 use gpui_component::dock::PanelEvent;
@@ -24,6 +24,8 @@ pub struct KnowledgePanel {
     hovered_node: Option<usize>,
     selected_node_idx: Option<usize>,
     dragging_node: Option<usize>,
+    is_panning_graph: bool,
+    is_panning_minimap: bool,
     last_mouse_pos: Option<gpui::Point<f32>>,
     node_positions: Vec<gpui::Point<f32>>,
     node_velocities: Vec<gpui::Point<f32>>,
@@ -227,6 +229,8 @@ impl KnowledgePanel {
             hovered_node: None,
             selected_node_idx: None,
             dragging_node: None,
+            is_panning_graph: false,
+            is_panning_minimap: false,
             last_mouse_pos: None,
             node_positions: Vec::new(),
             node_velocities: Vec::new(),
@@ -504,28 +508,47 @@ impl KnowledgePanel {
                     .h_full()
                     .overflow_hidden()
                     .relative()
+                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, e: &gpui::MouseDownEvent, _window, _cx| {
+                        if this.dragging_node.is_none() && !this.is_panning_minimap {
+                            this.is_panning_graph = true;
+                            let current_pos = gpui::Point { x: e.position.x.into(), y: e.position.y.into() };
+                            this.last_mouse_pos = Some(current_pos);
+                        }
+                    }))
                     .on_mouse_up(gpui::MouseButton::Left, cx.listener(|this, _, _window, cx| {
                         this.dragging_node = None;
+                        this.is_panning_graph = false;
+                        this.is_panning_minimap = false;
                         this.last_mouse_pos = None;
                         cx.notify();
                     }))
                     .on_mouse_move(cx.listener(|this, e: &gpui::MouseMoveEvent, _window, cx| {
                         let current_pos = gpui::Point { x: e.position.x.into(), y: e.position.y.into() };
-                        if let (Some(node_idx), Some(last_pos)) = (this.dragging_node, this.last_mouse_pos) {
-                            if node_idx >= this.node_positions.len() {
-                                this.dragging_node = None;
-                                this.last_mouse_pos = Some(current_pos);
-                                cx.notify();
-                                return;
-                            }
+                        if let Some(last_pos) = this.last_mouse_pos {
                             let dx = current_pos.x - last_pos.x;
                             let dy = current_pos.y - last_pos.y;
-                            let zoom = this.graph_zoom;
                             
-                            this.node_positions[node_idx].x += dx / zoom;
-                            this.node_positions[node_idx].y += dy / zoom;
-                            
-                            cx.notify();
+                            if let Some(node_idx) = this.dragging_node {
+                                if node_idx < this.node_positions.len() {
+                                    let zoom = this.graph_zoom;
+                                    this.node_positions[node_idx].x += dx / zoom;
+                                    this.node_positions[node_idx].y += dy / zoom;
+                                    cx.notify();
+                                } else {
+                                    this.dragging_node = None;
+                                }
+                            } else if this.is_panning_minimap {
+                                // Minimap scale is 0.05. Moving mouse by dx on minimap means 
+                                // moving viewport by dx. Since vp_x = ... - pan.x * scale, 
+                                // to move vp_x by dx we need pan.x -= dx / scale.
+                                this.graph_pan.x -= dx / 0.05;
+                                this.graph_pan.y -= dy / 0.05;
+                                cx.notify();
+                            } else if this.is_panning_graph {
+                                this.graph_pan.x += dx;
+                                this.graph_pan.y += dy;
+                                cx.notify();
+                            }
                         }
                         this.last_mouse_pos = Some(current_pos);
                     }))
@@ -684,6 +707,76 @@ impl KnowledgePanel {
                         }
                         nodes_ui
                     })
+                    .child(self.render_minimap(cx))
+            )
+    }
+
+    fn render_minimap(&self, cx: &Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let nodes = self.node_positions.clone();
+        let pan = self.graph_pan;
+        let zoom = self.graph_zoom;
+
+        div()
+            .absolute()
+            .bottom_4()
+            .right_4()
+            .w(px(150.))
+            .h(px(100.))
+            .bg(theme.secondary.opacity(0.8))
+            .border_1()
+            .border_color(theme.border)
+            .rounded_lg()
+            .overflow_hidden()
+            .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, e: &gpui::MouseDownEvent, _window, cx| {
+                this.is_panning_minimap = true;
+                let current_pos = gpui::Point { x: e.position.x.into(), y: e.position.y.into() };
+                this.last_mouse_pos = Some(current_pos);
+                cx.notify();
+            }))
+            .child(
+                canvas(
+                    move |_bounds, _window, _cx| {},
+                    move |bounds, _, window: &mut Window, _cx| {
+                        let cx_offset = bounds.size.width / 2.0;
+                        let cy_offset = bounds.size.height / 2.0;
+
+                        // Minimap scaling factor
+                        let scale = 0.05;
+
+                        // Draw nodes
+                        for pos in &nodes {
+                            let start_x = bounds.origin.x + cx_offset + gpui::px(pos.x * scale);
+                            let start_y = bounds.origin.y + cy_offset + gpui::px(pos.y * scale);
+
+                            let rect = gpui::Bounds {
+                                origin: gpui::point(start_x - gpui::px(2.0), start_y - gpui::px(2.0)),
+                                size: gpui::size(gpui::px(4.0), gpui::px(4.0)),
+                            };
+                            window.paint_quad(gpui::fill(rect, gpui::rgba(0x00d4aaff)));
+                        }
+
+                        // Viewport rectangle
+                        let vp_w = bounds.size.width / zoom;
+                        let vp_h = bounds.size.height / zoom;
+                        let vp_x = bounds.origin.x + cx_offset - gpui::px(pan.x * scale) - vp_w / 2.0;
+                        let vp_y = bounds.origin.y + cy_offset - gpui::px(pan.y * scale) - vp_h / 2.0;
+
+                        let mut builder = gpui::PathBuilder::stroke(gpui::px(1.0)).with_style(
+                            gpui::PathStyle::Stroke(gpui::StrokeOptions::default()),
+                        );
+                        builder.move_to(gpui::point(vp_x, vp_y));
+                        builder.line_to(gpui::point(vp_x + vp_w, vp_y));
+                        builder.line_to(gpui::point(vp_x + vp_w, vp_y + vp_h));
+                        builder.line_to(gpui::point(vp_x, vp_y + vp_h));
+                        builder.line_to(gpui::point(vp_x, vp_y));
+
+                        if let Ok(path) = builder.build() {
+                            window.paint_path(path, gpui::rgba(0xffffff44));
+                        }
+                    },
+                )
+                .size_full(),
             )
     }
 

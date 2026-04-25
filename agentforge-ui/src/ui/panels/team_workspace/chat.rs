@@ -488,49 +488,61 @@ impl TeamWorkspacePanel {
                             let size_kb = size as f64 / 1024.0;
                             
                             let is_image = ["PNG", "JPG", "JPEG", "GIF", "WEBP"].contains(&ext.as_str());
-                                        let icon_box = div()
-                                            .w(px(32.))
-                                            .h(px(32.))
-                                            .bg(theme.background)
-                                            .rounded_sm()
-                                            .overflow_hidden()
-                                            .flex()
-                                            .justify_center()
-                                            .items_center();
-                                            
-                                        let icon_child = if is_image {
-                                            use gpui::StyledImage;
-                                            let path_buf = std::path::PathBuf::from(path);
-                                            icon_box.child(gpui::img(path_buf).w_full().h_full().object_fit(gpui::ObjectFit::Cover))
-                                        } else {
-                                            icon_box.child(Icon::new(IconName::File).size(px(14.)).text_color(theme.muted_foreground))
-                                        };
+                            
+                            let icon_box = div()
+                                .w(px(32.))
+                                .h(px(32.))
+                                .bg(theme.background)
+                                .rounded_sm()
+                                .overflow_hidden()
+                                .flex()
+                                .justify_center()
+                                .items_center();
 
-                                        files_container = files_container.child(
-                                            div()
-                                                .flex()
-                                                .items_center()
-                                                .gap_2()
-                                                .p_1()
-                                                .pr_2()
-                                                .rounded_md()
-                                                .bg(theme.secondary)
-                                                .border_1()
-                                                .border_color(theme.border)
-                                                .child(icon_child)
-                                                .child(
-                                                    div().flex_col()
-                                                        .child(div().text_xs().text_color(theme.foreground).child(file_name))
-                                                        .child(div().text_xs().text_color(theme.muted_foreground).child(format!("{} • {:.1} KB", ext, size_kb)))
-                                                )
+                            let icon_child = if is_image {
+                                use gpui::StyledImage;
+                                let path_buf = std::path::PathBuf::from(path);
+                                icon_box.child(gpui::img(path_buf).w_full().h_full().object_fit(gpui::ObjectFit::Cover))
+                            } else {
+                                icon_box.child(Icon::new(IconName::File).size(px(14.)).text_color(theme.muted_foreground))
+                            };
+
+                            files_container = files_container.child(
+                                div()
+                                    .relative()
+                                    .group(format!("file-upload-{}", idx))
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .p_1()
+                                    .pr_3() // Give some space on right
+                                    .rounded_md()
+                                    .bg(theme.secondary)
+                                    .border_1()
+                                    .border_color(theme.border)
+                                    .child(icon_child)
+                                    .child(
+                                        div().flex_col()
+                                            .child(div().text_xs().text_color(theme.foreground).child(file_name))
+                                            .child(div().text_xs().text_color(theme.muted_foreground).child(format!("{} • {:.1} KB", ext, size_kb)))
+                                    )
                                     .child(
                                         div()
-                                            .p_1()
-                                            .rounded_sm()
+                                            .absolute()
+                                            .top(px(-6.))
+                                            .right(px(-6.))
+                                            .w(px(16.))
+                                            .h(px(16.))
+                                            .flex()
+                                            .justify_center()
+                                            .items_center()
+                                            .bg(theme.border)
+                                            .rounded_full()
                                             .cursor_pointer()
-                                            .hover(|s| s.bg(theme.secondary_hover))
-                                            .child(Icon::new(IconName::Delete).size(px(12.)).text_color(theme.muted_foreground))
-                                             .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, _, _, cx| {
+                                            .invisible()
+                                            .group_hover(format!("file-upload-{}", idx), |s| s.visible().bg(gpui::rgba(0x000000aa)))
+                                            .child(Icon::new(IconName::Close).size(px(10.)).text_color(theme.muted_foreground))
+                                            .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, _, _, cx| {
                                                 this.attached_files.remove(idx);
                                                 cx.notify();
                                             }))
@@ -734,7 +746,7 @@ impl TeamWorkspacePanel {
                                                 }
                                             }).detach();
                                         }))
-                                        .child(Icon::empty().path("icons/attachment.svg").size_8().text_color(theme.muted_foreground))
+                                        .child(Icon::empty().path("icons/attachment.svg").size_4().text_color(theme.muted_foreground))
                                 )
                         )
                         .child(
