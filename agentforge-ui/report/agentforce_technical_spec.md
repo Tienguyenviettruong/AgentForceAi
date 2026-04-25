@@ -1,10 +1,87 @@
-# Đặc Tả Kỹ Thuật (Technical Specification) - AgentForge Core Engine
+# Đặc Tả Kỹ Thuật (Technical Specification) - AgentForge Core Engine (Cập nhật Chi tiết)
 
-Tài liệu này định nghĩa chi tiết các cấu trúc dữ liệu, schema và logic sẽ được triển khai theo `agentforce_implementation_plan.md`.
+Tài liệu này định nghĩa chi tiết các cấu trúc dữ liệu, luồng xử lý (kèm sơ đồ Mermaid), và logic giao tiếp giữa các Agent và các Team.
 
-## 1. Database Schema Updates (`src/infrastructure/database/sqlite_adapter.rs`)
+---
 
-### 1.1 Bảng `mcp_tools`
+## 1. Logic Phối hợp và Tranh luận trong 1 Team (Intra-team)
+
+### 1.1 Cơ chế Debate (Tranh luận) và Đồng thuận
+Thay vì dùng vòng lặp `for` lặp qua danh sách Agent một cách cứng nhắc, hệ thống áp dụng mô hình **Event-Driven Debate**.
+- **Vai trò:** Phải có 1 Agent đóng vai trò `Coordinator` (Người ra quyết định) và các Agent khác là `Contributor/Reviewer`.
+- **Logic:** Khi Contributor A đưa ra code, Reviewer B nhận được sự kiện qua `TeamBus`, kiểm tra và phản biện. Coordinator theo dõi cuộc hội thoại. Khi thấy đủ thông tin, Coordinator gọi tool `declare_consensus` để chốt.
+
+### 1.2 Sơ đồ luồng Debate (Intra-team)
+```mermaid
+sequenceDiagram
+    participant User
+    participant Coordinator as Coordinator Agent
+    participant TeamBus as TeamBus (Event Router)
+    participant Dev as Dev Agent
+    participant Tester as Tester Agent
+
+    User->>Coordinator: Yêu cầu "Viết tính năng Đăng nhập"
+    Coordinator->>TeamBus: Phát sự kiện: Task Created (Code Login)
+    TeamBus-->>Dev: Notify (New Task)
+    Dev->>Dev: Suy nghĩ (ReAct) & Viết Code
+    Dev->>TeamBus: Phát sự kiện: Proposal Submitted (Code_v1)
+    
+    Note over TeamBus, Tester: --- BẮT ĐẦU TRANH LUẬN (DEBATE) ---
+    TeamBus-->>Tester: Notify (Proposal)
+    Tester->>Tester: Suy nghĩ & Chạy thử code
+    Tester->>TeamBus: Phát sự kiện: Critique (Lỗi bảo mật ở dòng 10)
+    TeamBus-->>Dev: Notify (Critique)
+    Dev->>Dev: Sửa code
+    Dev->>TeamBus: Phát sự kiện: Proposal Submitted (Code_v2)
+    TeamBus-->>Tester: Notify (Proposal)
+    Tester->>TeamBus: Phát sự kiện: Critique (Pass)
+    
+    Note over TeamBus, Coordinator: --- CHỐT ĐỒNG THUẬN ---
+    TeamBus-->>Coordinator: Notify (Critique Pass)
+    Coordinator->>Coordinator: Đánh giá tổng thể
+    Coordinator->>Coordinator: Gọi Tool `declare_consensus`
+    Coordinator->>User: Báo cáo kết quả "Đã hoàn thành Đăng nhập"
+```
+
+---
+
+## 2. Logic Phối hợp chéo giữa các Team (Cross-team)
+
+### 2.1 Cơ chế Bàn giao (Handoff)
+Các Team độc lập không chia sẻ chung ngữ cảnh (tránh quá tải token). Để giao tiếp, chúng dùng `Briefing Package` (Gói tóm tắt). Khi Team A (Design) làm xong, Coordinator A gọi tool `handoff_to_team("Team_B", "Briefing_Package")`.
+
+### 2.2 Sơ đồ luồng Phối hợp chéo (Cross-team)
+```mermaid
+sequenceDiagram
+    participant User
+    participant CoordA as Design Team Coordinator
+    participant TeamBus as TeamBusRouter
+    participant CoordB as Dev Team Coordinator
+    participant SharedTaskB as Dev Team TaskList
+
+    User->>CoordA: "Thiết kế UI và báo Dev code"
+    Note over CoordA: Design Team làm việc (Intra-team)
+    CoordA->>CoordA: Hoàn thành bản vẽ UI
+    
+    Note over CoordA, TeamBus: --- BÀN GIAO CHÉO TEAM ---
+    CoordA->>CoordA: Tóm tắt ngữ cảnh (Summarize)
+    CoordA->>CoordA: Gọi Tool `handoff_to_team` (Target: Dev Team, Payload: UI Specs)
+    CoordA->>TeamBus: Route Message (Type: CrossTeam)
+    TeamBus-->>CoordB: Receive Handoff Package
+    
+    Note over CoordB, SharedTaskB: --- TEAM B TIẾP NHẬN ---
+    CoordB->>CoordB: Đọc UI Specs (ReAct)
+    CoordB->>CoordB: Bóc tách thành các Sub-tasks
+    CoordB->>SharedTaskB: Gọi Tool `create_subtasks` (INSERT vào DB)
+    SharedTaskB-->>CoordB: Task IDs Created
+    CoordB->>User: "Dev Team đã nhận bản vẽ và đang tiến hành code."
+```
+
+---
+
+## 3. Database Schema Updates (`src/infrastructure/database/sqlite_adapter.rs`)
+
+### 3.1 Bảng `mcp_tools`
 Bảng này thay thế cho bộ nhớ RAM hiện tại của `McpToolRegistry`.
 ```sql
 CREATE TABLE IF NOT EXISTS mcp_tools (
@@ -12,15 +89,15 @@ CREATE TABLE IF NOT EXISTS mcp_tools (
     name TEXT NOT NULL UNIQUE,
     description TEXT NOT NULL,
     version TEXT NOT NULL,
-    command TEXT NOT NULL, -- Đường dẫn đến file chạy (node, python, v.v.)
-    args TEXT NOT NULL, -- JSON Array các arguments truyền vào
-    input_schema TEXT NOT NULL, -- JSON Schema chuẩn OpenAI/Claude cho arguments
+    command TEXT NOT NULL, 
+    args TEXT NOT NULL, 
+    input_schema TEXT NOT NULL, 
     is_active BOOLEAN DEFAULT 1,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 ```
 
-### 1.2 Bảng `knowledge_entries` (Long-term Memory)
+### 3.2 Bảng `knowledge_entries` (Long-term Memory)
 ```sql
 CREATE TABLE IF NOT EXISTS knowledge_entries (
     id TEXT PRIMARY KEY,
@@ -28,64 +105,20 @@ CREATE TABLE IF NOT EXISTS knowledge_entries (
     session_id TEXT,
     title TEXT NOT NULL,
     content TEXT NOT NULL,
-    tags TEXT, -- JSON Array
+    tags TEXT, 
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(agent_id) REFERENCES agents(id)
 );
 
--- Bảng ảo FTS5 phục vụ tìm kiếm Vector/Semantic
 CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_entries_fts 
 USING fts5(title, content, tags, content='knowledge_entries', content_rowid='id');
 ```
 
-## 2. Agent Core Loop (ReAct / Function Calling)
+---
 
-### 2.1 Cấu trúc `AgentExecutor`
-`AgentExecutor` sẽ nằm giữa UI (`chat.rs`) và `LlmProviderPort`.
-```rust
-pub struct AgentExecutor {
-    provider: Arc<dyn LlmProviderPort>,
-    mcp_registry: Arc<McpToolRegistry>,
-    db: Arc<dyn DatabasePort>,
-}
+## 4. Quản lý Bộ nhớ (Context & Summarization)
 
-impl AgentExecutor {
-    /// Vòng lặp chính của Agent
-    pub async fn execute_task(&self, mut history: Vec<ChatMessage>) -> Result<String> {
-        let mut iteration = 0;
-        let max_iterations = 5; // Tránh loop vô hạn
-
-        while iteration < max_iterations {
-            // 1. Lấy response từ LLM (hỗ trợ tools)
-            let response = self.provider.send_message_with_tools(history.clone(), self.get_available_tools()).await?;
-
-            // 2. Nếu LLM trả về text thường -> Hoàn thành
-            if response.tool_calls.is_empty() {
-                return Ok(response.content);
-            }
-
-            // 3. Nếu LLM muốn gọi Tool (Function Calling)
-            for tool_call in response.tool_calls {
-                // Thực thi lệnh thật trong Sandbox/CLI hoặc WebSearch
-                let result = self.execute_tool(&tool_call.name, &tool_call.arguments).await;
-                
-                // 4. Nhồi kết quả lại vào history dưới dạng role="tool"
-                history.push(ChatMessage {
-                    role: "tool".into(),
-                    content: result.into(),
-                    name: Some(tool_call.name),
-                });
-            }
-            iteration += 1;
-        }
-        Ok("Max tool iterations reached".to_string())
-    }
-}
-```
-
-## 3. Quản lý Bộ nhớ (Context & Summarization)
-
-### 3.1 Cắt tỉa ngữ cảnh (Sliding Window)
+### 4.1 Cắt tỉa ngữ cảnh (Sliding Window)
 Trong `chat.rs`, thay vì `current_history.clone()`, áp dụng logic:
 ```rust
 fn prune_history(history: &[ChatMessage], max_messages: usize) -> Vec<ChatMessage> {
@@ -103,7 +136,7 @@ fn prune_history(history: &[ChatMessage], max_messages: usize) -> Vec<ChatMessag
 }
 ```
 
-### 3.2 Tool nội bộ: `save_to_knowledge`
+### 4.2 Tool nội bộ: `save_to_knowledge`
 Định nghĩa một tool bắt buộc truyền vào mọi request của Agent:
 ```json
 {
@@ -120,14 +153,3 @@ fn prune_history(history: &[ChatMessage], max_messages: usize) -> Vec<ChatMessag
   }
 }
 ```
-
-## 4. Multi-Agent Collaboration (Shared Task List)
-
-### 4.1 Luồng hoạt động (Workflow)
-Thay vì vòng lặp `for` (Debate Mode), hệ thống sẽ chạy theo Event-Driven:
-1. **User Input:** "Xây dựng website bán hàng".
-2. **Coordinator Agent:** Được trigger. Nó phân tích và gọi tool `create_subtasks` sinh ra 2 task vào DB (`task_1: Thiết kế DB` cho BE, `task_2: Vẽ UI` cho FE).
-3. **Background Polling:** Các Agent (BE, FE) chạy hàm `poll_tasks()` mỗi 2 giây.
-4. **Claim Task:** Agent BE thấy `task_1` phù hợp. Thực hiện lệnh `UPDATE tasks SET status='in_progress', assignee='BE' WHERE id='task_1' AND status='pending'`.
-5. **Execute & Broadcast:** BE chạy qua `AgentExecutor`. Xong việc, gọi hàm `team_bus.broadcast("Task 1 done. Kết quả: ...")`.
-6. Agent FE nghe được event từ TeamBus, nhận thấy `task_1` xong nên bắt đầu làm `task_2`.
