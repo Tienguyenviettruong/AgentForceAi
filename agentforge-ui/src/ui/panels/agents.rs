@@ -188,7 +188,15 @@ impl Render for AgentsPanel {
                                     h_flex()
                                         .gap(px(8.))
                                         .child(Button::new(gpui::SharedString::from(format!("edit-{}", agent.id))).ghost().icon(IconName::Settings))
-                                        .child(Button::new(gpui::SharedString::from(format!("delete-{}", agent.id))).ghost().icon(IconName::Delete))
+                                        .child(Button::new(gpui::SharedString::from(format!("delete-{}", agent.id))).ghost().icon(IconName::Delete)
+                                            .on_click({
+                                                let agent_id = agent.id.clone();
+                                                cx.listener(move |this, _, _, cx| {
+                                                    let db = crate::AppState::global(cx).db.clone();
+                                                    let _ = db.delete_agent(&agent_id);
+                                                    this.reload(cx);
+                                                })
+                                            }))
                                 )
                         }))
                 )

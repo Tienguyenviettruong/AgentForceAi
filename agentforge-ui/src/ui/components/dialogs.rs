@@ -232,6 +232,7 @@ pub fn open_new_agent_dialog<V: 'static>(
         let db_save = db.clone();
         let on_success_save = on_success.clone();
 
+        let theme = _cx.global::<gpui_component::Theme>();
         dialog
             .title("Create Agent")
             .w(px(520.))
@@ -243,25 +244,30 @@ pub fn open_new_agent_dialog<V: 'static>(
                         field()
                             .label("Name")
                             .required(true)
-                            .child(Input::new(&name_input)),
+                            .child(Input::new(&name_input))
+                            .child(div().text_size(px(12.)).text_color(theme.muted_foreground).child("Tên định danh của Agent (VD: Backend Developer, Data Analyst).")),
                     )
                     .child(
                         field()
                             .label("Role / Position")
-                            .child(Input::new(&role_input)),
+                            .child(Input::new(&role_input))
+                            .child(div().text_size(px(12.)).text_color(theme.muted_foreground).child("Vai trò chuyên môn trong dự án (VD: DEV, QA, PM). Dùng cho TeamBus Router.")),
                     )
                     .child(
                         field()
                             .label("Agent Details")
-                            .child(Input::new(&details_input)),
+                            .child(Input::new(&details_input))
+                            .child(div().text_size(px(12.)).text_color(theme.muted_foreground).child("Thông tin bổ sung, kỹ năng hoặc giới hạn của Agent.")),
                     )
                     .child(field().label("Provider / Model").child(
                         Select::new(&provider_select).placeholder("Select Provider / Model"),
-                    ))
+                    )
+                    .child(div().text_size(px(12.)).text_color(theme.muted_foreground).child("Mô hình LLM sẽ cung cấp năng lực cho Agent này (VD: Claude-3-Opus, GPT-4o).")))
                     .child(
                         field()
                             .label("System Prompt")
-                            .child(Input::new(&system_prompt_input)),
+                            .child(Input::new(&system_prompt_input))
+                            .child(div().text_size(px(12.)).text_color(theme.muted_foreground).child("Chỉ dẫn hệ thống cốt lõi để định hình hành vi, phong cách trả lời và luồng suy nghĩ của Agent.")),
                     ),
             )
             .footer({
@@ -269,6 +275,8 @@ pub fn open_new_agent_dialog<V: 'static>(
                 let db_save = db_save.clone();
                 let name_input = name_input.clone();
                 let system_prompt_input = system_prompt_input.clone();
+                let role_input = role_input.clone();
+                let details_input = details_input.clone();
                 let provider_select = provider_select.clone();
                 let on_success_save = on_success_save.clone();
 
@@ -277,6 +285,8 @@ pub fn open_new_agent_dialog<V: 'static>(
                     let db_save2 = db_save.clone();
                     let name_input2 = name_input.clone();
                     let system_prompt_input2 = system_prompt_input.clone();
+                    let role_input2 = role_input.clone();
+                    let details_input2 = details_input.clone();
                     let provider_select2 = provider_select.clone();
                     let on_success_save2 = on_success_save.clone();
 
@@ -295,6 +305,8 @@ pub fn open_new_agent_dialog<V: 'static>(
                                 let db_save3 = db_save2.clone();
                                 let name_input3 = name_input2.clone();
                                 let system_prompt_input3 = system_prompt_input2.clone();
+                                let role_input3 = role_input2.clone();
+                                let details_input3 = details_input2.clone();
                                 let provider_select3 = provider_select2.clone();
                                 let on_success_save3 = on_success_save2.clone();
 
@@ -319,7 +331,14 @@ pub fn open_new_agent_dialog<V: 'static>(
                                         .unwrap_or_else(|| "unconfigured".to_string());
 
                                     let now = Utc::now().to_rfc3339();
-                                    let system_prompt =
+                                    
+                                    let role = role_input3.read(cx).text().to_string();
+                                    let details = details_input3.read(cx).text().to_string();
+                                    let config_json = serde_json::json!({
+                                        "role": role,
+                                        "details": details
+                                    });
+let system_prompt =
                                         system_prompt_input3.read(cx).text().to_string();
                                     let agent = Agent {
                                         id: uuid::Uuid::new_v4().to_string(),
@@ -333,7 +352,7 @@ pub fn open_new_agent_dialog<V: 'static>(
                                                 Some(t)
                                             }
                                         },
-                                        config: None,
+                                        config: Some(config_json.to_string()),
                                         status: "offline".to_string(),
                                         created_at: now.clone(),
                                         updated_at: now,

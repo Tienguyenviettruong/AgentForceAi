@@ -10,6 +10,7 @@ pub trait DatabasePort: Send + Sync {
     fn list_instances(&self) -> anyhow::Result<Vec<crate::core::models::Instance>>;
     fn list_teams(&self) -> anyhow::Result<Vec<crate::core::models::Team>>;
     fn insert_agent(&self, agent: &crate::core::models::Agent) -> anyhow::Result<()>;
+    fn delete_agent(&self, agent_id: &str) -> anyhow::Result<()>;
     fn list_agents(&self) -> anyhow::Result<Vec<crate::core::models::Agent>>;
     fn assign_agent_to_team(&self, team_id: &str, agent_id: &str) -> anyhow::Result<()>;
     fn remove_agent_from_team(&self, team_id: &str, agent_id: &str) -> anyhow::Result<()>;

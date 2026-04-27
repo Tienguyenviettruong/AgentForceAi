@@ -552,6 +552,14 @@ impl crate::core::traits::database::DatabasePort for Database {
         Ok(())
     }
 
+    fn delete_agent(&self, agent_id: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        // Remove relationships if any (foreign keys with ON DELETE CASCADE normally handle this, but let's be explicit for team_agents)
+        conn.execute("DELETE FROM team_agents WHERE agent_id = ?1", params![agent_id])?;
+        conn.execute("DELETE FROM agents WHERE id = ?1", params![agent_id])?;
+        Ok(())
+    }
+
     fn list_agents(&self) -> Result<Vec<Agent>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
