@@ -496,7 +496,7 @@ pub fn open_new_instance_dialog<V: 'static>(
 
                                     let instance_id = format!("{}-{}", name.replace(" ", "-").to_lowercase(), uuid::Uuid::new_v4().to_string().chars().take(4).collect::<String>());
 
-                                    if db_save3.create_instance(&instance_id, &team_id.unwrap(), config_opt, Some("running")).is_ok() {
+                                    if db_save3.create_instance(&instance_id, &name, &team_id.unwrap(), config_opt, Some("running")).is_ok() {
                                         view_save3.update(cx, on_success_save3.clone());
                                         window.close_dialog(cx);
                                         window.push_notification(
@@ -624,6 +624,220 @@ pub fn open_manage_team_dialog<V: 'static>(
                                     ),
                                     cx,
                                 );
+                            })
+                            .into_any_element(),
+                    ]
+                }
+            })
+    });
+}
+
+
+pub fn open_edit_agent_dialog<V: 'static>(
+    db: Arc<dyn DatabasePort>,
+    agent_to_edit: Agent,
+    view: Entity<V>,
+    window: &mut Window,
+    cx: &mut Context<V>,
+    on_success: impl Fn(&mut V, &mut Context<V>) + 'static + Clone,
+) {
+    let mut current_role = "".to_string();
+    let mut current_details = "".to_string();
+    if let Some(config_str) = &agent_to_edit.config {
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(config_str) {
+            if let Some(r) = val.get("role").and_then(|v| v.as_str()) {
+                current_role = r.to_string();
+            }
+            if let Some(d) = val.get("details").and_then(|v| v.as_str()) {
+                current_details = d.to_string();
+            }
+        }
+    }
+
+    let name_input = cx.new(|cx| {
+        let mut state = InputState::new(window, cx).placeholder("Agent name");
+        state.replace(agent_to_edit.name.clone(), window, cx);
+        state
+    });
+    let system_prompt_input = cx.new(|cx| {
+        let mut state = InputState::new(window, cx).placeholder("System prompt (optional)");
+        if let Some(sp) = &agent_to_edit.system_prompt {
+            state.replace(sp.clone(), window, cx);
+        }
+        state
+    });
+    let role_input = cx.new(|cx| {
+        let mut state = InputState::new(window, cx).placeholder("Role / Position");
+        state.replace(current_role, window, cx);
+        state
+    });
+    let details_input = cx.new(|cx| {
+        let mut state = InputState::new(window, cx).placeholder("Agent Details / Info");
+        state.replace(current_details, window, cx);
+        state
+    });
+
+    let providers: Vec<SharedString> = db
+        .list_providers()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|p| SharedString::from(format!("{} / {}", p.provider_name, p.model)))
+        .collect();
+        
+    let initial_provider_idx = providers.iter().position(|p| p.as_ref() == agent_to_edit.provider.as_str()).map(|i| gpui_component::IndexPath::new(i));
+    let provider_select = cx.new(|cx| SelectState::new(providers, initial_provider_idx, window, cx));
+
+    window.open_dialog(cx, move |dialog, _window, _cx| {
+        let view_save = view.clone();
+        let db_save = db.clone();
+        let on_success_save = on_success.clone();
+        let agent_to_edit_save = agent_to_edit.clone();
+
+        let theme = _cx.theme().clone();
+        dialog
+            .title("Edit Agent")
+            .w(px(520.))
+            .child(
+                v_form()
+                    .gap(px(12.))
+                    .py(px(8.))
+                    .child(
+                        field()
+                            .label("Name")
+                            .required(true)
+                            .child(Input::new(&name_input))
+                            .child(div().text_size(px(12.)).text_color(theme.muted_foreground).child("Tên định danh của Agent (VD: Backend Developer, Data Analyst).")),
+                    )
+                    .child(
+                        field()
+                            .label("Role / Position")
+                            .child(Input::new(&role_input))
+                            .child(div().text_size(px(12.)).text_color(theme.muted_foreground).child("Vai trò chuyên môn trong dự án (VD: DEV, QA, PM). Dùng cho TeamBus Router.")),
+                    )
+                    .child(
+                        field()
+                            .label("Agent Details")
+                            .child(Input::new(&details_input))
+                            .child(div().text_size(px(12.)).text_color(theme.muted_foreground).child("Thông tin bổ sung, kỹ năng hoặc giới hạn của Agent.")),
+                    )
+                    .child(field().label("Provider / Model").child(
+                        Select::new(&provider_select).placeholder("Select Provider / Model"),
+                    )
+                    .child(div().text_size(px(12.)).text_color(theme.muted_foreground).child("Mô hình LLM sẽ cung cấp năng lực cho Agent này (VD: Claude-3-Opus, GPT-4o).")))
+                    .child(
+                        field()
+                            .label("System Prompt")
+                            .child(Input::new(&system_prompt_input))
+                            .child(div().text_size(px(12.)).text_color(theme.muted_foreground).child("Chỉ dẫn hệ thống cốt lõi để định hình hành vi, phong cách trả lời và luồng suy nghĩ của Agent.")),
+                    ),
+            )
+            .footer({
+                let view_save = view_save.clone();
+                let db_save = db_save.clone();
+                let name_input = name_input.clone();
+                let system_prompt_input = system_prompt_input.clone();
+                let role_input = role_input.clone();
+                let details_input = details_input.clone();
+                let provider_select = provider_select.clone();
+                let on_success_save = on_success_save.clone();
+                let agent_to_edit_save = agent_to_edit_save.clone();
+
+                move |_, _, _, _| {
+                    let view_save2 = view_save.clone();
+                    let db_save2 = db_save.clone();
+                    let name_input2 = name_input.clone();
+                    let system_prompt_input2 = system_prompt_input.clone();
+                    let role_input2 = role_input.clone();
+                    let details_input2 = details_input.clone();
+                    let provider_select2 = provider_select.clone();
+                    let on_success_save2 = on_success_save.clone();
+                    let agent_to_edit_save2 = agent_to_edit_save.clone();
+
+                    vec![
+                        Button::new("cancel-edit-agent")
+                            .label("Cancel")
+                            .on_click(|_, window, cx| {
+                                window.close_dialog(cx);
+                            })
+                            .into_any_element(),
+                        Button::new("save-edit-agent")
+                            .primary()
+                            .label("Save Changes")
+                            .on_click({
+                                let view_save3 = view_save2.clone();
+                                let db_save3 = db_save2.clone();
+                                let name_input3 = name_input2.clone();
+                                let system_prompt_input3 = system_prompt_input2.clone();
+                                let role_input3 = role_input2.clone();
+                                let details_input3 = details_input2.clone();
+                                let provider_select3 = provider_select2.clone();
+                                let on_success_save3 = on_success_save2.clone();
+                                let agent_to_edit_save3 = agent_to_edit_save2.clone();
+
+                                move |_ev, window, cx| {
+                                    let name = name_input3.read(cx).text().to_string();
+                                    let name = name.trim().to_string();
+                                    if name.is_empty() {
+                                        window.push_notification(
+                                            (
+                                                NotificationType::Error,
+                                                "Agent name is required.",
+                                            ),
+                                            cx,
+                                        );
+                                        return;
+                                    }
+
+                                    let provider = provider_select3
+                                        .read(cx)
+                                        .selected_value()
+                                        .map(|s| s.to_string())
+                                        .unwrap_or_else(|| agent_to_edit_save3.provider.clone());
+
+                                    let role = role_input3.read(cx).text().to_string();
+                                    let details = details_input3.read(cx).text().to_string();
+                                    let config_json = serde_json::json!({
+                                        "role": role,
+                                        "details": details
+                                    });
+
+                                    let system_prompt = system_prompt_input3.read(cx).text().to_string();
+                                    let now = Utc::now().to_rfc3339();
+                                    let agent = Agent {
+                                        id: agent_to_edit_save3.id.clone(),
+                                        name,
+                                        provider,
+                                        system_prompt: {
+                                            let t = system_prompt.trim().to_string();
+                                            if t.is_empty() {
+                                                None
+                                            } else {
+                                                Some(t)
+                                            }
+                                        },
+                                        config: Some(config_json.to_string()),
+                                        status: agent_to_edit_save3.status.clone(),
+                                        created_at: agent_to_edit_save3.created_at.clone(),
+                                        updated_at: now,
+                                    };
+
+                                    if db_save3.insert_agent(&agent).is_ok() {
+                                        view_save3.update(cx, on_success_save3.clone());
+                                        window.close_dialog(cx);
+                                        window.push_notification(
+                                            (
+                                                NotificationType::Success,
+                                                "Agent updated successfully.",
+                                            ),
+                                            cx,
+                                        );
+                                    } else {
+                                        window.push_notification(
+                                            (NotificationType::Error, "Failed to update agent."),
+                                            cx,
+                                        );
+                                    }
+                                }
                             })
                             .into_any_element(),
                     ]

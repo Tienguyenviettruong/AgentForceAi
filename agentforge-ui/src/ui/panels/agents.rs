@@ -187,7 +187,24 @@ impl Render for AgentsPanel {
                                 .child(
                                     h_flex()
                                         .gap(px(8.))
-                                        .child(Button::new(gpui::SharedString::from(format!("edit-{}", agent.id))).ghost().icon(IconName::Settings))
+                                        .child(Button::new(gpui::SharedString::from(format!("edit-{}", agent.id))).ghost().icon(IconName::Settings)
+                                            .on_click({
+                                                let agent_clone = agent.clone();
+                                                let view = cx.entity().clone();
+                                                cx.listener(move |this, _, window, cx| {
+                                                    let db = crate::AppState::global(cx).db.clone();
+                                                    crate::ui::components::dialogs::open_edit_agent_dialog(
+                                                        db,
+                                                        agent_clone.clone(),
+                                                        view.clone(),
+                                                        window,
+                                                        cx,
+                                                        |this: &mut Self, cx| {
+                                                            this.reload(cx);
+                                                        },
+                                                    );
+                                                })
+                                            }))
                                         .child(Button::new(gpui::SharedString::from(format!("delete-{}", agent.id))).ghost().icon(IconName::Delete)
                                             .on_click({
                                                 let agent_id = agent.id.clone();

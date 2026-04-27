@@ -258,7 +258,8 @@ impl Render for TeamWorkspacePanel {
         let theme = cx.theme().clone();
 
         let breadcrumb_title = if let Some(instance_id) = &self.selected_instance_id {
-            instance_id[..std::cmp::min(6, instance_id.len())].to_string()
+            let inst = self.instances.iter().find(|i| i.id == *instance_id);
+            inst.map(|i| i.name.clone()).unwrap_or_else(|| instance_id[..std::cmp::min(6, instance_id.len())].to_string())
         } else {
             "Agent Workspaces".to_string()
         };

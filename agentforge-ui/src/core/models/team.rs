@@ -8,9 +8,10 @@ pub struct Team {
     pub updated_at: String,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug, Clone)]
 pub struct Instance {
     pub id: String,
+    pub name: String,
     pub team_id: String,
     pub config: Option<String>,
     pub state: Option<String>,

@@ -367,7 +367,7 @@ impl TeamWorkspacePanel {
                                                     if let Some(team_id) = this.selected_team_id.clone() {
                                                         let db = crate::AppState::global(cx).db.clone();
                                                         let new_id = format!("inst-{}", uuid::Uuid::new_v4().simple());
-                                                        if db.create_instance(&new_id, &team_id, None, Some("running")).is_ok() {
+                                                        if db.create_instance(&new_id, "New Instance", &team_id, None, Some("running")).is_ok() {
                                                             this.reload(cx);
                                                             this.selected_instance_id = Some(new_id.clone());
                                                             this.selected_team_id = None;

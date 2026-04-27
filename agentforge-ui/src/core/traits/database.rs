@@ -6,7 +6,7 @@ pub trait DatabasePort: Send + Sync {
     fn list_providers(&self) -> anyhow::Result<Vec<crate::core::models::Provider>>;
     fn get_provider_by_name(&self, provider_name: &str) -> anyhow::Result<Option<crate::core::models::Provider>>;
     fn insert_team(&self, team: &crate::core::models::Team) -> anyhow::Result<()>;
-    fn create_instance(&self, id: &str, team_id: &str, config: Option<&str>, state: Option<&str>,) -> anyhow::Result<()>;
+    fn create_instance(&self, id: &str, name: &str, team_id: &str, config: Option<&str>, state: Option<&str>,) -> anyhow::Result<()>;
     fn list_instances(&self) -> anyhow::Result<Vec<crate::core::models::Instance>>;
     fn list_teams(&self) -> anyhow::Result<Vec<crate::core::models::Team>>;
     fn insert_agent(&self, agent: &crate::core::models::Agent) -> anyhow::Result<()>;

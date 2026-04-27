@@ -27,7 +27,8 @@ impl TeamWorkspacePanel {
         });
 
         let title = if let Some(instance_id) = &self.selected_instance_id {
-            format!("Instance {}", &instance_id[..std::cmp::min(8, instance_id.len())])
+            let inst = self.instances.iter().find(|i| i.id == *instance_id);
+            inst.map(|i| i.name.clone()).unwrap_or_else(|| format!("Instance {}", &instance_id[..std::cmp::min(8, instance_id.len())]))
         } else if let Some(team_id) = &self.selected_team_id {
             self.teams.iter().find(|t| t.id == *team_id).map(|t| t.name.clone()).unwrap_or_else(|| "Team Chat".to_string())
         } else {

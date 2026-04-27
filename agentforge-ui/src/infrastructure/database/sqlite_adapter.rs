@@ -61,6 +61,7 @@ impl Database {
             -- 4. Instances
             CREATE TABLE IF NOT EXISTS instances (
                 id TEXT PRIMARY KEY,
+                name TEXT NOT NULL DEFAULT 'Untitled',
                 team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
                 config TEXT,
                 state TEXT,
@@ -470,6 +471,7 @@ impl crate::core::traits::database::DatabasePort for Database {
     fn create_instance(
         &self,
         id: &str,
+        name: &str,
         team_id: &str,
         config: Option<&str>,
         state: Option<&str>,
@@ -477,9 +479,9 @@ impl crate::core::traits::database::DatabasePort for Database {
         let conn = self.conn.lock().unwrap();
         let now = chrono::Utc::now().to_rfc3339();
         conn.execute(
-            "INSERT INTO instances (id, team_id, config, state, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            rusqlite::params![id, team_id, config, state, now],
+            "INSERT INTO instances (id, name, team_id, config, state, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![id, name, team_id, config, state, now],
         )?;
         Ok(())
     }
@@ -487,17 +489,18 @@ impl crate::core::traits::database::DatabasePort for Database {
     fn list_instances(&self) -> Result<Vec<Instance>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, team_id, config, state, created_at
+            "SELECT id, name, team_id, config, state, created_at
              FROM instances
              ORDER BY created_at DESC",
         )?;
         let iter = stmt.query_map([], |row: &rusqlite::Row| {
             Ok(Instance {
                 id: row.get(0)?,
-                team_id: row.get(1)?,
-                config: row.get(2)?,
-                state: row.get(3)?,
-                created_at: row.get(4)?,
+                name: row.get(1)?,
+                team_id: row.get(2)?,
+                config: row.get(3)?,
+                state: row.get(4)?,
+                created_at: row.get(5)?,
             })
         })?;
         
