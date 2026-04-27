@@ -9,6 +9,8 @@ pub fn register_team_tools(registry: &McpToolRegistry) -> anyhow::Result<()> {
         version: "1.0.0".to_string(),
         command: "agentforge-cli".to_string(),
         args: vec!["team".to_string(), "message-role".to_string()],
+        input_schema: "{}".to_string(),
+        is_active: true,
     })?;
 
     // 2.26 Implement team_broadcast MCP tool
@@ -19,6 +21,8 @@ pub fn register_team_tools(registry: &McpToolRegistry) -> anyhow::Result<()> {
         version: "1.0.0".to_string(),
         command: "agentforge-cli".to_string(),
         args: vec!["team".to_string(), "broadcast".to_string()],
+        input_schema: "{}".to_string(),
+        is_active: true,
     })?;
 
     // 2.27 Implement team_claim_task MCP tool
@@ -29,6 +33,8 @@ pub fn register_team_tools(registry: &McpToolRegistry) -> anyhow::Result<()> {
         version: "1.0.0".to_string(),
         command: "agentforge-cli".to_string(),
         args: vec!["team".to_string(), "claim-task".to_string()],
+        input_schema: "{}".to_string(),
+        is_active: true,
     })?;
 
     // 2.28 Implement team_complete_task MCP tool
@@ -39,6 +45,8 @@ pub fn register_team_tools(registry: &McpToolRegistry) -> anyhow::Result<()> {
         version: "1.0.0".to_string(),
         command: "agentforge-cli".to_string(),
         args: vec!["team".to_string(), "complete-task".to_string()],
+        input_schema: "{}".to_string(),
+        is_active: true,
     })?;
 
     // 2.29 Implement team_get_tasks MCP tool
@@ -49,6 +57,8 @@ pub fn register_team_tools(registry: &McpToolRegistry) -> anyhow::Result<()> {
         version: "1.0.0".to_string(),
         command: "agentforge-cli".to_string(),
         args: vec!["team".to_string(), "get-tasks".to_string()],
+        input_schema: "{}".to_string(),
+        is_active: true,
     })?;
 
     Ok(())

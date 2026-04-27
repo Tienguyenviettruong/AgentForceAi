@@ -240,6 +240,32 @@ impl Database {
                 total_tokens INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS mcp_tools (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL UNIQUE,
+                description TEXT NOT NULL,
+                version TEXT NOT NULL,
+                command TEXT NOT NULL, 
+                args TEXT NOT NULL, 
+                input_schema TEXT NOT NULL, 
+                is_active BOOLEAN DEFAULT 1,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS knowledge_entries (
+                id TEXT PRIMARY KEY,
+                agent_id TEXT NOT NULL,
+                session_id TEXT,
+                title TEXT NOT NULL,
+                content TEXT NOT NULL,
+                tags TEXT, 
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(agent_id) REFERENCES agents(id)
+            );
+
+            CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_entries_fts 
+            USING fts5(title, content, tags, content='knowledge_entries', content_rowid='id');
             
             ",
         )?;
@@ -1708,14 +1734,166 @@ impl crate::core::traits::database::DatabasePort for Database {
     fn check_role_permission(&self, role_id: &str, required_permission: &str) -> Result<bool> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare("SELECT permissions FROM roles WHERE id = ?1")?;
-        let mut has_perm = false;
-        let mut rows = stmt.query(params![role_id])?;
+        let mut rows = stmt.query(rusqlite::params![role_id])?;
         if let Some(row) = rows.next()? {
-            let perms: Option<String> = row.get(0)?;
-            if let Some(p) = perms {
-                has_perm = p.contains(required_permission);
-            }
+            let perms_str: String = row.get(0)?;
+            let perms: Vec<String> = serde_json::from_str(&perms_str).unwrap_or_default();
+            Ok(perms.iter().any(|p| p == required_permission || p == "all"))
+        } else {
+            Ok(false)
         }
-        Ok(has_perm)
+    }
+
+    fn upsert_mcp_tool(&self, tool: &crate::infrastructure::mcp::registry::McpTool) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let args_json = serde_json::to_string(&tool.args).unwrap_or_else(|_| "[]".to_string());
+        conn.execute(
+            "INSERT INTO mcp_tools (id, name, description, version, command, args, input_schema, is_active) 
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+             ON CONFLICT(id) DO UPDATE SET 
+             name=excluded.name, description=excluded.description, version=excluded.version, 
+             command=excluded.command, args=excluded.args, input_schema=excluded.input_schema, is_active=excluded.is_active",
+            rusqlite::params![
+                tool.id, tool.name, tool.description, tool.version, tool.command, args_json, tool.input_schema, tool.is_active
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn get_mcp_tool(&self, id: &str) -> Result<Option<crate::infrastructure::mcp::registry::McpTool>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT id, name, description, version, command, args, input_schema, is_active FROM mcp_tools WHERE id = ?1")?;
+        let mut rows = stmt.query(rusqlite::params![id])?;
+        if let Some(row) = rows.next()? {
+            let args_json: String = row.get(5)?;
+            let args: Vec<String> = serde_json::from_str(&args_json).unwrap_or_default();
+            Ok(Some(crate::infrastructure::mcp::registry::McpTool {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                description: row.get(2)?,
+                version: row.get(3)?,
+                command: row.get(4)?,
+                args,
+                input_schema: row.get(6)?,
+                is_active: row.get(7)?,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn list_mcp_tools(&self) -> Result<Vec<crate::infrastructure::mcp::registry::McpTool>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT id, name, description, version, command, args, input_schema, is_active FROM mcp_tools")?;
+        let tool_iter = stmt.query_map(rusqlite::params![], |row| {
+            let args_json: String = row.get(5)?;
+            let args: Vec<String> = serde_json::from_str(&args_json).unwrap_or_default();
+            Ok(crate::infrastructure::mcp::registry::McpTool {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                description: row.get(2)?,
+                version: row.get(3)?,
+                command: row.get(4)?,
+                args,
+                input_schema: row.get(6)?,
+                is_active: row.get(7)?,
+            })
+        })?;
+        let mut tools = Vec::new();
+        for tool in tool_iter {
+            tools.push(tool?);
+        }
+        Ok(tools)
+    }
+
+    fn delete_mcp_tool(&self, id: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM mcp_tools WHERE id = ?1", rusqlite::params![id])?;
+        Ok(())
+    }
+
+    fn upsert_knowledge_entry(&self, entry: &crate::core::models::knowledge::KnowledgeEntry) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let tags_json = serde_json::to_string(&entry.tags).unwrap_or_else(|_| "[]".to_string());
+        let created_at_str = entry.created_at.to_rfc3339();
+        
+        conn.execute(
+            "INSERT INTO knowledge_entries (id, agent_id, session_id, title, content, tags, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(id) DO UPDATE SET 
+             title=excluded.title, content=excluded.content, tags=excluded.tags",
+            rusqlite::params![
+                entry.id, entry.agent_id, entry.session_id, entry.title, entry.content, tags_json, created_at_str
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn get_knowledge_entry(&self, id: &str) -> Result<Option<crate::core::models::knowledge::KnowledgeEntry>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT id, agent_id, session_id, title, content, tags, created_at FROM knowledge_entries WHERE id = ?1")?;
+        let mut rows = stmt.query(rusqlite::params![id])?;
+        if let Some(row) = rows.next()? {
+            let tags_json: String = row.get(5)?;
+            let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
+            let created_at_str: String = row.get(6)?;
+            let created_at = chrono::DateTime::parse_from_rfc3339(&created_at_str)
+                .map(|dt| dt.with_timezone(&chrono::Utc))
+                .unwrap_or_else(|_| chrono::Utc::now());
+            
+            Ok(Some(crate::core::models::knowledge::KnowledgeEntry {
+                id: row.get(0)?,
+                agent_id: row.get(1)?,
+                session_id: row.get(2)?,
+                title: row.get(3)?,
+                content: row.get(4)?,
+                tags,
+                created_at,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn search_knowledge_entries_fts(&self, query: &str, limit: u32) -> Result<Vec<crate::core::models::knowledge::KnowledgeEntry>> {
+        let conn = self.conn.lock().unwrap();
+        // Use FTS5 for search
+        let mut stmt = conn.prepare(
+            "SELECT e.id, e.agent_id, e.session_id, e.title, e.content, e.tags, e.created_at
+             FROM knowledge_entries e
+             JOIN knowledge_entries_fts fts ON e.id = fts.id
+             WHERE knowledge_entries_fts MATCH ?1
+             ORDER BY rank
+             LIMIT ?2"
+        )?;
+        
+        // SQLite FTS5 requires query formatting, but for simplicity, just pass the raw query if it's safe, 
+        // or wrap it in quotes. A better way is to clean the query.
+        let fts_query = format!("\"{}\"", query.replace("\"", ""));
+        
+        let entry_iter = stmt.query_map(rusqlite::params![fts_query, limit], |row| {
+            let tags_json: String = row.get(5)?;
+            let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
+            let created_at_str: String = row.get(6)?;
+            let created_at = chrono::DateTime::parse_from_rfc3339(&created_at_str)
+                .map(|dt| dt.with_timezone(&chrono::Utc))
+                .unwrap_or_else(|_| chrono::Utc::now());
+                
+            Ok(crate::core::models::knowledge::KnowledgeEntry {
+                id: row.get(0)?,
+                agent_id: row.get(1)?,
+                session_id: row.get(2)?,
+                title: row.get(3)?,
+                content: row.get(4)?,
+                tags,
+                created_at,
+            })
+        })?;
+        
+        let mut entries = Vec::new();
+        for entry in entry_iter {
+            entries.push(entry?);
+        }
+        Ok(entries)
     }
 }

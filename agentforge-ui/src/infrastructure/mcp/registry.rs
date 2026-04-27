@@ -15,6 +15,8 @@ pub struct McpTool {
     pub version: String,
     pub command: String,
     pub args: Vec<String>,
+    pub input_schema: String,
+    pub is_active: bool,
 }
 
 /// MCP Middleware for RBAC interception
@@ -53,43 +55,28 @@ impl McpAuthMiddleware {
 }
 
 /// MCP Tool Registration and Discovery
-/// (Task 1.40: Implement MCP tool registration and discovery)
 pub struct McpToolRegistry {
-    tools: Arc<RwLock<HashMap<String, McpTool>>>,
-}
-
-impl Default for McpToolRegistry {
-    fn default() -> Self {
-        Self::new()
-    }
+    db: Arc<dyn DatabasePort>,
 }
 
 impl McpToolRegistry {
-    pub fn new() -> Self {
-        Self {
-            tools: Arc::new(RwLock::new(HashMap::new())),
-        }
+    pub fn new(db: Arc<dyn DatabasePort>) -> Self {
+        Self { db }
     }
 
     pub fn register_tool(&self, tool: McpTool) -> Result<()> {
-        let mut lock = self.tools.write().unwrap();
-        lock.insert(tool.id.clone(), tool);
-        Ok(())
+        self.db.upsert_mcp_tool(&tool)
     }
 
     pub fn unregister_tool(&self, tool_id: &str) -> Result<()> {
-        let mut lock = self.tools.write().unwrap();
-        lock.remove(tool_id);
-        Ok(())
+        self.db.delete_mcp_tool(tool_id)
     }
 
     pub fn list_tools(&self) -> Vec<McpTool> {
-        let lock = self.tools.read().unwrap();
-        lock.values().cloned().collect()
+        self.db.list_mcp_tools().unwrap_or_default()
     }
 
     pub fn get_tool(&self, tool_id: &str) -> Option<McpTool> {
-        let lock = self.tools.read().unwrap();
-        lock.get(tool_id).cloned()
+        self.db.get_mcp_tool(tool_id).unwrap_or(None)
     }
 }

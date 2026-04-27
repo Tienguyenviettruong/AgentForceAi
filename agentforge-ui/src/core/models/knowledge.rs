@@ -14,6 +14,17 @@ pub enum RetentionPolicy {
 pub struct Tag(pub String);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KnowledgeEntry {
+    pub id: String,
+    pub agent_id: String,
+    pub session_id: Option<String>,
+    pub title: String,
+    pub content: String,
+    pub tags: Vec<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KnowledgeItem {
     pub id: Uuid,
     pub title: String,

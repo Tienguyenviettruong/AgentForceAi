@@ -66,4 +66,15 @@ pub trait DatabasePort: Send + Sync {
     fn create_role(&self, role: &crate::application::teams::role::Role) -> anyhow::Result<()>;
     fn update_role_permissions(&self, role_id: &str, permissions: &str) -> anyhow::Result<()>;
     fn check_role_permission(&self, role_id: &str, required_permission: &str) -> anyhow::Result<bool>;
+
+    // MCP Tools
+    fn upsert_mcp_tool(&self, tool: &crate::infrastructure::mcp::registry::McpTool) -> anyhow::Result<()>;
+    fn get_mcp_tool(&self, id: &str) -> anyhow::Result<Option<crate::infrastructure::mcp::registry::McpTool>>;
+    fn list_mcp_tools(&self) -> anyhow::Result<Vec<crate::infrastructure::mcp::registry::McpTool>>;
+    fn delete_mcp_tool(&self, id: &str) -> anyhow::Result<()>;
+
+    // Knowledge Entries (Long-term memory)
+    fn upsert_knowledge_entry(&self, entry: &crate::core::models::knowledge::KnowledgeEntry) -> anyhow::Result<()>;
+    fn get_knowledge_entry(&self, id: &str) -> anyhow::Result<Option<crate::core::models::knowledge::KnowledgeEntry>>;
+    fn search_knowledge_entries_fts(&self, query: &str, limit: u32) -> anyhow::Result<Vec<crate::core::models::knowledge::KnowledgeEntry>>;
 }

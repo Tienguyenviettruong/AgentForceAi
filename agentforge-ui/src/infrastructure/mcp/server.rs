@@ -54,6 +54,8 @@ impl McpServer {
             version: "1.0.0".to_string(),
             command: self.command.clone(),
             args: vec!["--tool-run".to_string()],
+            input_schema: "{}".to_string(),
+            is_active: true,
         };
 
         self.registry.register_tool(tool)?;
