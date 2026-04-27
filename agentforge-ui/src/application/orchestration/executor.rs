@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use crate::core::traits::database::DatabasePort;
-use crate::core::traits::llm_provider::LlmProviderPort;
+use crate::providers::BaseProviderAdapter;
 use crate::core::models::chat::ChatMessage;
 use crate::infrastructure::mcp::registry::McpToolRegistry;
 use crate::infrastructure::message_bus::routing::{TeamBusRouter, TeamMessage};
@@ -14,7 +14,7 @@ pub struct ToolCall {
 }
 
 pub struct AgentExecutor {
-    provider: Arc<dyn LlmProviderPort>,
+    provider: Arc<dyn BaseProviderAdapter>,
     mcp_registry: Arc<McpToolRegistry>,
     db: Arc<dyn DatabasePort>,
     team_bus: Arc<TeamBusRouter>,
@@ -24,7 +24,7 @@ pub struct AgentExecutor {
 
 impl AgentExecutor {
     pub fn new(
-        provider: Arc<dyn LlmProviderPort>,
+        provider: Arc<dyn BaseProviderAdapter>,
         mcp_registry: Arc<McpToolRegistry>,
         db: Arc<dyn DatabasePort>,
         team_bus: Arc<TeamBusRouter>,

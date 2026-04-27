@@ -1212,6 +1212,7 @@ impl TeamWorkspacePanel {
         let debate_mode = self.debate_mode;
 let db_clone = db.clone();
         let team_bus_for_ai = self.team_bus.clone();
+        let team_bus_clone = self.team_bus.clone();
         cx.spawn(async move |_, cx| {
             use crate::providers::BaseProviderAdapter;
 
@@ -1306,452 +1307,38 @@ let db_clone = db.clone();
                                         });
                                     });
 
-                                        match adapter.send_message_stream(full_history).await {
-                                        Ok(mut stream) => {
-                                            use futures::StreamExt;
-                                            let mut full_text = String::new();
-                                            let mut first_chunk = true;
-
-                                            let mut token_usage = crate::providers::TokenUsage::default();
-                                            let mut last_update = std::time::Instant::now();
-                                            while let Some(chunk_res) = stream.next().await {
-                                                if let Ok(chunk) = chunk_res {
-                                                    match chunk {
-                                                        crate::providers::StreamChunk::Text(text) => {
-                                                            if first_chunk {
-                                                                full_text.clear();
-                                                                first_chunk = false;
-                                                            }
-                                                            full_text.push_str(&text);
-
-                                                            if last_update.elapsed() > std::time::Duration::from_millis(100) {
-                                                                let text_clone = full_text.clone();
-                                                                let _ = db_clone.update_team_message_content(
-                                                                    &office_msg_id,
-                                                                    &format!("[{}]: {}", agent.name, text_clone),
-                                                                );
-                                                                let _ = cx.update(|cx| {
-                                                                    view.update(cx, |this: &mut Self, cx| {
-                                                                        let history = this.chat_histories.entry(session_id_for_ai.clone()).or_default();
-                                                                        if let Some(last) = history.last_mut() {
-                                                                            last.content = text_clone.into();
-                                                                        }
-                                                                        this.chat_list_state = gpui::ListState::new(history.len(), gpui::ListAlignment::Bottom, px(200.));
-                                                                        cx.notify();
-                                                                    });
-                                                                });
-                                                                last_update = std::time::Instant::now();
-                                                            }
-                                                        }
-                                                        crate::providers::StreamChunk::Done(usage) => {
-                                                            token_usage = usage;
-                                                        }
-                                                    }
-                                                }
-                                            }
-
-                                            let _ = db_clone.update_team_message_content(
-                                                &office_msg_id,
-                                                &format!("[{}]: {}", agent.name, full_text),
-                                            );
-                                            let _ = db_clone.update_team_message_delivery_status(&office_msg_id, "delivered");
-                                            
-                                            // Check for consensus
-                                            let mut reached_consensus = false;
-                                            if full_text.contains("[CONSENSUS_REACHED]") {
-                                                reached_consensus = true;
-                                                full_text = full_text.replace("[CONSENSUS_REACHED]", "").trim().to_string();
-                                            }
-
-                                            // Append to current history so the next agent in debate can see it
-                                            current_history.push(crate::providers::ChatMessage {
-                                                role: "assistant".into(),
-                                                content: format!("[{}]: {}", agent.name, full_text).into(),
-                                                agent_name: Some(agent.name.clone().into()),
-                                            });
-
-                                            // Append to current history so the next agent in debate can see it
-                                            current_history.push(crate::providers::ChatMessage {
-                                                role: "assistant".into(),
-                                                content: format!("[{}]: {}", agent.name, full_text).into(),
-                                                agent_name: Some(agent.name.clone().into()),
-                                            });
-// Insert token usage for interactive
-                                            let _ = db_clone.insert_token_usage(
-                                                Some(&instance_id_for_ai),
-                                                &agent_id,
-                                                token_usage.input_tokens,
-                                                token_usage.output_tokens,
-                                                token_usage.total_tokens
-                                            );
-
-                                            // Once complete, save to db
-                                            let _ = cx.update(|cx| {
-                                                let agent_id_for_session = agent_id.clone();
-                                                view.update(cx, |this: &mut Self, cx| {
-                                                    // Ensure final chunk is rendered
-                                                    let history = this.chat_histories.entry(session_id_for_ai.clone()).or_default();
-                                                    if let Some(last) = history.last_mut() {
-                                                        last.content = full_text.clone().into();
-                                                    }
-                                                    this.chat_list_state = gpui::ListState::new(history.len(), gpui::ListAlignment::Bottom, px(200.));
-
-                                                    let mut assistant_msg = crate::teambus::routing::TeamMessage::new_broadcast(
-                                                        instance_id_for_ai.clone(),
-                                                        "assistant".to_string(),
-                                                        format!("[{}]: {}", agent.name, full_text),
-                                                    );
-                                                    assistant_msg.metadata = Some(metadata.clone());
-                                                    
-                                                    let _ = crate::AppState::global(cx).db.insert_team_message(&assistant_msg);
-                                                    let _ = crate::AppState::global(cx).db.ensure_session(&session_id_for_ai, &agent_id_for_session, Some(&instance_id_for_ai));
-                                                    let _ = crate::AppState::global(cx).db.append_conversation_turn(
-                                                        &session_id_for_ai,
-                                                        "assistant",
-                                                        &full_text,
-                                                        Some(&metadata),
-                                                    );
-                                                    let _ = crate::AppState::global(cx).db.touch_session(&session_id_for_ai);
-                                                    let team_bus = this.team_bus.clone();
-                                                    cx.spawn(async move |_, _| {
-                                                        let _ = team_bus.route_message(assistant_msg).await;
-                                                    }).detach();
-                                                });
-                                            });
-                                            if reached_consensus {
-                                                let mode_clone = mode;
-                                                let db_clone = db_clone.clone();
-                                                let text_clone = full_text.clone();
-                                                let history_clone = current_history.clone();
-                                                let instance_id_clone = instance_id_for_ai.clone();
-                                                let team_id_clone = team_id_clone.clone();
-                                                let session_id_clone = session_id_for_ai.clone();
-                                                let view = view.clone();
-                                                let team_bus_clone = team_bus_for_ai.clone();
-                                                let workspace_dir_clone = workspace_dir_clone.clone();
-
-                                                cx.spawn(async move |cx| {
-                                                    // Decompose Goal
-                                                    let provider_config = db_clone.get_provider_by_name("openrouter").ok().flatten().unwrap_or_else(|| db_clone.get_provider_by_name("claude").ok().flatten().unwrap_or_else(|| crate::db::Provider {
-                    id: "default".into(),
-                    provider_name: "openrouter".into(),
-                    model: "anthropic/claude-3.5-sonnet".into(),
-                    adapter_type: "openrouter".into(),
-                    command: None,
-                    api_key_ref: None,
-                    status: "active".into(),
-                }));
-
-                let mut orch = crate::orchestration::core::Orchestrator::new();
-                if let Ok(mut dag_tasks) = orch.decompose_goal(&text_clone, db_clone.clone(), history_clone.clone(), provider_config, &instance_id_clone).await {
-                    let _ = orch.load_tasks(dag_tasks.clone());
-                    
-                    let role_mapping = db_clone.get_instance_agent_name_mapping(&instance_id_clone).unwrap_or_default();
-                    let all_agents = db_clone.get_instance_agents(&instance_id_clone).unwrap_or_default();
-                    let coordinator_id = all_agents.first().cloned();
-
-                    for t in &dag_tasks {
-                        let task_id = format!("{}:{}", instance_id_clone, t.id);
-                        let priority = if t.priority >= 8 {
-                            "high"
-                        } else if t.priority >= 5 {
-                            "medium"
-                        } else {
-                            "low"
-                        };
-                        let payload = serde_json::to_string(t).ok();
-                        let _ = db_clone.upsert_task(
-                            &task_id,
-                            &team_id_clone,
-                            Some(&instance_id_clone),
-                            priority,
-                            payload.as_deref(),
-                        );
-                        
-                        let resolved_agent_id = if let Some(assignee) = &t.assignee_id {
-                            role_mapping.get(assignee).cloned().or_else(|| coordinator_id.clone())
-                        } else {
-                            coordinator_id.clone()
-                        };
-
-                        if let Some(agent_id) = resolved_agent_id {
-                            let _ = db_clone.assign_task_to_agent(&task_id, &agent_id);
-                        }
-                    }
-
-                    dag_tasks.sort_by(|a, b| b.priority.cmp(&a.priority));
-                    let mut msg_lines = Vec::new();
-                    msg_lines.push(format!("[Orchestrator]: Planned {} tasks", dag_tasks.len()));
-                    for t in &dag_tasks {
-                        if let Some(assignee) = &t.assignee_id {
-                            msg_lines.push(format!("- {} (Assigned to {})", t.name, assignee));
-                        } else {
-                            msg_lines.push(format!("- {}", t.name));
-                        }
-                    }
-                    if mode_clone == crate::orchestration::modes::OperatingMode::Supervision {
-                        msg_lines.push("Type /run to execute pending tasks.".to_string());
-                    }
-                    let orch_text = msg_lines.join("\n");
-
-                    let _ = cx.update(|cx| view.update(cx, |this, cx| {
-                        let history = this.chat_histories.entry(session_id_clone.clone()).or_default();
-                        history.push(crate::providers::ChatMessage { role: "assistant".into(), content: orch_text.clone().into(), agent_name: None });
-                        if this.selected_session_id.as_deref() == Some(session_id_clone.as_str()) {
-                            this.chat_list_state = gpui::ListState::new(history.len(), gpui::ListAlignment::Bottom, gpui::px(200.));
-                        }
-                        cx.notify();
-                    }));
-
-                    let orch_msg = crate::teambus::routing::TeamMessage::new_broadcast(
-                        instance_id_clone.clone(),
-                        "assistant".to_string(),
-                        orch_text.clone(),
-                    );
-                    let _ = db_clone.insert_team_message(&orch_msg);
-                    let _ = team_bus_clone.route_message(orch_msg).await;
-
-                    if let Ok(agent_ids) = db_clone.get_instance_agents(&instance_id_clone) {
-                        if let Some(agent_id) = agent_ids.first() {
-                            let _ = db_clone.ensure_session(&session_id_clone, agent_id, Some(&instance_id_clone));
-                            let _ = db_clone.append_conversation_turn(
-                                &session_id_clone,
-                                "assistant",
-                                &orch_text,
-                                None,
-                            );
-                            let _ = db_clone.touch_session(&session_id_clone);
-                        }
-                    }
-                }
-                                                    
-                                                    // Auto-execute if not Human
-                                                    if mode_clone == crate::orchestration::modes::OperatingMode::Autonomous || mode_clone == crate::orchestration::modes::OperatingMode::Supervision {
-                                                        let _is_run_command = true;
-                                                        use crate::providers::BaseProviderAdapter;
-
-                let all_agent_ids = db_clone.get_instance_agents(&instance_id_clone).unwrap_or_default();
-                if all_agent_ids.is_empty() { return; }
-
-                for agent_id in all_agent_ids {
-                    let agent_id_clone = agent_id.clone();
-                    let db_clone_agent = db_clone.clone();
-                    let team_id_clone_agent = team_id_clone.clone();
-                    let instance_id_clone_agent = instance_id_clone.clone();
-                    let team_bus_clone_agent = team_bus_clone.clone();
-                    let view_agent = view.clone();
-                    let session_id_clone_agent = session_id_clone.clone();
-                    let workspace_dir_agent = workspace_dir_clone.clone();
-
-                    cx.spawn(async move |cx| {
-                        loop {
-                            let Ok(Some(agent)) = db_clone_agent.get_agent(&agent_id_clone) else { break; };
-                            let Ok(Some(provider_config)) = db_clone_agent.get_provider_by_name(&agent.provider) else { break; };
-                            
-                            let tasks = db_clone_agent.list_tasks_for_instance(&instance_id_clone_agent).unwrap_or_default();
-                            
-                            // Find next pending task assigned to this agent where dependencies are met
-                            let mut next_task = None;
-                            for task in &tasks {
-                                if task.status == "pending" && task.assignee_id.as_ref() == Some(&agent_id_clone) {
-                                    if let Some(payload) = &task.payload {
-                                        if let Ok(dag_task) = serde_json::from_str::<crate::orchestration::core::DagTask>(payload) {
-                                            let mut all_deps_met = true;
-                                            for dep_id in dag_task.dependencies {
-                                                let full_dep_id = format!("{}:{}", instance_id_clone_agent, dep_id);
-                                                if let Some(dt) = tasks.iter().find(|t| t.id == full_dep_id) {
-                                                    if dt.status != "completed" {
-                                                        all_deps_met = false;
-                                                        break;
-                                                    }
-                                                }
-                                            }
-                                            if all_deps_met {
-                                                next_task = Some(task.clone());
-                                                break;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            let Some(task) = next_task else {
-                                // If there are pending tasks but dependencies aren't met, wait and retry.
-                                let has_pending = tasks.iter().any(|t| t.status == "pending" && t.assignee_id.as_ref() == Some(&agent_id_clone));
-                                if has_pending {
-                                    cx.background_executor().timer(std::time::Duration::from_secs(2)).await;
-                                    continue;
-                                } else {
-                                    break;
-                                }
-                            };
-
-                            // Claim task (sets to in_progress)
-                            let claimed = db_clone_agent
-                                .claim_task_for_instance(&task.id, &agent_id_clone, &instance_id_clone_agent)
-                                .unwrap_or(false);
-                            if !claimed {
-                                continue;
-                            }
-
-                            let mut task_prompt = Vec::new();
-                            let chat_service = crate::application::services::chat_service::ChatService::new(db_clone_agent.clone(), team_bus_clone_agent.clone());
-                            if let Some(sys_prompt) = chat_service.build_dynamic_system_prompt(&team_id_clone_agent, &instance_id_clone_agent, &agent_id_clone) {
-                                task_prompt.push(crate::core::models::ChatMessage { role: "system".into(), content: gpui::SharedString::from(sys_prompt), agent_name: None });
-                            }
-                            
-                            // Instruct the LLM to output files if needed
-                            let mut instructions = if let Some(ref ws) = workspace_dir_agent {
-                                format!("Execute the following task. You are working in the directory: {}. If you generate or modify any files, use a markdown code block starting with ```file:<filepath> and ending with ```. Please output absolute file paths within this directory. For example:\n```file:{}/example.txt\nFile contents here\n```\nTask:\n", ws, ws)
-                            } else {
-                                "Execute the following task. If you generate or modify any files, use a markdown code block starting with ```file:<filepath> and ending with ```. For example:\n```file:/workspace/example.txt\nFile contents here\n```\nTask:\n".to_string()
-                            };
-                            
-                            let task_text = task.payload.clone().unwrap_or_else(|| task.id.clone());
-                            
-                            // Perform RAG Vector Search
-                            let embedding_provider = crate::providers::embeddings::EmbeddingProvider::new();
-                            if let Ok(query_vec) = embedding_provider.get_embedding(&task_text).await {
-                                if let Ok(similar) = db_clone_agent.search_similar_chunks(&query_vec, 3) {
-                                    if !similar.is_empty() {
-                                        instructions.push_str("\n\n[SYSTEM KNOWLEDGE RETRIEVAL]\nHere is context retrieved from the user's Obsidian Vault that might be relevant to your task:\n");
-                                        for (title, chunk_content, sim) in similar {
-                                            if sim > 0.6 { // Only include somewhat relevant chunks
-                                                instructions.push_str(&format!("\n--- Document: {} (Similarity: {:.2}) ---\n{}\n", title, sim, chunk_content));
-                                            }
-                                        }
-                                        instructions.push_str("\n[END KNOWLEDGE RETRIEVAL]\n\n");
-                                    }
-                                }
-                            }
-                            
-                            task_prompt.push(crate::providers::ChatMessage { role: "user".into(), content: format!("{}{}", instructions, task_text).into(), agent_name: None });
-
-                            let result = if provider_config.provider_name == "openrouter" {
-                                let mut adapter = crate::providers::openrouter::OpenRouterAdapter::new();
-                                if adapter.initialize(&provider_config).is_ok() {
-                                    adapter.send_message(task_prompt).await
-                                } else {
-                                    Err(anyhow::anyhow!("Failed to init adapter"))
-                                }
-                            } else {
-                                let mut adapter = crate::providers::claude::ClaudeAdapter::new();
-                                if adapter.initialize(&provider_config).is_ok() {
-                                    adapter.send_message(task_prompt).await
-                                } else {
-                                    Err(anyhow::anyhow!("Failed to init adapter"))
-                                }
-                            };
-
-                            let (status_text, ok) = match result {
-                                Ok(resp) => {
-                                    let text = resp.content.to_string();
-                                    // Insert token usage
-                                    let _ = db_clone_agent.insert_token_usage(
-                                        Some(&instance_id_clone_agent),
-                                        &agent_id_clone,
-                                        resp.token_usage.input_tokens,
-                                        resp.token_usage.output_tokens,
-                                        resp.token_usage.total_tokens
-                                    );
-                                    
-                                    let chat_service = crate::application::services::chat_service::ChatService::new(db_clone_agent.clone(), team_bus_clone_agent.clone());
-                                    let (files_written, _) = chat_service.parse_and_write_files(&text, workspace_dir_agent.as_ref());
-                                    
-                                    let mut final_text = format!("[Task Completed] {}:
-{}", task.id, text);
-                                    if !files_written.is_empty() {
-                                        final_text.push_str("
-
-**Files Generated/Modified:**
-");
-                                        for f in files_written {
-                                            final_text.push_str(&format!("- {}
-", f));
-                                        }
-                                    }
-                                    
-                                    (final_text, true)
-                                },
-                                Err(e) => (format!("[Task Failed] {}:
-{}", task.id, e), false),
-                            };
-
-                            let _ = if ok {
-                                db_clone_agent.mark_task_completed(&task.id)
-                            } else {
-                                db_clone_agent.mark_task_failed(&task.id)
-                            };
-
-                            let agent_name_str = agent.name.clone();
-                            let metadata = serde_json::json!({"agent_name": agent_name_str}).to_string();
-                            
-                            let mut msg = crate::teambus::routing::TeamMessage::new_broadcast(
-                                instance_id_clone_agent.clone(),
-                                "assistant".to_string(),
-                                status_text.clone(),
-                            );
-                            msg.metadata = Some(metadata.clone());
-                            let _ = db_clone_agent.insert_team_message(&msg);
-                            let _ = team_bus_clone_agent.route_message(msg).await;
-                            
-                            // Save to database so it persists across reloads!
-                            let _ = db_clone_agent.ensure_session(&session_id_clone_agent, &agent_id_clone, Some(&instance_id_clone_agent));
-                            let _ = db_clone_agent.append_conversation_turn(
-                                &session_id_clone_agent,
-                                "assistant",
-                                &status_text,
-                                Some(&metadata),
-                            );
-                            let _ = db_clone_agent.touch_session(&session_id_clone_agent);
-
-                            let _ = cx.update(|cx| view_agent.update(cx, |this: &mut Self, cx| {
-                                let session_id = this
-                                    .instance_active_session
-                                    .get(&instance_id_clone_agent)
-                                    .cloned()
-                                    .or_else(|| this.selected_session_id.clone());
-                                if let Some(session_id) = session_id {
-                                    let history = this.chat_histories.entry(session_id.clone()).or_default();
-                                    // msg_idx is not in scope here because this is for the non-streaming error fallback!
-                                    // We can just append a new message.
-                                    history.push(crate::providers::ChatMessage {
-                                        role: "assistant".into(),
-                                        content: status_text.clone().into(),
-                                        agent_name: Some(agent_name_str.into())
-                                    });
-                                    if this.selected_session_id.as_deref() == Some(session_id.as_str()) {
-                                        this.chat_list_state = gpui::ListState::new(
-                                            history.len(),
-                                            gpui::ListAlignment::Bottom,
-                                            gpui::px(200.),
+                                        
+                                        let mcp_registry = std::sync::Arc::new(crate::infrastructure::mcp::registry::McpToolRegistry::new(db.clone()));
+                                        let executor = crate::application::orchestration::executor::AgentExecutor::new(
+                                            std::sync::Arc::new(adapter) as std::sync::Arc<dyn crate::providers::BaseProviderAdapter>,
+                                            mcp_registry,
+                                            db.clone(),
+                                            team_bus_clone.clone(),
+                                            instance_id.clone(),
+                                            agent.id.clone()
                                         );
-                                    }
-                                }
-                                cx.notify();
-                            }));
-                        }
-                    }).detach();
-                }
-                                                    }
-                                                }).detach();
-                                                break; // Exit debate loop
+                                        
+                                        match executor.execute_task(full_history).await {
+                                            Ok(full_text) => {
+                                                let _ = db_clone.update_team_message_content(&office_msg_id, &full_text);
+                                                let _ = db_clone.update_team_message_delivery_status(&office_msg_id, "delivered");
+                                                
+                                                // Handle file extraction
+                                                let chat_service = crate::application::services::chat_service::ChatService::new(db_clone.clone(), team_bus_clone.clone());
+                                                let (files_written, clean_text) = chat_service.parse_and_write_files(&full_text, None);
+                                                if !files_written.is_empty() {
+                                                    let _ = db_clone.update_team_message_content(&office_msg_id, &clean_text);
+                                                }
+                                                
+                                                let _ = cx.update(|cx| view.update(cx, |_, cx| cx.notify())).ok();
                                             }
+                                            Err(e) => {
+                                                let _ = db_clone.update_team_message_content(&office_msg_id, &format!("Error: {}", e));
+                                                let _ = db_clone.update_team_message_delivery_status(&office_msg_id, "failed");
+                                                let _ = cx.update(|cx| view.update(cx, |_, cx| cx.notify())).ok();
+                                            }
+                                        }
 
-                                        }
-                                        Err(e) => {
-                                            let _ = cx.update(|cx| {
-                                                view.update(cx, |this: &mut Self, cx| {
-                                                    let error_text = format!("Error: {}", e);
-                                                    let history = this.chat_histories.entry(session_id_for_ai.clone()).or_default();
-                                                    if let Some(msg) = history.get_mut(msg_idx) {
-                                                        msg.content = error_text.into();
-                                                    }
-                                                    cx.notify();
-                                                });
-                                            });
-                                        }
-                                    }
                                     }
                                 }
                                 "claude" => {
@@ -1785,125 +1372,38 @@ let db_clone = db.clone();
                                         });
                                     });
 
-                                        match adapter.send_message_stream(full_history).await {
-                                        Ok(mut stream) => {
-                                            use futures::StreamExt;
-                                            let mut full_text = String::new();
-                                            let mut first_chunk = true;
-
-                                            let mut token_usage = crate::providers::TokenUsage::default();
-                                            let mut last_update = std::time::Instant::now();
-                                            while let Some(chunk_res) = stream.next().await {
-                                                if let Ok(chunk) = chunk_res {
-                                                    match chunk {
-                                                        crate::providers::StreamChunk::Text(text) => {
-                                                            if first_chunk {
-                                                                full_text.clear();
-                                                                first_chunk = false;
-                                                            }
-                                                            full_text.push_str(&text);
-
-                                                            if last_update.elapsed() > std::time::Duration::from_millis(100) {
-                                                                let text_clone = full_text.clone();
-                                                                let _ = db_clone.update_team_message_content(
-                                                                    &office_msg_id,
-                                                                    &format!("[{}]: {}", agent.name, text_clone),
-                                                                );
-                                                                let _ = cx.update(|cx| {
-                                                                    view.update(cx, |this: &mut Self, cx| {
-                                                                        let history = this.chat_histories.entry(session_id_for_ai.clone()).or_default();
-                                                                        if let Some(last) = history.last_mut() {
-                                                                            last.content = text_clone.into();
-                                                                        }
-                                                                        this.chat_list_state = gpui::ListState::new(history.len(), gpui::ListAlignment::Bottom, px(200.));
-                                                                        cx.notify();
-                                                                    });
-                                                                });
-                                                                last_update = std::time::Instant::now();
-                                                            }
-                                                        }
-                                                        crate::providers::StreamChunk::Done(usage) => {
-                                                            token_usage = usage;
-                                                        }
-                                                    }
+                                        
+                                        let mcp_registry = std::sync::Arc::new(crate::infrastructure::mcp::registry::McpToolRegistry::new(db.clone()));
+                                        let executor = crate::application::orchestration::executor::AgentExecutor::new(
+                                            std::sync::Arc::new(adapter) as std::sync::Arc<dyn crate::providers::BaseProviderAdapter>,
+                                            mcp_registry,
+                                            db.clone(),
+                                            team_bus_clone.clone(),
+                                            instance_id.clone(),
+                                            agent.id.clone()
+                                        );
+                                        
+                                        match executor.execute_task(full_history).await {
+                                            Ok(full_text) => {
+                                                let _ = db_clone.update_team_message_content(&office_msg_id, &full_text);
+                                                let _ = db_clone.update_team_message_delivery_status(&office_msg_id, "delivered");
+                                                
+                                                // Handle file extraction
+                                                let chat_service = crate::application::services::chat_service::ChatService::new(db_clone.clone(), team_bus_clone.clone());
+                                                let (files_written, clean_text) = chat_service.parse_and_write_files(&full_text, None);
+                                                if !files_written.is_empty() {
+                                                    let _ = db_clone.update_team_message_content(&office_msg_id, &clean_text);
                                                 }
+                                                
+                                                let _ = cx.update(|cx| view.update(cx, |_, cx| cx.notify())).ok();
                                             }
-
-                                            let _ = db_clone.update_team_message_content(
-                                                &office_msg_id,
-                                                &format!("[{}]: {}", agent.name, full_text),
-                                            );
-                                            let _ = db_clone.update_team_message_delivery_status(&office_msg_id, "delivered");
-                                            
-                                            // Check for consensus
-                                            let mut reached_consensus = false;
-                                            if full_text.contains("[CONSENSUS_REACHED]") {
-                                                reached_consensus = true;
-                                                full_text = full_text.replace("[CONSENSUS_REACHED]", "").trim().to_string();
+                                            Err(e) => {
+                                                let _ = db_clone.update_team_message_content(&office_msg_id, &format!("Error: {}", e));
+                                                let _ = db_clone.update_team_message_delivery_status(&office_msg_id, "failed");
+                                                let _ = cx.update(|cx| view.update(cx, |_, cx| cx.notify())).ok();
                                             }
-
-                                            // Append to current history so the next agent in debate can see it
-                                            current_history.push(crate::providers::ChatMessage {
-                                                role: "assistant".into(),
-                                                content: format!("[{}]: {}", agent.name, full_text).into(),
-                                                agent_name: Some(agent.name.clone().into()),
-                                            });
-// Insert token usage for interactive
-                                            let _ = db_clone.insert_token_usage(
-                                                Some(&instance_id_for_ai),
-                                                &agent_id,
-                                                token_usage.input_tokens,
-                                                token_usage.output_tokens,
-                                                token_usage.total_tokens
-                                            );
-
-                                            // Once complete, save to db
-                                            let _ = cx.update(|cx| {
-                                                let agent_id_for_session = agent_id.clone();
-                                                view.update(cx, |this: &mut Self, cx| {
-                                                    // Ensure final chunk is rendered
-                                                    let history = this.chat_histories.entry(session_id_for_ai.clone()).or_default();
-                                                    if let Some(last) = history.last_mut() {
-                                                        last.content = full_text.clone().into();
-                                                    }
-                                                    this.chat_list_state = gpui::ListState::new(history.len(), gpui::ListAlignment::Bottom, px(200.));
-
-                                                    let mut assistant_msg = crate::teambus::routing::TeamMessage::new_broadcast(
-                                                        instance_id_for_ai.clone(),
-                                                        "assistant".to_string(),
-                                                        format!("[{}]: {}", agent.name, full_text),
-                                                    );
-                                                    assistant_msg.metadata = Some(metadata.clone());
-                                                    
-                                                    let _ = crate::AppState::global(cx).db.insert_team_message(&assistant_msg);
-                                                    let _ = crate::AppState::global(cx).db.ensure_session(&session_id_for_ai, &agent_id_for_session, Some(&instance_id_for_ai));
-                                                    let _ = crate::AppState::global(cx).db.append_conversation_turn(
-                                                        &session_id_for_ai,
-                                                        "assistant",
-                                                        &full_text,
-                                                        Some(&metadata),
-                                                    );
-                                                    let _ = crate::AppState::global(cx).db.touch_session(&session_id_for_ai);
-                                                    let team_bus = this.team_bus.clone();
-                                                    cx.spawn(async move |_, _| {
-                                                        let _ = team_bus.route_message(assistant_msg).await;
-                                                    }).detach();
-                                                });
-                                            });
                                         }
-                                        Err(e) => {
-                                            let _ = cx.update(|cx| {
-                                                view.update(cx, |this: &mut Self, cx| {
-                                                    let error_text = format!("Error: {}", e);
-                                                    let history = this.chat_histories.entry(session_id_for_ai.clone()).or_default();
-                                                    if let Some(msg) = history.get_mut(msg_idx) {
-                                                        msg.content = error_text.into();
-                                                    }
-                                                    cx.notify();
-                                                });
-                                            });
-                                        }
-                                    }
+
                                     }
                                 }
                                 "gemini" => {
@@ -1936,108 +1436,38 @@ let db_clone = db.clone();
                                             });
                                         });
 
-                                        match adapter.send_message_stream(full_history).await {
-                                            Ok(mut stream) => {
-                                                use futures::StreamExt;
-                                                let mut full_text = String::new();
-                                                let mut first_chunk = true;
-                                                let mut token_usage = crate::providers::TokenUsage::default();
-                                                let mut last_update = std::time::Instant::now();
-                                                while let Some(chunk_res) = stream.next().await {
-                                                    if let Ok(chunk) = chunk_res {
-                                                        match chunk {
-                                                            crate::providers::StreamChunk::Text(text) => {
-                                                                if first_chunk {
-                                                                    full_text.clear();
-                                                                    first_chunk = false;
-                                                                }
-                                                                full_text.push_str(&text);
-                                                                if last_update.elapsed() > std::time::Duration::from_millis(100) {
-                                                                    let text_clone = full_text.clone();
-                                                                    let _ = db_clone.update_team_message_content(
-                                                                        &office_msg_id,
-                                                                        &format!("[{}]: {}", agent.name, text_clone),
-                                                                    );
-                                                                    let _ = cx.update(|cx| {
-                                                                        view.update(cx, |this: &mut Self, cx| {
-                                                                            let history = this.chat_histories.entry(session_id_for_ai.clone()).or_default();
-                                                                            if let Some(msg) = history.get_mut(msg_idx) {
-                                                                                msg.content = text_clone.clone().into();
-                                                                            }
-                                                                            this.chat_list_state = gpui::ListState::new(history.len(), gpui::ListAlignment::Bottom, px(200.));
-                                                                            cx.notify();
-                                                                        });
-                                                                    });
-                                                                    last_update = std::time::Instant::now();
-                                                                }
-                                                            }
-                                                            crate::providers::StreamChunk::Done(usage) => {
-                                                                token_usage = usage;
-                                                            }
-                                                        }
-                                                    }
-                                                }
-
-                                                let _ = db_clone.update_team_message_content(
-                                                    &office_msg_id,
-                                                    &format!("[{}]: {}", agent.name, full_text),
-                                                );
+                                        
+                                        let mcp_registry = std::sync::Arc::new(crate::infrastructure::mcp::registry::McpToolRegistry::new(db.clone()));
+                                        let executor = crate::application::orchestration::executor::AgentExecutor::new(
+                                            std::sync::Arc::new(adapter) as std::sync::Arc<dyn crate::providers::BaseProviderAdapter>,
+                                            mcp_registry,
+                                            db.clone(),
+                                            team_bus_clone.clone(),
+                                            instance_id.clone(),
+                                            agent.id.clone()
+                                        );
+                                        
+                                        match executor.execute_task(full_history).await {
+                                            Ok(full_text) => {
+                                                let _ = db_clone.update_team_message_content(&office_msg_id, &full_text);
                                                 let _ = db_clone.update_team_message_delivery_status(&office_msg_id, "delivered");
-
-                                                let _ = db_clone.insert_token_usage(
-                                                    Some(&instance_id_for_ai),
-                                                    &agent_id,
-                                                    token_usage.input_tokens,
-                                                    token_usage.output_tokens,
-                                                    token_usage.total_tokens
-                                                );
-
-                                                let _ = cx.update(|cx| {
-                                                    let agent_id_for_session = agent_id.clone();
-                                                    view.update(cx, |this: &mut Self, cx| {
-                                                        let history = this.chat_histories.entry(session_id_for_ai.clone()).or_default();
-                                                        if let Some(msg) = history.get_mut(msg_idx) {
-                                                            msg.content = full_text.clone().into();
-                                                        }
-                                                        this.chat_list_state = gpui::ListState::new(history.len(), gpui::ListAlignment::Bottom, px(200.));
-
-                                                        let mut assistant_msg = crate::teambus::routing::TeamMessage::new_broadcast(
-                                                            instance_id_for_ai.clone(),
-                                                            "assistant".to_string(),
-                                                            format!("[{}]: {}", agent.name, full_text),
-                                                        );
-                                                        assistant_msg.metadata = Some(metadata.clone());
-
-                                                        let _ = crate::AppState::global(cx).db.insert_team_message(&assistant_msg);
-                                                        let _ = crate::AppState::global(cx).db.ensure_session(&session_id_for_ai, &agent_id_for_session, Some(&instance_id_for_ai));
-                                                        let _ = crate::AppState::global(cx).db.append_conversation_turn(
-                                                            &session_id_for_ai,
-                                                            "assistant",
-                                                            &full_text,
-                                                            Some(&metadata),
-                                                        );
-                                                        let _ = crate::AppState::global(cx).db.touch_session(&session_id_for_ai);
-                                                        let team_bus = this.team_bus.clone();
-                                                        cx.spawn(async move |_, _| {
-                                                            let _ = team_bus.route_message(assistant_msg).await;
-                                                        }).detach();
-                                                        cx.notify();
-                                                    });
-                                                });
+                                                
+                                                // Handle file extraction
+                                                let chat_service = crate::application::services::chat_service::ChatService::new(db_clone.clone(), team_bus_clone.clone());
+                                                let (files_written, clean_text) = chat_service.parse_and_write_files(&full_text, None);
+                                                if !files_written.is_empty() {
+                                                    let _ = db_clone.update_team_message_content(&office_msg_id, &clean_text);
+                                                }
+                                                
+                                                let _ = cx.update(|cx| view.update(cx, |_, cx| cx.notify())).ok();
                                             }
                                             Err(e) => {
-                                                let _ = cx.update(|cx| {
-                                                    view.update(cx, |this: &mut Self, cx| {
-                                                        let error_text = format!("Error: {}", e);
-                                                        let history = this.chat_histories.entry(session_id_for_ai.clone()).or_default();
-                                                        if let Some(msg) = history.get_mut(msg_idx) {
-                                                            msg.content = error_text.into();
-                                                        }
-                                                        cx.notify();
-                                                    });
-                                                });
+                                                let _ = db_clone.update_team_message_content(&office_msg_id, &format!("Error: {}", e));
+                                                let _ = db_clone.update_team_message_delivery_status(&office_msg_id, "failed");
+                                                let _ = cx.update(|cx| view.update(cx, |_, cx| cx.notify())).ok();
                                             }
                                         }
+
                                     }
                                 }
                                 "codex" => {
@@ -2070,108 +1500,38 @@ let db_clone = db.clone();
                                             });
                                         });
 
-                                        match adapter.send_message_stream(full_history).await {
-                                            Ok(mut stream) => {
-                                                use futures::StreamExt;
-                                                let mut full_text = String::new();
-                                                let mut first_chunk = true;
-                                                let mut token_usage = crate::providers::TokenUsage::default();
-                                                let mut last_update = std::time::Instant::now();
-                                                while let Some(chunk_res) = stream.next().await {
-                                                    if let Ok(chunk) = chunk_res {
-                                                        match chunk {
-                                                            crate::providers::StreamChunk::Text(text) => {
-                                                                if first_chunk {
-                                                                    full_text.clear();
-                                                                    first_chunk = false;
-                                                                }
-                                                                full_text.push_str(&text);
-                                                                if last_update.elapsed() > std::time::Duration::from_millis(100) {
-                                                                    let text_clone = full_text.clone();
-                                                                    let _ = db_clone.update_team_message_content(
-                                                                        &office_msg_id,
-                                                                        &format!("[{}]: {}", agent.name, text_clone),
-                                                                    );
-                                                                    let _ = cx.update(|cx| {
-                                                                        view.update(cx, |this: &mut Self, cx| {
-                                                                            let history = this.chat_histories.entry(session_id_for_ai.clone()).or_default();
-                                                                            if let Some(msg) = history.get_mut(msg_idx) {
-                                                                                msg.content = text_clone.clone().into();
-                                                                            }
-                                                                            this.chat_list_state = gpui::ListState::new(history.len(), gpui::ListAlignment::Bottom, px(200.));
-                                                                            cx.notify();
-                                                                        });
-                                                                    });
-                                                                    last_update = std::time::Instant::now();
-                                                                }
-                                                            }
-                                                            crate::providers::StreamChunk::Done(usage) => {
-                                                                token_usage = usage;
-                                                            }
-                                                        }
-                                                    }
-                                                }
-
-                                                let _ = db_clone.update_team_message_content(
-                                                    &office_msg_id,
-                                                    &format!("[{}]: {}", agent.name, full_text),
-                                                );
+                                        
+                                        let mcp_registry = std::sync::Arc::new(crate::infrastructure::mcp::registry::McpToolRegistry::new(db.clone()));
+                                        let executor = crate::application::orchestration::executor::AgentExecutor::new(
+                                            std::sync::Arc::new(adapter) as std::sync::Arc<dyn crate::providers::BaseProviderAdapter>,
+                                            mcp_registry,
+                                            db.clone(),
+                                            team_bus_clone.clone(),
+                                            instance_id.clone(),
+                                            agent.id.clone()
+                                        );
+                                        
+                                        match executor.execute_task(full_history).await {
+                                            Ok(full_text) => {
+                                                let _ = db_clone.update_team_message_content(&office_msg_id, &full_text);
                                                 let _ = db_clone.update_team_message_delivery_status(&office_msg_id, "delivered");
-
-                                                let _ = db_clone.insert_token_usage(
-                                                    Some(&instance_id_for_ai),
-                                                    &agent_id,
-                                                    token_usage.input_tokens,
-                                                    token_usage.output_tokens,
-                                                    token_usage.total_tokens
-                                                );
-
-                                                let _ = cx.update(|cx| {
-                                                    let agent_id_for_session = agent_id.clone();
-                                                    view.update(cx, |this: &mut Self, cx| {
-                                                        let history = this.chat_histories.entry(session_id_for_ai.clone()).or_default();
-                                                        if let Some(msg) = history.get_mut(msg_idx) {
-                                                            msg.content = full_text.clone().into();
-                                                        }
-                                                        this.chat_list_state = gpui::ListState::new(history.len(), gpui::ListAlignment::Bottom, px(200.));
-
-                                                        let mut assistant_msg = crate::teambus::routing::TeamMessage::new_broadcast(
-                                                            instance_id_for_ai.clone(),
-                                                            "assistant".to_string(),
-                                                            format!("[{}]: {}", agent.name, full_text),
-                                                        );
-                                                        assistant_msg.metadata = Some(metadata.clone());
-
-                                                        let _ = crate::AppState::global(cx).db.insert_team_message(&assistant_msg);
-                                                        let _ = crate::AppState::global(cx).db.ensure_session(&session_id_for_ai, &agent_id_for_session, Some(&instance_id_for_ai));
-                                                        let _ = crate::AppState::global(cx).db.append_conversation_turn(
-                                                            &session_id_for_ai,
-                                                            "assistant",
-                                                            &full_text,
-                                                            Some(&metadata),
-                                                        );
-                                                        let _ = crate::AppState::global(cx).db.touch_session(&session_id_for_ai);
-                                                        let team_bus = this.team_bus.clone();
-                                                        cx.spawn(async move |_, _| {
-                                                            let _ = team_bus.route_message(assistant_msg).await;
-                                                        }).detach();
-                                                        cx.notify();
-                                                    });
-                                                });
+                                                
+                                                // Handle file extraction
+                                                let chat_service = crate::application::services::chat_service::ChatService::new(db_clone.clone(), team_bus_clone.clone());
+                                                let (files_written, clean_text) = chat_service.parse_and_write_files(&full_text, None);
+                                                if !files_written.is_empty() {
+                                                    let _ = db_clone.update_team_message_content(&office_msg_id, &clean_text);
+                                                }
+                                                
+                                                let _ = cx.update(|cx| view.update(cx, |_, cx| cx.notify())).ok();
                                             }
                                             Err(e) => {
-                                                let _ = cx.update(|cx| {
-                                                    view.update(cx, |this: &mut Self, cx| {
-                                                        let error_text = format!("Error: {}", e);
-                                                        let history = this.chat_histories.entry(session_id_for_ai.clone()).or_default();
-                                                        if let Some(msg) = history.get_mut(msg_idx) {
-                                                            msg.content = error_text.into();
-                                                        }
-                                                        cx.notify();
-                                                    });
-                                                });
+                                                let _ = db_clone.update_team_message_content(&office_msg_id, &format!("Error: {}", e));
+                                                let _ = db_clone.update_team_message_delivery_status(&office_msg_id, "failed");
+                                                let _ = cx.update(|cx| view.update(cx, |_, cx| cx.notify())).ok();
                                             }
                                         }
+
                                     }
                                 }
                                 "opencode" => {
@@ -2204,108 +1564,38 @@ let db_clone = db.clone();
                                             });
                                         });
 
-                                        match adapter.send_message_stream(full_history).await {
-                                            Ok(mut stream) => {
-                                                use futures::StreamExt;
-                                                let mut full_text = String::new();
-                                                let mut first_chunk = true;
-                                                let mut token_usage = crate::providers::TokenUsage::default();
-                                                let mut last_update = std::time::Instant::now();
-                                                while let Some(chunk_res) = stream.next().await {
-                                                    if let Ok(chunk) = chunk_res {
-                                                        match chunk {
-                                                            crate::providers::StreamChunk::Text(text) => {
-                                                                if first_chunk {
-                                                                    full_text.clear();
-                                                                    first_chunk = false;
-                                                                }
-                                                                full_text.push_str(&text);
-                                                                if last_update.elapsed() > std::time::Duration::from_millis(100) {
-                                                                    let text_clone = full_text.clone();
-                                                                    let _ = db_clone.update_team_message_content(
-                                                                        &office_msg_id,
-                                                                        &format!("[{}]: {}", agent.name, text_clone),
-                                                                    );
-                                                                    let _ = cx.update(|cx| {
-                                                                        view.update(cx, |this: &mut Self, cx| {
-                                                                            let history = this.chat_histories.entry(session_id_for_ai.clone()).or_default();
-                                                                            if let Some(msg) = history.get_mut(msg_idx) {
-                                                                                msg.content = text_clone.clone().into();
-                                                                            }
-                                                                            this.chat_list_state = gpui::ListState::new(history.len(), gpui::ListAlignment::Bottom, px(200.));
-                                                                            cx.notify();
-                                                                        });
-                                                                    });
-                                                                    last_update = std::time::Instant::now();
-                                                                }
-                                                            }
-                                                            crate::providers::StreamChunk::Done(usage) => {
-                                                                token_usage = usage;
-                                                            }
-                                                        }
-                                                    }
-                                                }
-
-                                                let _ = db_clone.update_team_message_content(
-                                                    &office_msg_id,
-                                                    &format!("[{}]: {}", agent.name, full_text),
-                                                );
+                                        
+                                        let mcp_registry = std::sync::Arc::new(crate::infrastructure::mcp::registry::McpToolRegistry::new(db.clone()));
+                                        let executor = crate::application::orchestration::executor::AgentExecutor::new(
+                                            std::sync::Arc::new(adapter) as std::sync::Arc<dyn crate::providers::BaseProviderAdapter>,
+                                            mcp_registry,
+                                            db.clone(),
+                                            team_bus_clone.clone(),
+                                            instance_id.clone(),
+                                            agent.id.clone()
+                                        );
+                                        
+                                        match executor.execute_task(full_history).await {
+                                            Ok(full_text) => {
+                                                let _ = db_clone.update_team_message_content(&office_msg_id, &full_text);
                                                 let _ = db_clone.update_team_message_delivery_status(&office_msg_id, "delivered");
-
-                                                let _ = db_clone.insert_token_usage(
-                                                    Some(&instance_id_for_ai),
-                                                    &agent_id,
-                                                    token_usage.input_tokens,
-                                                    token_usage.output_tokens,
-                                                    token_usage.total_tokens
-                                                );
-
-                                                let _ = cx.update(|cx| {
-                                                    let agent_id_for_session = agent_id.clone();
-                                                    view.update(cx, |this: &mut Self, cx| {
-                                                        let history = this.chat_histories.entry(session_id_for_ai.clone()).or_default();
-                                                        if let Some(msg) = history.get_mut(msg_idx) {
-                                                            msg.content = full_text.clone().into();
-                                                        }
-                                                        this.chat_list_state = gpui::ListState::new(history.len(), gpui::ListAlignment::Bottom, px(200.));
-
-                                                        let mut assistant_msg = crate::teambus::routing::TeamMessage::new_broadcast(
-                                                            instance_id_for_ai.clone(),
-                                                            "assistant".to_string(),
-                                                            format!("[{}]: {}", agent.name, full_text),
-                                                        );
-                                                        assistant_msg.metadata = Some(metadata.clone());
-
-                                                        let _ = crate::AppState::global(cx).db.insert_team_message(&assistant_msg);
-                                                        let _ = crate::AppState::global(cx).db.ensure_session(&session_id_for_ai, &agent_id_for_session, Some(&instance_id_for_ai));
-                                                        let _ = crate::AppState::global(cx).db.append_conversation_turn(
-                                                            &session_id_for_ai,
-                                                            "assistant",
-                                                            &full_text,
-                                                            Some(&metadata),
-                                                        );
-                                                        let _ = crate::AppState::global(cx).db.touch_session(&session_id_for_ai);
-                                                        let team_bus = this.team_bus.clone();
-                                                        cx.spawn(async move |_, _| {
-                                                            let _ = team_bus.route_message(assistant_msg).await;
-                                                        }).detach();
-                                                        cx.notify();
-                                                    });
-                                                });
+                                                
+                                                // Handle file extraction
+                                                let chat_service = crate::application::services::chat_service::ChatService::new(db_clone.clone(), team_bus_clone.clone());
+                                                let (files_written, clean_text) = chat_service.parse_and_write_files(&full_text, None);
+                                                if !files_written.is_empty() {
+                                                    let _ = db_clone.update_team_message_content(&office_msg_id, &clean_text);
+                                                }
+                                                
+                                                let _ = cx.update(|cx| view.update(cx, |_, cx| cx.notify())).ok();
                                             }
                                             Err(e) => {
-                                                let _ = cx.update(|cx| {
-                                                    view.update(cx, |this: &mut Self, cx| {
-                                                        let error_text = format!("Error: {}", e);
-                                                        let history = this.chat_histories.entry(session_id_for_ai.clone()).or_default();
-                                                        if let Some(msg) = history.get_mut(msg_idx) {
-                                                            msg.content = error_text.into();
-                                                        }
-                                                        cx.notify();
-                                                    });
-                                                });
+                                                let _ = db_clone.update_team_message_content(&office_msg_id, &format!("Error: {}", e));
+                                                let _ = db_clone.update_team_message_delivery_status(&office_msg_id, "failed");
+                                                let _ = cx.update(|cx| view.update(cx, |_, cx| cx.notify())).ok();
                                             }
                                         }
+
                                     }
                                 }
                                 _ => {}
