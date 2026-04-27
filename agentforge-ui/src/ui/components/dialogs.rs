@@ -1,5 +1,5 @@
 use gpui::*;
-use gpui_component::{
+use gpui_component::{ActiveTheme as _, 
     button::*,
     input::*,
     select::*,
@@ -232,7 +232,7 @@ pub fn open_new_agent_dialog<V: 'static>(
         let db_save = db.clone();
         let on_success_save = on_success.clone();
 
-        let theme = _cx.global::<gpui_component::Theme>();
+        let theme = _cx.theme().clone();
         dialog
             .title("Create Agent")
             .w(px(520.))
