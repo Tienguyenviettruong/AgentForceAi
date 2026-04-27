@@ -3,6 +3,7 @@ use crate::core::traits::database::DatabasePort;
 use crate::core::traits::llm_provider::LlmProviderPort;
 use crate::core::models::chat::ChatMessage;
 use crate::infrastructure::mcp::registry::McpToolRegistry;
+use crate::infrastructure::message_bus::routing::{TeamBusRouter, TeamMessage};
 use anyhow::Result;
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -16,6 +17,9 @@ pub struct AgentExecutor {
     provider: Arc<dyn LlmProviderPort>,
     mcp_registry: Arc<McpToolRegistry>,
     db: Arc<dyn DatabasePort>,
+    team_bus: Arc<TeamBusRouter>,
+    team_instance_id: String,
+    agent_id: String,
 }
 
 impl AgentExecutor {
@@ -23,8 +27,11 @@ impl AgentExecutor {
         provider: Arc<dyn LlmProviderPort>,
         mcp_registry: Arc<McpToolRegistry>,
         db: Arc<dyn DatabasePort>,
+        team_bus: Arc<TeamBusRouter>,
+        team_instance_id: String,
+        agent_id: String,
     ) -> Self {
-        Self { provider, mcp_registry, db }
+        Self { provider, mcp_registry, db, team_bus, team_instance_id, agent_id }
     }
 
     pub async fn execute_task(&self, mut history: Vec<ChatMessage>) -> Result<String> {
@@ -108,8 +115,8 @@ impl AgentExecutor {
                 let content = v["content"].as_str().unwrap_or("").to_string();
                 let entry = crate::core::models::knowledge::KnowledgeEntry {
                     id: uuid::Uuid::new_v4().to_string(),
-                    agent_id: "system".to_string(),
-                    session_id: None,
+                    agent_id: self.agent_id.clone(),
+                    session_id: Some(self.team_instance_id.clone()),
                     title,
                     content,
                     tags: vec![],
@@ -119,6 +126,49 @@ impl AgentExecutor {
                     return format!("Failed to save knowledge: {}", e);
                 }
                 return "Knowledge saved successfully.".to_string();
+            }
+        }
+        
+        if name == "declare_consensus" {
+            let msg = crate::infrastructure::message_bus::routing::TeamMessage::new_broadcast(
+                self.team_instance_id.clone(),
+                self.agent_id.clone(),
+                format!("[CONSENSUS_REACHED] {}", args)
+            );
+            let _ = self.team_bus.route_message(msg).await;
+            return "Consensus declared and broadcasted.".to_string();
+        }
+
+        if name == "handoff_to_team" {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(args) {
+                let target_team = v["target_team"].as_str().unwrap_or("UnknownTeam");
+                let package = v["briefing_package"].as_str().unwrap_or("");
+                let msg = crate::infrastructure::message_bus::routing::TeamMessage::new_broadcast(
+                    target_team.to_string(), // Cross-team route
+                    self.agent_id.clone(),
+                    format!("[CROSS_TEAM_HANDOFF] {}", package)
+                );
+                let _ = self.team_bus.route_message(msg).await;
+                return format!("Handoff package sent to {}.", target_team);
+            }
+        }
+
+        if name == "create_subtasks" {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(args) {
+                if let Some(tasks) = v["tasks"].as_array() {
+                    for t in tasks {
+                        let desc = t["description"].as_str().unwrap_or("");
+                        let role = t["role"].as_str().unwrap_or("");
+                        let msg = crate::infrastructure::message_bus::routing::TeamMessage::new_role_group(
+                            self.team_instance_id.clone(),
+                            self.agent_id.clone(),
+                            role.to_string(),
+                            format!("[NEW_TASK] {}", desc)
+                        );
+                        let _ = self.team_bus.route_message(msg).await;
+                    }
+                    return format!("Created {} subtasks and dispatched.", tasks.len());
+                }
             }
         }
         
