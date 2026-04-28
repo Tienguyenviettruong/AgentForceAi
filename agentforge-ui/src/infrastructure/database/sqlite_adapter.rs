@@ -283,6 +283,12 @@ impl Database {
         )
         .ok();
 
+        conn.execute(
+            "ALTER TABLE instances ADD COLUMN name TEXT NOT NULL DEFAULT 'Untitled'",
+            [],
+        )
+        .ok();
+
         let db = Self {
             conn: Mutex::new(conn),
         };
