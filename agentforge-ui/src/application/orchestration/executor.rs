@@ -76,7 +76,10 @@ impl AgentExecutor {
                         "type": "object",
                         "properties": {
                             "target_team": { "type": "string" },
-                            "briefing_package": { "type": "string" }
+                            "briefing_package": { "type": "string" },
+                            "handoff_type": { "type": "string", "description": "e.g. review_request, review_response, handoff" },
+                            "correlation_id": { "type": "string", "description": "optional id to link request/response" },
+                            "reply_to_team": { "type": "string", "description": "if set, receiver should reply to this team instance id" }
                         },
                         "required": ["target_team", "briefing_package"]
                     }
@@ -152,14 +155,28 @@ impl AgentExecutor {
         if let Some(last_msg) = history.last() {
             if last_msg.role == "user" {
                 let query = last_msg.content.to_string();
+                let mut any = false;
                 if let Ok(entries) = self.db.search_knowledge_entries_fts(&query, 3) {
                     if !entries.is_empty() {
+                        any = true;
                         rag_context.push_str("\n\n--- RELEVANT KNOWLEDGE (RAG) ---\n");
                         for entry in entries {
                             rag_context.push_str(&format!("Title: {}\nContent: {}\n\n", entry.title, entry.content));
                         }
-                        rag_context.push_str("----------------------------------\n");
                     }
+                }
+                if !any {
+                    if let Ok(items) = self.db.search_knowledge_fts(&query, 3) {
+                        if !items.is_empty() {
+                            rag_context.push_str("\n\n--- RELEVANT KNOWLEDGE (RAG) ---\n");
+                            for item in items {
+                                rag_context.push_str(&format!("Title: {}\nContent: {}\n\n", item.title, item.content));
+                            }
+                        }
+                    }
+                }
+                if !rag_context.is_empty() {
+                    rag_context.push_str("----------------------------------\n");
                 }
             }
         }
@@ -295,11 +312,26 @@ impl AgentExecutor {
         if name == "handoff_to_team" {
             let target_team = args.get("target_team").and_then(|v| v.as_str()).unwrap_or("UnknownTeam");
             let package = args.get("briefing_package").and_then(|v| v.as_str()).unwrap_or("");
-            let msg = crate::infrastructure::message_bus::routing::TeamMessage::new_broadcast(
+            let handoff_type = args.get("handoff_type").and_then(|v| v.as_str()).unwrap_or("handoff");
+            let correlation_id = args.get("correlation_id").and_then(|v| v.as_str()).unwrap_or("");
+            let reply_to_team = args.get("reply_to_team").and_then(|v| v.as_str()).unwrap_or("");
+
+            let payload = serde_json::json!({
+                "handoff_type": handoff_type,
+                "correlation_id": correlation_id,
+                "from_team": self.team_instance_id.clone(),
+                "reply_to_team": reply_to_team,
+                "briefing_package": package
+            });
+            let payload_str = payload.to_string();
+
+            let mut msg = crate::infrastructure::message_bus::routing::TeamMessage::new_broadcast(
                 target_team.to_string(),
                 self.agent_id.clone(),
-                format!("[CROSS_TEAM_HANDOFF] {}", package)
+                format!("[CROSS_TEAM_HANDOFF] {}", payload_str.clone()),
             );
+            msg.metadata = Some(payload_str);
+            let _ = self.db.insert_team_message(&msg);
             let _ = self.team_bus.route_message(msg).await;
             return format!("Handoff package sent to {}.", target_team);
         }

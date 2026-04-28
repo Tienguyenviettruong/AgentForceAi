@@ -62,6 +62,10 @@ impl ChatService {
              Your Name/Role in this team: {}\n\
              Team Members Available:\n{}\n\
              IMPORTANT: You are '{}'. You MUST NOT act as or claim to be any other member (e.g. do not act as the Coordinator if you are a BA). You must adapt your role to the '{}' team. Ignore any hardcoded team names (like 'SDG') or hallucinated roles in your base prompt. Only collaborate with the members listed above.\n\
+             CROSS-TEAM REVIEW PROTOCOL:\n\
+             - If you receive a message that starts with '[CROSS_TEAM_HANDOFF]', treat it as a cross-team request.\n\
+             - If the payload indicates handoff_type='review_request', you must write a structured critique and respond by calling the tool handoff_to_team with:\n\
+               target_team = reply_to_team, handoff_type='review_response', correlation_id = the same id, briefing_package = your critique.\n\
              -------------------------------\n\n\
              Base Prompt:\n{}",
             team_name, instance_name, my_role, members_str, my_role, team_name, clean_prompt

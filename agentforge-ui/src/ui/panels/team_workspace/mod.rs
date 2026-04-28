@@ -138,6 +138,13 @@ impl TeamWorkspacePanel {
                         }
                         let _ = cx.update(|cx| {
                             view.update(cx, |this: &mut TeamWorkspacePanel, cx| {
+                                let db = crate::AppState::global(cx).db.clone();
+                                let agent_name = db
+                                    .get_agent(&msg.sender_member_id)
+                                    .ok()
+                                    .flatten()
+                                    .map(|a| a.name)
+                                    .unwrap_or_else(|| msg.sender_member_id.clone());
                                 let session_id = this
                                     .instance_active_session
                                     .get(&instance_id)
@@ -147,9 +154,9 @@ impl TeamWorkspacePanel {
                                     let history =
                                         this.chat_histories.entry(session_id.clone()).or_default();
                                     history.push(crate::providers::ChatMessage {
-                                        role: msg.sender_member_id.into(),
+                                        role: "assistant".into(),
                                         content: msg.content.into(),
-                                        agent_name: None,
+                                        agent_name: Some(agent_name.into()),
                                     });
                                     if this.selected_session_id.as_deref()
                                         == Some(session_id.as_str())

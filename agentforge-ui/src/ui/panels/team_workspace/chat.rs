@@ -1272,35 +1272,6 @@ let db_clone = db.clone();
                                 full_history.insert(0, crate::providers::ChatMessage { role: gpui::SharedString::from("system"), content: gpui::SharedString::from(sys), agent_name: None });
                             }
 
-                            let mut knowledge_lines = Vec::new();
-                            if let Ok(items) = db.search_knowledge_fts(&query_text, 3) {
-                                for item in items {
-                                    let mut snippet = item.content.replace('\n', " ");
-                                    if snippet.len() > 280 {
-                                        snippet.truncate(280);
-                                        snippet.push('…');
-                                    }
-                                    knowledge_lines.push(format!("- [{}] {}", item.title, snippet));
-                                }
-                            } else if let Ok(items) = db.search_knowledge(&query_text) {
-                                for item in items.into_iter().take(3) {
-                                    let mut snippet = item.content.replace('\n', " ");
-                                    if snippet.len() > 280 {
-                                        snippet.truncate(280);
-                                        snippet.push('…');
-                                    }
-                                    knowledge_lines.push(format!("- [{}] {}", item.title, snippet));
-                                }
-                            }
-
-                            if !knowledge_lines.is_empty() {
-                                let mut block = String::new();
-                                block.push_str("Knowledge context (cite titles if used):\n");
-                                block.push_str(&knowledge_lines.join("\n"));
-                                let insert_at = if full_history.first().map(|m| m.role.as_ref() == "system").unwrap_or(false) { 1 } else { 0 };
-                                full_history.insert(insert_at, crate::providers::ChatMessage { role: gpui::SharedString::from("system"), content: gpui::SharedString::from(block), agent_name: None });
-                            }
-
                             let mut round_result: Option<String> = None;
                             match provider_config.provider_name.as_str() {
                                 "openrouter" => {
@@ -1357,6 +1328,9 @@ let db_clone = db.clone();
                                                 }
                                                 let chosen = if files_written.is_empty() { full_text } else { clean_text };
                                                 round_result = Some(chosen);
+                                                let _ = db_clone.ensure_session(&session_id_for_ai, &agent.id, Some(&instance_id_for_ai));
+                                                let _ = db_clone.append_conversation_turn(&session_id_for_ai, "assistant", round_result.as_ref().unwrap(), Some(&metadata));
+                                                let _ = db_clone.touch_session(&session_id_for_ai);
                                                 
                                                 let _ = cx.update(|cx| view.update(cx, |_, cx| cx.notify())).ok();
                                             }
@@ -1423,6 +1397,9 @@ let db_clone = db.clone();
                                                 }
                                                 let chosen = if files_written.is_empty() { full_text } else { clean_text };
                                                 round_result = Some(chosen);
+                                                let _ = db_clone.ensure_session(&session_id_for_ai, &agent.id, Some(&instance_id_for_ai));
+                                                let _ = db_clone.append_conversation_turn(&session_id_for_ai, "assistant", round_result.as_ref().unwrap(), Some(&metadata));
+                                                let _ = db_clone.touch_session(&session_id_for_ai);
                                                 
                                                 let _ = cx.update(|cx| view.update(cx, |_, cx| cx.notify())).ok();
                                             }
@@ -1488,6 +1465,9 @@ let db_clone = db.clone();
                                                 }
                                                 let chosen = if files_written.is_empty() { full_text } else { clean_text };
                                                 round_result = Some(chosen);
+                                                let _ = db_clone.ensure_session(&session_id_for_ai, &agent.id, Some(&instance_id_for_ai));
+                                                let _ = db_clone.append_conversation_turn(&session_id_for_ai, "assistant", round_result.as_ref().unwrap(), Some(&metadata));
+                                                let _ = db_clone.touch_session(&session_id_for_ai);
                                                 
                                                 let _ = cx.update(|cx| view.update(cx, |_, cx| cx.notify())).ok();
                                             }
@@ -1553,6 +1533,9 @@ let db_clone = db.clone();
                                                 }
                                                 let chosen = if files_written.is_empty() { full_text } else { clean_text };
                                                 round_result = Some(chosen);
+                                                let _ = db_clone.ensure_session(&session_id_for_ai, &agent.id, Some(&instance_id_for_ai));
+                                                let _ = db_clone.append_conversation_turn(&session_id_for_ai, "assistant", round_result.as_ref().unwrap(), Some(&metadata));
+                                                let _ = db_clone.touch_session(&session_id_for_ai);
                                                 
                                                 let _ = cx.update(|cx| view.update(cx, |_, cx| cx.notify())).ok();
                                             }
@@ -1618,6 +1601,9 @@ let db_clone = db.clone();
                                                 }
                                                 let chosen = if files_written.is_empty() { full_text } else { clean_text };
                                                 round_result = Some(chosen);
+                                                let _ = db_clone.ensure_session(&session_id_for_ai, &agent.id, Some(&instance_id_for_ai));
+                                                let _ = db_clone.append_conversation_turn(&session_id_for_ai, "assistant", round_result.as_ref().unwrap(), Some(&metadata));
+                                                let _ = db_clone.touch_session(&session_id_for_ai);
                                                 
                                                 let _ = cx.update(|cx| view.update(cx, |_, cx| cx.notify())).ok();
                                             }
