@@ -492,6 +492,15 @@ impl crate::core::traits::database::DatabasePort for Database {
         Ok(())
     }
 
+    fn update_instance_name(&self, instance_id: &str, name: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE instances SET name = ?1 WHERE id = ?2",
+            rusqlite::params![name, instance_id],
+        )?;
+        Ok(())
+    }
+
     fn list_instances(&self) -> Result<Vec<Instance>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(

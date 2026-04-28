@@ -199,8 +199,9 @@ impl TeamWorkspacePanel {
                         .get_conversation_turns(&session_id)
                         .unwrap_or_default();
                     this.chat_histories.insert(session_id.clone(), msgs);
+                    this.rebuild_chat_display(&session_id);
                     let history_len = this
-                        .chat_histories
+                        .chat_display_rows
                         .get(&session_id)
                         .map(|h| h.len())
                         .unwrap_or(0);
@@ -245,22 +246,49 @@ impl TeamWorkspacePanel {
                             ),
                     )
                     .child(
-                        div()
-                            .px(px(6.))
-                            .py(px(1.))
-                            .rounded_md()
-                            .bg(if is_selected {
-                                theme.primary.opacity(0.2)
-                            } else {
-                                theme.secondary
-                            })
-                            .text_color(if is_selected {
-                                theme.primary
-                            } else {
-                                theme.muted_foreground
-                            })
-                            .text_size(px(12.))
-                            .child(status.to_string()),
+                        h_flex()
+                            .items_center()
+                            .gap(px(6.))
+                            .child(
+                                div()
+                                    .px(px(6.))
+                                    .py(px(1.))
+                                    .rounded_md()
+                                    .bg(if is_selected {
+                                        theme.primary.opacity(0.2)
+                                    } else {
+                                        theme.secondary
+                                    })
+                                    .text_color(if is_selected {
+                                        theme.primary
+                                    } else {
+                                        theme.muted_foreground
+                                    })
+                                    .text_size(px(12.))
+                                    .child(status.to_string()),
+                            )
+                            .child(
+                                Button::new(SharedString::from(format!("rename-instance-{}", instance.id)))
+                                    .ghost()
+                                    .icon(IconName::Ellipsis)
+                                    .tooltip("Rename")
+                                    .on_click({
+                                        let instance_id = instance.id.clone();
+                                        let current_name = instance.name.clone();
+                                        cx.listener(move |_this, _, window, cx| {
+                                            let db = crate::AppState::global(cx).db.clone();
+                                            crate::ui::components::dialogs::open_edit_instance_name_dialog(
+                                                db,
+                                                instance_id.clone(),
+                                                current_name.clone(),
+                                                cx.entity().clone(),
+                                                window,
+                                                cx,
+                                                |view: &mut crate::ui::panels::team_workspace::TeamWorkspacePanel, cx: &mut Context<crate::ui::panels::team_workspace::TeamWorkspacePanel>| view.reload(cx),
+                                            );
+                                        })
+                                    }),
+                            ),
                     ),
             )
             .child(

@@ -28,7 +28,7 @@ impl ChatService {
         let mut instance_name = "Unknown Instance".to_string();
         if let Ok(instances) = self.db.list_instances() {
             if let Some(i) = instances.iter().find(|i| i.id == instance_id) {
-                instance_name = i.id.clone();
+                instance_name = i.name.clone();
             }
         }
 

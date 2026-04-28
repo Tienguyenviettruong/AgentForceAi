@@ -518,6 +518,90 @@ pub fn open_new_instance_dialog<V: 'static>(
     });
 }
 
+pub fn open_edit_instance_name_dialog<V: 'static>(
+    db: Arc<dyn DatabasePort>,
+    instance_id: String,
+    current_name: String,
+    view: Entity<V>,
+    window: &mut Window,
+    cx: &mut Context<V>,
+    on_success: impl Fn(&mut V, &mut Context<V>) + 'static + Clone,
+) {
+    let name_input = cx.new(|cx| {
+        let mut state = InputState::new(window, cx).placeholder("Instance name");
+        state.replace(current_name, window, cx);
+        state
+    });
+
+    window.open_dialog(cx, move |dialog, _window, _cx| {
+        let view_save = view.clone();
+        let db_save = db.clone();
+        let on_success_save = on_success.clone();
+        let name_input_save = name_input.clone();
+        let instance_id_save = instance_id.clone();
+
+        dialog
+            .title("Rename Instance")
+            .w(px(420.))
+            .child(
+                v_form()
+                    .gap(px(12.))
+                    .py(px(8.))
+                    .child(
+                        field()
+                            .label("Instance Name")
+                            .required(true)
+                            .child(Input::new(&name_input_save)),
+                    ),
+            )
+            .footer(move |_, _, _, _| {
+                let view_save2 = view_save.clone();
+                let db_save2 = db_save.clone();
+                let on_success_save2 = on_success_save.clone();
+                let name_input2 = name_input_save.clone();
+                let instance_id2 = instance_id_save.clone();
+
+                vec![
+                    Button::new("cancel-rename-instance")
+                        .label("Cancel")
+                        .on_click(|_, window, cx| {
+                            window.close_dialog(cx);
+                        })
+                        .into_any_element(),
+                    Button::new("save-rename-instance")
+                        .primary()
+                        .label("Save")
+                        .on_click(move |_ev, window, cx| {
+                            let name = name_input2.read(cx).text().to_string();
+                            let name = name.trim().to_string();
+                            if name.is_empty() {
+                                window.push_notification(
+                                    (NotificationType::Error, "Instance name is required."),
+                                    cx,
+                                );
+                                return;
+                            }
+
+                            if db_save2.update_instance_name(&instance_id2, &name).is_ok() {
+                                view_save2.update(cx, on_success_save2.clone());
+                                window.close_dialog(cx);
+                                window.push_notification(
+                                    (NotificationType::Success, "Instance renamed successfully."),
+                                    cx,
+                                );
+                            } else {
+                                window.push_notification(
+                                    (NotificationType::Error, "Failed to rename instance."),
+                                    cx,
+                                );
+                            }
+                        })
+                        .into_any_element(),
+                ]
+            })
+    });
+}
+
 pub struct ManageTeamState {
     pub team_id: String,
     pub agents: Vec<Agent>,

@@ -27,6 +27,12 @@ impl TeamService {
     pub fn list_instances(&self) -> Result<Vec<Instance>, crate::core::errors::CoreError> {
         self.db.list_instances().map_err(|e| crate::core::errors::CoreError::Database(e.to_string()))
     }
+
+    pub fn update_instance_name(&self, instance_id: &str, name: &str) -> Result<(), crate::core::errors::CoreError> {
+        self.db
+            .update_instance_name(instance_id, name)
+            .map_err(|e| crate::core::errors::CoreError::Database(e.to_string()))
+    }
     
     pub fn list_sessions_for_instance(&self, instance_id: &str) -> Result<Vec<SessionRecord>, crate::core::errors::CoreError> {
         self.db.list_sessions_for_instance(instance_id).map_err(|e| crate::core::errors::CoreError::Database(e.to_string()))
