@@ -313,8 +313,11 @@ impl AgentExecutor {
             let target_team = args.get("target_team").and_then(|v| v.as_str()).unwrap_or("UnknownTeam");
             let package = args.get("briefing_package").and_then(|v| v.as_str()).unwrap_or("");
             let handoff_type = args.get("handoff_type").and_then(|v| v.as_str()).unwrap_or("handoff");
-            let correlation_id = args.get("correlation_id").and_then(|v| v.as_str()).unwrap_or("");
+            let mut correlation_id = args.get("correlation_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
             let reply_to_team = args.get("reply_to_team").and_then(|v| v.as_str()).unwrap_or("");
+            if correlation_id.is_empty() {
+                correlation_id = uuid::Uuid::new_v4().to_string();
+            }
 
             let payload = serde_json::json!({
                 "handoff_type": handoff_type,

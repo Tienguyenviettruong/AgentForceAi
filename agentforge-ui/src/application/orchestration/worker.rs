@@ -60,6 +60,30 @@ impl AgentWorker {
         Some(agent.name)
     }
 
+    async fn select_review_handler_agent_id(&self) -> Option<String> {
+        let agent_ids = self.db.get_instance_agents(&self.team_instance_id).ok()?;
+        if agent_ids.is_empty() {
+            return None;
+        }
+        let mut resolved = Vec::new();
+        for id in agent_ids.iter() {
+            let name = self
+                .db
+                .get_agent(id)
+                .ok()
+                .flatten()
+                .map(|a| a.name)
+                .unwrap_or_else(|| id.clone());
+            resolved.push((id.clone(), name.to_lowercase()));
+        }
+        for key in ["critic", "qa", "reviewer"] {
+            if let Some((id, _)) = resolved.iter().find(|(_, name)| name.contains(key)) {
+                return Some(id.clone());
+            }
+        }
+        Some(resolved[0].0.clone())
+    }
+
     async fn handle_message(&self, msg: TeamMessage) {
         if msg.sender_member_id == self.agent_id {
             return;
@@ -77,9 +101,8 @@ impl AgentWorker {
 
         if let Some(handoff) = Self::parse_cross_team_handoff(&msg) {
             if handoff.handoff_type == "review_request" && !handoff.reply_to_team.is_empty() {
-                let role = self.get_agent_role().await.unwrap_or_default();
-                let role_lower = role.to_lowercase();
-                if role_lower.contains("critic") {
+                let handler = self.select_review_handler_agent_id().await;
+                if handler.as_deref() == Some(self.agent_id.as_str()) {
                     self.execute_cross_team_review(&msg, handoff).await;
                 }
             }
@@ -127,11 +150,17 @@ impl AgentWorker {
             .build_dynamic_system_prompt(&team_id, &self.team_instance_id, &self.agent_id)
             .unwrap_or_default();
 
-        sys.push_str("\n\nROLE: CRITIC\nYou are performing a cross-team review.\nYou MUST output a structured critique (numbered issues + concrete fixes).\nAfter writing the critique, you MUST respond to the requester by calling the tool handoff_to_team with handoff_type='review_response', correlation_id preserved, target_team=reply_to_team, reply_to_team may be empty.\n");
+        sys.push_str("\n\nROLE: CRITIC\nYou are performing a cross-team review.\nYou MUST output a structured critique (numbered issues + concrete fixes).\nAfter writing the critique, you MUST respond to the requester by calling the tool handoff_to_team with handoff_type='review_response', correlation_id preserved, target_team=reply_to_team.\n");
+
+        let correlation_id = if handoff.correlation_id.is_empty() {
+            Uuid::new_v4().to_string()
+        } else {
+            handoff.correlation_id.clone()
+        };
 
         let user_text = format!(
             "Cross-team review request\ncorrelation_id: {}\nfrom_team: {}\noriginal_message: {}\n\nArtifact to review:\n{}",
-            handoff.correlation_id,
+            correlation_id,
             handoff.from_team,
             original_msg.content,
             handoff.briefing_package
@@ -194,7 +223,7 @@ impl AgentWorker {
         if !result.is_empty() {
             let payload = serde_json::json!({
                 "handoff_type": "review_response",
-                "correlation_id": handoff.correlation_id,
+                "correlation_id": correlation_id,
                 "from_team": self.team_instance_id,
                 "reply_to_team": handoff.reply_to_team,
                 "briefing_package": result

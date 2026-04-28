@@ -1723,6 +1723,23 @@ let db_clone = db.clone();
                     display_content = display_content[end_bracket + 3..].to_string();
                 }
             }
+
+            if display_content.starts_with("[CROSS_TEAM_HANDOFF]") {
+                let payload_str = display_content
+                    .trim_start_matches("[CROSS_TEAM_HANDOFF]")
+                    .trim();
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(payload_str) {
+                    let handoff_type = v.get("handoff_type").and_then(|x| x.as_str()).unwrap_or("handoff");
+                    let correlation_id = v.get("correlation_id").and_then(|x| x.as_str()).unwrap_or("");
+                    let from_team = v.get("from_team").and_then(|x| x.as_str()).unwrap_or("");
+                    let package = v.get("briefing_package").and_then(|x| x.as_str()).unwrap_or("");
+                    display_name = format!("Cross-team {}", handoff_type);
+                    display_content = format!(
+                        "correlation_id: {}\nfrom_team: {}\n\n{}",
+                        correlation_id, from_team, package
+                    );
+                }
+            }
         }
 
         let agent_avatar = div()
