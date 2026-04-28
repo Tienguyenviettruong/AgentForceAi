@@ -1221,16 +1221,27 @@ let db_clone = db.clone();
 
             if let Ok(agent_ids) = db.get_instance_agents(&instance_id_for_ai) {
                 let agent_ids: Vec<String> = agent_ids;
-                let debate_rounds = if debate_mode && agent_ids.len() > 1 { 
-                    // Allow up to 10 rounds of back-and-forth debate until consensus
-                    10 
-                } else { 
-                    1 
-                };
                 let mut current_history = history_clone.clone();
 
-                for round in 0..debate_rounds {
-                    if let Some(agent_id) = agent_ids.get(round % agent_ids.len()) {
+                let debate_steps: Vec<(String, &'static str)> = if debate_mode && agent_ids.len() > 1 {
+                    let mut steps = vec![
+                        (agent_ids[0].clone(), "PROPOSER"),
+                        (agent_ids[1].clone(), "CRITIC"),
+                        (agent_ids[0].clone(), "RESOLVER"),
+                    ];
+                    if agent_ids.len() > 2 {
+                        steps.push((agent_ids[2].clone(), "JUDGE"));
+                    }
+                    steps
+                } else {
+                    agent_ids
+                        .first()
+                        .map(|id| vec![(id.clone(), "SOLO")])
+                        .unwrap_or_default()
+                };
+
+                for (step_ix, (agent_id, debate_role)) in debate_steps.iter().enumerate() {
+                    if !agent_id.is_empty() {
                         let agent_id = agent_id.clone();
                         if let Ok(Some(agent)) = db.get_agent(&agent_id) {
                             if let Ok(Some(provider_config)) = db.get_provider_by_name(&agent.provider) {
@@ -1238,13 +1249,27 @@ let db_clone = db.clone();
                             
                             let chat_service = crate::application::services::chat_service::ChatService::new(db.clone(), team_bus_for_ai.clone());
                             let mut full_history = current_history.clone();
-                            
-                            if debate_mode && round > 0 {
-                                let mut sys = chat_service.build_dynamic_system_prompt(&team_id_clone, &instance_id_for_ai, &agent_id).unwrap_or_default();
-                                sys.push_str("\n\nDEBATE MODE: You are collaborating with other agents. Review their previous responses in the chat history and provide your critique, addition, or synthesis. If you feel the team has reached a final, agreed-upon solution or plan, YOU MUST include the exact string [CONSENSUS_REACHED] in your response.");
+
+                            if let Some(mut sys) = chat_service.build_dynamic_system_prompt(&team_id_clone, &instance_id_for_ai, &agent_id) {
+                                if debate_mode && *debate_role != "SOLO" && step_ix > 0 {
+                                    sys.push_str("\n\nDEBATE PROTOCOL\nYou are collaborating with other agents in the same team. You MUST read previous agent responses in the chat history.\n");
+                                    match *debate_role {
+                                        "PROPOSER" => {
+                                            sys.push_str("ROLE: PROPOSER\nProvide an initial solution/plan. Be concrete and actionable.\n");
+                                        }
+                                        "CRITIC" => {
+                                            sys.push_str("ROLE: CRITIC\nCritique the proposer response. Identify flaws, missing steps, security risks, and mismatches with requirements. Provide a numbered issue list.\n");
+                                        }
+                                        "RESOLVER" => {
+                                            sys.push_str("ROLE: RESOLVER\nRevise the proposal to address ALL critique issues. Output the revised plan. If it is final and agreed, include [CONSENSUS_REACHED].\n");
+                                        }
+                                        "JUDGE" => {
+                                            sys.push_str("ROLE: JUDGE\nDecide if the latest plan is ready to execute. If acceptable, include [CONSENSUS_REACHED]. If not, list blocking issues.\n");
+                                        }
+                                        _ => {}
+                                    }
+                                }
                                 full_history.insert(0, crate::providers::ChatMessage { role: gpui::SharedString::from("system"), content: gpui::SharedString::from(sys), agent_name: None });
-                            } else if let Some(sys_prompt) = chat_service.build_dynamic_system_prompt(&team_id_clone, &instance_id_for_ai, &agent_id) {
-                                full_history.insert(0, crate::providers::ChatMessage { role: gpui::SharedString::from("system"), content: gpui::SharedString::from(sys_prompt), agent_name: None });
                             }
 
                             let mut knowledge_lines = Vec::new();
@@ -1276,6 +1301,7 @@ let db_clone = db.clone();
                                 full_history.insert(insert_at, crate::providers::ChatMessage { role: gpui::SharedString::from("system"), content: gpui::SharedString::from(block), agent_name: None });
                             }
 
+                            let mut round_result: Option<String> = None;
                             match provider_config.provider_name.as_str() {
                                 "openrouter" => {
                                     let mut adapter = crate::providers::openrouter::OpenRouterAdapter::new();
@@ -1324,12 +1350,13 @@ let db_clone = db.clone();
                                                 let _ = db_clone.update_team_message_content(&office_msg_id, &full_text);
                                                 let _ = db_clone.update_team_message_delivery_status(&office_msg_id, "delivered");
                                                 
-                                                // Handle file extraction
                                                 let chat_service = crate::application::services::chat_service::ChatService::new(db_clone.clone(), team_bus_clone.clone());
                                                 let (files_written, clean_text) = chat_service.parse_and_write_files(&full_text, None);
                                                 if !files_written.is_empty() {
                                                     let _ = db_clone.update_team_message_content(&office_msg_id, &clean_text);
                                                 }
+                                                let chosen = if files_written.is_empty() { full_text } else { clean_text };
+                                                round_result = Some(chosen);
                                                 
                                                 let _ = cx.update(|cx| view.update(cx, |_, cx| cx.notify())).ok();
                                             }
@@ -1389,12 +1416,13 @@ let db_clone = db.clone();
                                                 let _ = db_clone.update_team_message_content(&office_msg_id, &full_text);
                                                 let _ = db_clone.update_team_message_delivery_status(&office_msg_id, "delivered");
                                                 
-                                                // Handle file extraction
                                                 let chat_service = crate::application::services::chat_service::ChatService::new(db_clone.clone(), team_bus_clone.clone());
                                                 let (files_written, clean_text) = chat_service.parse_and_write_files(&full_text, None);
                                                 if !files_written.is_empty() {
                                                     let _ = db_clone.update_team_message_content(&office_msg_id, &clean_text);
                                                 }
+                                                let chosen = if files_written.is_empty() { full_text } else { clean_text };
+                                                round_result = Some(chosen);
                                                 
                                                 let _ = cx.update(|cx| view.update(cx, |_, cx| cx.notify())).ok();
                                             }
@@ -1453,12 +1481,13 @@ let db_clone = db.clone();
                                                 let _ = db_clone.update_team_message_content(&office_msg_id, &full_text);
                                                 let _ = db_clone.update_team_message_delivery_status(&office_msg_id, "delivered");
                                                 
-                                                // Handle file extraction
                                                 let chat_service = crate::application::services::chat_service::ChatService::new(db_clone.clone(), team_bus_clone.clone());
                                                 let (files_written, clean_text) = chat_service.parse_and_write_files(&full_text, None);
                                                 if !files_written.is_empty() {
                                                     let _ = db_clone.update_team_message_content(&office_msg_id, &clean_text);
                                                 }
+                                                let chosen = if files_written.is_empty() { full_text } else { clean_text };
+                                                round_result = Some(chosen);
                                                 
                                                 let _ = cx.update(|cx| view.update(cx, |_, cx| cx.notify())).ok();
                                             }
@@ -1517,12 +1546,13 @@ let db_clone = db.clone();
                                                 let _ = db_clone.update_team_message_content(&office_msg_id, &full_text);
                                                 let _ = db_clone.update_team_message_delivery_status(&office_msg_id, "delivered");
                                                 
-                                                // Handle file extraction
                                                 let chat_service = crate::application::services::chat_service::ChatService::new(db_clone.clone(), team_bus_clone.clone());
                                                 let (files_written, clean_text) = chat_service.parse_and_write_files(&full_text, None);
                                                 if !files_written.is_empty() {
                                                     let _ = db_clone.update_team_message_content(&office_msg_id, &clean_text);
                                                 }
+                                                let chosen = if files_written.is_empty() { full_text } else { clean_text };
+                                                round_result = Some(chosen);
                                                 
                                                 let _ = cx.update(|cx| view.update(cx, |_, cx| cx.notify())).ok();
                                             }
@@ -1581,12 +1611,13 @@ let db_clone = db.clone();
                                                 let _ = db_clone.update_team_message_content(&office_msg_id, &full_text);
                                                 let _ = db_clone.update_team_message_delivery_status(&office_msg_id, "delivered");
                                                 
-                                                // Handle file extraction
                                                 let chat_service = crate::application::services::chat_service::ChatService::new(db_clone.clone(), team_bus_clone.clone());
                                                 let (files_written, clean_text) = chat_service.parse_and_write_files(&full_text, None);
                                                 if !files_written.is_empty() {
                                                     let _ = db_clone.update_team_message_content(&office_msg_id, &clean_text);
                                                 }
+                                                let chosen = if files_written.is_empty() { full_text } else { clean_text };
+                                                round_result = Some(chosen);
                                                 
                                                 let _ = cx.update(|cx| view.update(cx, |_, cx| cx.notify())).ok();
                                             }
@@ -1600,6 +1631,17 @@ let db_clone = db.clone();
                                     }
                                 }
                                 _ => {}
+                            }
+                            
+                            if let Some(text) = round_result {
+                                current_history.push(crate::providers::ChatMessage {
+                                    role: gpui::SharedString::from("assistant"),
+                                    content: gpui::SharedString::from(text.clone()),
+                                    agent_name: Some(gpui::SharedString::from(agent.name.clone())),
+                                });
+                                if debate_mode && text.contains("[CONSENSUS_REACHED]") {
+                                    break;
+                                }
                             }
                             }
                         }

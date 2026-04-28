@@ -3,14 +3,16 @@ use crate::core::traits::database::DatabasePort;
 use crate::providers::BaseProviderAdapter;
 use crate::core::models::chat::ChatMessage;
 use crate::infrastructure::mcp::registry::McpToolRegistry;
-use crate::infrastructure::message_bus::routing::{TeamBusRouter, TeamMessage};
+use crate::infrastructure::message_bus::routing::TeamBusRouter;
 use anyhow::Result;
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct ToolCall {
+    #[serde(default)]
     pub id: String,
     pub name: String,
-    pub arguments: String,
+    #[serde(default)]
+    pub arguments: serde_json::Value,
 }
 
 pub struct AgentExecutor {
@@ -163,7 +165,7 @@ impl AgentExecutor {
         }
 
         let injection = format!(
-            "\n\n[SYSTEM INJECTION]\nYou have access to the following tools:\n{}\n\nTo use a tool, you MUST return ONLY a JSON object wrapped in `<tool_call>` tags like this:\n<tool_call>{{\"name\": \"tool_name\", \"arguments\": \"{{\\\"key\\\": \\\"value\\\"}}\"}}</tool_call>\nDo not output any other text when making a tool call.{}",
+            "\n\n[SYSTEM INJECTION]\nYou have access to the following tools:\n{}\n\nTo use a tool, you MUST return ONLY a JSON object wrapped in `<tool_call>` tags like this:\n<tool_call>{{\"id\":\"call_1\",\"name\":\"tool_name\",\"arguments\":{{\"key\":\"value\"}}}}</tool_call>\nDo not output any other text when making a tool call.{}",
             tools_schema_str, rag_context
         );
 
@@ -193,15 +195,30 @@ impl AgentExecutor {
                 }
             }
 
-            // Simulate tool call extraction via regex for now, since we haven't updated LlmProviderPort
-            // We can look for `<tool_call>...</tool_call>` in response_text
-            if let Some(start) = response_text.find("<tool_call>") {
-                if let Some(end) = response_text.find("</tool_call>") {
-                    let tool_json = &response_text[start+11..end];
-                    if let Ok(tc) = serde_json::from_str::<ToolCall>(tool_json) {
+            let mut search_idx = 0usize;
+            while let Some(start) = response_text[search_idx..].find("<tool_call>") {
+                let start = search_idx + start;
+                let after_start = start + "<tool_call>".len();
+                if let Some(end_rel) = response_text[after_start..].find("</tool_call>") {
+                    let end = after_start + end_rel;
+                    let tool_json = response_text[after_start..end].trim();
+                    if let Ok(mut tc) = serde_json::from_str::<ToolCall>(tool_json) {
+                        if tc.id.is_empty() {
+                            tc.id = format!("call_{}", uuid::Uuid::new_v4());
+                        }
+                        if tc.arguments.is_string() {
+                            if let Some(s) = tc.arguments.as_str() {
+                                if let Ok(v) = serde_json::from_str::<serde_json::Value>(s) {
+                                    tc.arguments = v;
+                                }
+                            }
+                        }
                         tool_calls.push(tc);
                     }
+                    search_idx = end + "</tool_call>".len();
+                    continue;
                 }
+                break;
             }
 
             if tool_calls.is_empty() {
@@ -209,20 +226,20 @@ impl AgentExecutor {
             }
 
             // Execute tools
-            for tc in tool_calls.clone() {
-                let result = self.execute_tool(&tc.name, &tc.arguments).await;
-                history.push(ChatMessage {
-                    role: "user".into(), // Hack: send tool result as user since no tool role in ChatMessage
-                    content: format!("Tool result ({}):\n{}", tc.name, result).into(),
-                    agent_name: Some(tc.name.clone().into()),
-                });
-            }
-
             history.push(ChatMessage {
                 role: "assistant".into(),
                 content: response_text.into(),
                 agent_name: None,
             });
+
+            for tc in tool_calls.clone() {
+                let result = self.execute_tool(&tc.name, &tc.arguments).await;
+                history.push(ChatMessage {
+                    role: "user".into(),
+                    content: format!("Tool result (id={}, name={}):\n{}", tc.id, tc.name, result).into(),
+                    agent_name: Some(tc.name.clone().into()),
+                });
+            }
 
             iteration += 1;
         }
@@ -245,126 +262,117 @@ impl AgentExecutor {
         pruned
     }
 
-    async fn execute_tool(&self, name: &str, args: &str) -> String {
+    async fn execute_tool(&self, name: &str, args: &serde_json::Value) -> String {
         if name == "save_to_knowledge" {
-            // Simple JSON parsing for demonstration
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(args) {
-                let title = v["title"].as_str().unwrap_or("Untitled").to_string();
-                let content = v["content"].as_str().unwrap_or("").to_string();
-                let entry = crate::core::models::knowledge::KnowledgeEntry {
-                    id: uuid::Uuid::new_v4().to_string(),
-                    agent_id: self.agent_id.clone(),
-                    session_id: Some(self.team_instance_id.clone()),
-                    title,
-                    content,
-                    tags: vec![],
-                    created_at: chrono::Utc::now(),
-                };
-                if let Err(e) = self.db.upsert_knowledge_entry(&entry) {
-                    return format!("Failed to save knowledge: {}", e);
-                }
-                return "Knowledge saved successfully.".to_string();
+            let title = args.get("title").and_then(|v| v.as_str()).unwrap_or("Untitled").to_string();
+            let content = args.get("content").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let entry = crate::core::models::knowledge::KnowledgeEntry {
+                id: uuid::Uuid::new_v4().to_string(),
+                agent_id: self.agent_id.clone(),
+                session_id: Some(self.team_instance_id.clone()),
+                title,
+                content,
+                tags: vec![],
+                created_at: chrono::Utc::now(),
+            };
+            if let Err(e) = self.db.upsert_knowledge_entry(&entry) {
+                return format!("Failed to save knowledge: {}", e);
             }
+            return "Knowledge saved successfully.".to_string();
         }
         
         if name == "declare_consensus" {
+            let msg_text = args.get("message").and_then(|v| v.as_str()).unwrap_or("").to_string();
             let msg = crate::infrastructure::message_bus::routing::TeamMessage::new_broadcast(
                 self.team_instance_id.clone(),
                 self.agent_id.clone(),
-                format!("[CONSENSUS_REACHED] {}", args)
+                format!("[CONSENSUS_REACHED] {}", msg_text)
             );
             let _ = self.team_bus.route_message(msg).await;
             return "Consensus declared and broadcasted.".to_string();
         }
 
         if name == "handoff_to_team" {
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(args) {
-                let target_team = v["target_team"].as_str().unwrap_or("UnknownTeam");
-                let package = v["briefing_package"].as_str().unwrap_or("");
-                let msg = crate::infrastructure::message_bus::routing::TeamMessage::new_broadcast(
-                    target_team.to_string(), // Cross-team route
-                    self.agent_id.clone(),
-                    format!("[CROSS_TEAM_HANDOFF] {}", package)
-                );
-                let _ = self.team_bus.route_message(msg).await;
-                return format!("Handoff package sent to {}.", target_team);
-            }
+            let target_team = args.get("target_team").and_then(|v| v.as_str()).unwrap_or("UnknownTeam");
+            let package = args.get("briefing_package").and_then(|v| v.as_str()).unwrap_or("");
+            let msg = crate::infrastructure::message_bus::routing::TeamMessage::new_broadcast(
+                target_team.to_string(),
+                self.agent_id.clone(),
+                format!("[CROSS_TEAM_HANDOFF] {}", package)
+            );
+            let _ = self.team_bus.route_message(msg).await;
+            return format!("Handoff package sent to {}.", target_team);
         }
 
         if name == "create_subtasks" {
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(args) {
-                if let Some(tasks) = v["tasks"].as_array() {
-                    for t in tasks {
-                        let desc = t["description"].as_str().unwrap_or("");
-                        let role = t["role"].as_str().unwrap_or("");
-                        let msg = crate::infrastructure::message_bus::routing::TeamMessage::new_role_group(
-                            self.team_instance_id.clone(),
-                            self.agent_id.clone(),
-                            role.to_string(),
-                            format!("[NEW_TASK] {}", desc)
-                        );
-                        let _ = self.team_bus.route_message(msg).await;
-                    }
-                    return format!("Created {} subtasks and dispatched.", tasks.len());
+            if let Some(tasks) = args.get("tasks").and_then(|v| v.as_array()) {
+                for t in tasks {
+                    let desc = t.get("description").and_then(|v| v.as_str()).unwrap_or("");
+                    let role = t.get("role").and_then(|v| v.as_str()).unwrap_or("");
+                    let msg = crate::infrastructure::message_bus::routing::TeamMessage::new_role_group(
+                        self.team_instance_id.clone(),
+                        self.agent_id.clone(),
+                        role.to_string(),
+                        format!("[NEW_TASK] {}", desc)
+                    );
+                    let _ = self.team_bus.route_message(msg).await;
                 }
+                return format!("Created {} subtasks and dispatched.", tasks.len());
             }
         }
         
 
         if name == "web_search" {
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(args) {
-                let query = v["query"].as_str().unwrap_or("");
-                let url = format!("https://html.duckduckgo.com/html/?q={}", urlencoding::encode(query));
-                
-                let client = reqwest::Client::new();
-                match client.get(&url).header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)").send().await {
-                    Ok(resp) => {
-                        if let Ok(text) = resp.text().await {
-                            let mut in_tag = false;
-                            let mut stripped = String::new();
-                            for c in text.chars() {
-                                if c == '<' { in_tag = true; continue; }
-                                if c == '>' { in_tag = false; stripped.push(' '); continue; }
-                                if !in_tag { stripped.push(c); }
-                            }
-                            let truncated: String = stripped.split_whitespace().collect::<Vec<_>>().join(" ");
-                            let limit = std::cmp::min(3000, truncated.len());
-                            return format!("Search results:\n{}", &truncated[..limit]);
+            let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
+            let url = format!("https://html.duckduckgo.com/html/?q={}", urlencoding::encode(query));
+            
+            let client = reqwest::Client::new();
+            match client.get(&url).header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)").send().await {
+                Ok(resp) => {
+                    if let Ok(text) = resp.text().await {
+                        let mut in_tag = false;
+                        let mut stripped = String::new();
+                        for c in text.chars() {
+                            if c == '<' { in_tag = true; continue; }
+                            if c == '>' { in_tag = false; stripped.push(' '); continue; }
+                            if !in_tag { stripped.push(c); }
                         }
+                        let truncated: String = stripped.split_whitespace().collect::<Vec<_>>().join(" ");
+                        let limit = std::cmp::min(3000, truncated.len());
+                        return format!("Search results:\n{}", &truncated[..limit]);
                     }
-                    Err(e) => {
-                        return format!("Web search failed: {}", e);
-                    }
+                }
+                Err(e) => {
+                    return format!("Web search failed: {}", e);
                 }
             }
         }
 
         if name == "run_cli" {
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(args) {
-                let cmd = v["command"].as_str().unwrap_or("");
-                let cmd_args: Vec<String> = v["args"]
-                    .as_array()
-                    .unwrap_or(&vec![])
-                    .iter()
-                    .filter_map(|a| a.as_str().map(|s| s.to_string()))
-                    .collect();
+            let cmd = args.get("command").and_then(|v| v.as_str()).unwrap_or("");
+            let cmd_args: Vec<String> = args
+                .get("args")
+                .and_then(|v| v.as_array())
+                .unwrap_or(&vec![])
+                .iter()
+                .filter_map(|a| a.as_str().map(|s| s.to_string()))
+                .collect();
 
-                let output = std::process::Command::new(cmd)
-                    .args(cmd_args)
-                    .output();
+            let output = std::process::Command::new(cmd)
+                .args(cmd_args)
+                .output();
 
-                match output {
-                    Ok(out) => {
-                        let stdout = String::from_utf8_lossy(&out.stdout);
-                        let stderr = String::from_utf8_lossy(&out.stderr);
-                        let mut result = String::new();
-                        if !stdout.is_empty() { result.push_str(&format!("STDOUT:\n{}\n", stdout)); }
-                        if !stderr.is_empty() { result.push_str(&format!("STDERR:\n{}\n", stderr)); }
-                        return if result.is_empty() { "Command executed with no output.".to_string() } else { result };
-                    }
-                    Err(e) => {
-                        return format!("Failed to execute command: {}", e);
-                    }
+            match output {
+                Ok(out) => {
+                    let stdout = String::from_utf8_lossy(&out.stdout);
+                    let stderr = String::from_utf8_lossy(&out.stderr);
+                    let mut result = String::new();
+                    if !stdout.is_empty() { result.push_str(&format!("STDOUT:\n{}\n", stdout)); }
+                    if !stderr.is_empty() { result.push_str(&format!("STDERR:\n{}\n", stderr)); }
+                    return if result.is_empty() { "Command executed with no output.".to_string() } else { result };
+                }
+                Err(e) => {
+                    return format!("Failed to execute command: {}", e);
                 }
             }
         }
