@@ -916,9 +916,18 @@ impl TeamWorkspacePanel {
             session_id
         };
 
-        let history = self.chat_histories.entry(session_id.clone()).or_default();
-        history.push(crate::providers::ChatMessage { role: "user".into(), content: text.clone().into(), agent_name: None });
-        self.chat_list_state = gpui::ListState::new(history.len(), gpui::ListAlignment::Bottom, px(200.));
+        {
+            let history = self.chat_histories.entry(session_id.clone()).or_default();
+            history.push(crate::providers::ChatMessage { role: "user".into(), content: text.clone().into(), agent_name: None });
+        }
+        self.rebuild_chat_display(&session_id);
+        let display_len = self
+            .chat_display_rows
+            .get(&session_id)
+            .map(|v| v.len())
+            .unwrap_or(0);
+        self.chat_list_state = gpui::ListState::new(display_len, gpui::ListAlignment::Bottom, px(200.));
+        let history_snapshot = self.chat_histories.get(&session_id).cloned().unwrap_or_default();
 
         let user_msg = crate::teambus::routing::TeamMessage::new_broadcast(
             instance_id.clone(),
@@ -969,7 +978,7 @@ impl TeamWorkspacePanel {
         let instance_id_clone = instance_id.clone();
         let team_id_clone = team_id.clone();
         let session_id_clone = session_id.clone();
-        let _history_clone = history.clone();
+        let _history_clone = history_snapshot.clone();
         let view = cx.entity().clone();
         let workspace_dir_clone = self.workspace_path.clone();
 
@@ -1165,17 +1174,23 @@ impl TeamWorkspacePanel {
                                     .cloned()
                                     .or_else(|| this.selected_session_id.clone());
                                 if let Some(session_id) = session_id {
-                                    let history = this.chat_histories.entry(session_id.clone()).or_default();
-                                    // msg_idx is not in scope here because this is for the non-streaming error fallback!
-                                    // We can just append a new message.
-                                    history.push(crate::providers::ChatMessage {
-                                        role: "assistant".into(),
-                                        content: status_text.clone().into(),
-                                        agent_name: Some(agent_name_str.into())
-                                    });
+                                    {
+                                        let history = this.chat_histories.entry(session_id.clone()).or_default();
+                                        history.push(crate::providers::ChatMessage {
+                                            role: "assistant".into(),
+                                            content: status_text.clone().into(),
+                                            agent_name: Some(agent_name_str.into())
+                                        });
+                                    }
+                                    this.rebuild_chat_display(&session_id);
                                     if this.selected_session_id.as_deref() == Some(session_id.as_str()) {
+                                        let display_len = this
+                                            .chat_display_rows
+                                            .get(&session_id)
+                                            .map(|v| v.len())
+                                            .unwrap_or(0);
                                         this.chat_list_state = gpui::ListState::new(
-                                            history.len(),
+                                            display_len,
                                             gpui::ListAlignment::Bottom,
                                             gpui::px(200.),
                                         );
@@ -1194,7 +1209,7 @@ impl TeamWorkspacePanel {
             return;
         }
         
-        self.chat_list_state = gpui::ListState::new(history.len(), gpui::ListAlignment::Bottom, px(200.));
+        self.chat_list_state = gpui::ListState::new(display_len, gpui::ListAlignment::Bottom, px(200.));
         self.chat_input_state.update(cx, |state, cx| {
             state.set_value("", window, cx);
         });
@@ -1202,7 +1217,7 @@ impl TeamWorkspacePanel {
 
 
         // Trigger AI response asynchronously
-        let history_clone = history.clone();
+        let history_clone = history_snapshot.clone();
         let view = cx.entity().clone();
         let db = db.clone();
         let team_id_clone = team_id.clone();
@@ -1293,14 +1308,22 @@ let db_clone = db.clone();
                                     let mut msg_idx = 0;
                                     let _ = cx.update(|cx| {
                                         view.update(cx, |this: &mut Self, cx| {
-                                            let history = this.chat_histories.entry(session_id_for_ai.clone()).or_default();
-                                            history.push(crate::providers::ChatMessage {
-                                                role: "assistant".into(),
-                                                content: "AI thinking...".into(),
-                                                agent_name: Some(agent.name.clone().into())
-                                            });
-                                            msg_idx = history.len() - 1;
-                                            this.chat_list_state = gpui::ListState::new(history.len(), gpui::ListAlignment::Bottom, px(200.));
+                                            {
+                                                let history = this.chat_histories.entry(session_id_for_ai.clone()).or_default();
+                                                history.push(crate::providers::ChatMessage {
+                                                    role: "assistant".into(),
+                                                    content: "AI thinking...".into(),
+                                                    agent_name: Some(agent.name.clone().into())
+                                                });
+                                                msg_idx = history.len() - 1;
+                                            }
+                                            this.rebuild_chat_display(&session_id_for_ai);
+                                            let display_len = this
+                                                .chat_display_rows
+                                                .get(&session_id_for_ai)
+                                                .map(|v| v.len())
+                                                .unwrap_or(0);
+                                            this.chat_list_state = gpui::ListState::new(display_len, gpui::ListAlignment::Bottom, px(200.));
                                             cx.notify();
                                         });
                                     });
@@ -1362,14 +1385,22 @@ let db_clone = db.clone();
                                     let mut msg_idx = 0;
                                     let _ = cx.update(|cx| {
                                         view.update(cx, |this: &mut Self, cx| {
-                                            let history = this.chat_histories.entry(session_id_for_ai.clone()).or_default();
-                                            history.push(crate::providers::ChatMessage {
-                                                role: "assistant".into(),
-                                                content: "AI thinking...".into(),
-                                                agent_name: Some(agent.name.clone().into())
-                                            });
-                                            msg_idx = history.len() - 1;
-                                            this.chat_list_state = gpui::ListState::new(history.len(), gpui::ListAlignment::Bottom, px(200.));
+                                            {
+                                                let history = this.chat_histories.entry(session_id_for_ai.clone()).or_default();
+                                                history.push(crate::providers::ChatMessage {
+                                                    role: "assistant".into(),
+                                                    content: "AI thinking...".into(),
+                                                    agent_name: Some(agent.name.clone().into())
+                                                });
+                                                msg_idx = history.len() - 1;
+                                            }
+                                            this.rebuild_chat_display(&session_id_for_ai);
+                                            let display_len = this
+                                                .chat_display_rows
+                                                .get(&session_id_for_ai)
+                                                .map(|v| v.len())
+                                                .unwrap_or(0);
+                                            this.chat_list_state = gpui::ListState::new(display_len, gpui::ListAlignment::Bottom, px(200.));
                                             cx.notify();
                                         });
                                     });
@@ -1430,14 +1461,22 @@ let db_clone = db.clone();
                                         let mut msg_idx = 0;
                                         let _ = cx.update(|cx| {
                                             view.update(cx, |this: &mut Self, cx| {
-                                                let history = this.chat_histories.entry(session_id_for_ai.clone()).or_default();
-                                                history.push(crate::providers::ChatMessage {
-                                                    role: "assistant".into(),
-                                                    content: "AI thinking...".into(),
-                                                    agent_name: Some(agent.name.clone().into())
-                                                });
-                                                msg_idx = history.len() - 1;
-                                                this.chat_list_state = gpui::ListState::new(history.len(), gpui::ListAlignment::Bottom, px(200.));
+                                                {
+                                                    let history = this.chat_histories.entry(session_id_for_ai.clone()).or_default();
+                                                    history.push(crate::providers::ChatMessage {
+                                                        role: "assistant".into(),
+                                                        content: "AI thinking...".into(),
+                                                        agent_name: Some(agent.name.clone().into())
+                                                    });
+                                                    msg_idx = history.len() - 1;
+                                                }
+                                                this.rebuild_chat_display(&session_id_for_ai);
+                                                let display_len = this
+                                                    .chat_display_rows
+                                                    .get(&session_id_for_ai)
+                                                    .map(|v| v.len())
+                                                    .unwrap_or(0);
+                                                this.chat_list_state = gpui::ListState::new(display_len, gpui::ListAlignment::Bottom, px(200.));
                                                 cx.notify();
                                             });
                                         });
@@ -1498,14 +1537,22 @@ let db_clone = db.clone();
                                         let mut msg_idx = 0;
                                         let _ = cx.update(|cx| {
                                             view.update(cx, |this: &mut Self, cx| {
-                                                let history = this.chat_histories.entry(session_id_for_ai.clone()).or_default();
-                                                history.push(crate::providers::ChatMessage {
-                                                    role: "assistant".into(),
-                                                    content: "AI thinking...".into(),
-                                                    agent_name: Some(agent.name.clone().into())
-                                                });
-                                                msg_idx = history.len() - 1;
-                                                this.chat_list_state = gpui::ListState::new(history.len(), gpui::ListAlignment::Bottom, px(200.));
+                                                {
+                                                    let history = this.chat_histories.entry(session_id_for_ai.clone()).or_default();
+                                                    history.push(crate::providers::ChatMessage {
+                                                        role: "assistant".into(),
+                                                        content: "AI thinking...".into(),
+                                                        agent_name: Some(agent.name.clone().into())
+                                                    });
+                                                    msg_idx = history.len() - 1;
+                                                }
+                                                this.rebuild_chat_display(&session_id_for_ai);
+                                                let display_len = this
+                                                    .chat_display_rows
+                                                    .get(&session_id_for_ai)
+                                                    .map(|v| v.len())
+                                                    .unwrap_or(0);
+                                                this.chat_list_state = gpui::ListState::new(display_len, gpui::ListAlignment::Bottom, px(200.));
                                                 cx.notify();
                                             });
                                         });
@@ -1566,14 +1613,22 @@ let db_clone = db.clone();
                                         let mut msg_idx = 0;
                                         let _ = cx.update(|cx| {
                                             view.update(cx, |this: &mut Self, cx| {
-                                                let history = this.chat_histories.entry(session_id_for_ai.clone()).or_default();
-                                                history.push(crate::providers::ChatMessage {
-                                                    role: "assistant".into(),
-                                                    content: "AI thinking...".into(),
-                                                    agent_name: Some(agent.name.clone().into())
-                                                });
-                                                msg_idx = history.len() - 1;
-                                                this.chat_list_state = gpui::ListState::new(history.len(), gpui::ListAlignment::Bottom, px(200.));
+                                                {
+                                                    let history = this.chat_histories.entry(session_id_for_ai.clone()).or_default();
+                                                    history.push(crate::providers::ChatMessage {
+                                                        role: "assistant".into(),
+                                                        content: "AI thinking...".into(),
+                                                        agent_name: Some(agent.name.clone().into())
+                                                    });
+                                                    msg_idx = history.len() - 1;
+                                                }
+                                                this.rebuild_chat_display(&session_id_for_ai);
+                                                let display_len = this
+                                                    .chat_display_rows
+                                                    .get(&session_id_for_ai)
+                                                    .map(|v| v.len())
+                                                    .unwrap_or(0);
+                                                this.chat_list_state = gpui::ListState::new(display_len, gpui::ListAlignment::Bottom, px(200.));
                                                 cx.notify();
                                             });
                                         });
@@ -1638,12 +1693,15 @@ let db_clone = db.clone();
             if use_mock {
                 let _ = cx.update(|cx| {
                     view.update(cx, |this: &mut Self, cx| {
-                        let history = this
-                            .chat_histories
-                            .entry(session_id_for_ai.clone())
-                            .or_default();
                         let error_text = "No valid provider found or configured for this team. Please check agent provider settings.";
-                        history.push(crate::providers::ChatMessage { role: "assistant".into(), content: error_text.into(), agent_name: None });
+                        {
+                            let history = this
+                                .chat_histories
+                                .entry(session_id_for_ai.clone())
+                                .or_default();
+                            history.push(crate::providers::ChatMessage { role: "assistant".into(), content: error_text.into(), agent_name: None });
+                        }
+                        this.rebuild_chat_display(&session_id_for_ai);
                         let assistant_msg = crate::teambus::routing::TeamMessage::new_broadcast(
                             instance_id_for_ai.clone(),
                             "assistant".to_string(),
@@ -1656,7 +1714,12 @@ let db_clone = db.clone();
                             let _ = team_bus.route_message(assistant_msg_clone).await;
                         })
                         .detach();
-                        this.chat_list_state = gpui::ListState::new(history.len(), gpui::ListAlignment::Bottom, px(200.));
+                        let display_len = this
+                            .chat_display_rows
+                            .get(&session_id_for_ai)
+                            .map(|v| v.len())
+                            .unwrap_or(0);
+                        this.chat_list_state = gpui::ListState::new(display_len, gpui::ListAlignment::Bottom, px(200.));
                         cx.notify();
                     });
                 });
@@ -1675,16 +1738,78 @@ let db_clone = db.clone();
             return div().into_any_element();
         };
 
-        let history = self.chat_histories.entry(session_id.clone()).or_default();
-        if history.is_empty() || ix >= history.len() {
+        let _history = self.chat_histories.entry(session_id.clone()).or_default();
+        if !self.chat_display_rows.contains_key(&session_id) {
+            self.rebuild_chat_display(&session_id);
+        }
+        let Some(rows) = self.chat_display_rows.get(&session_id) else {
+            return div().into_any_element();
+        };
+        if rows.is_empty() || ix >= rows.len() {
             return div().into_any_element();
         }
-        let msg = history.get(ix).unwrap().clone();
+        let row = rows[ix].clone();
         let theme = cx.theme().clone();
+
+        let (source_index, msg) = match row {
+            super::ChatDisplayRow::CrossTeamThreadHeader { correlation_id, handoff_type, from_team, count } => {
+                let is_expanded = self.expanded_threads.contains(&correlation_id);
+                let icon = if is_expanded { IconName::ChevronDown } else { IconName::ChevronRight };
+                let session_id_clone = session_id.clone();
+                let correlation_id_clone = correlation_id.clone();
+                let from_team_short = if from_team.len() > 12 { format!("{}…", &from_team[..12]) } else { from_team };
+                let correlation_short = if correlation_id.len() > 8 { &correlation_id[..8] } else { &correlation_id };
+                return div()
+                    .id(("cross-team-thread", ix))
+                    .w_full()
+                    .px(px(12.))
+                    .py(px(8.))
+                    .rounded_md()
+                    .bg(theme.muted.opacity(0.08))
+                    .border(px(1.))
+                    .border_color(theme.border)
+                    .cursor_pointer()
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if this.expanded_threads.contains(&correlation_id_clone) {
+                            this.expanded_threads.remove(&correlation_id_clone);
+                        } else {
+                            this.expanded_threads.insert(correlation_id_clone.clone());
+                        }
+                        this.rebuild_chat_display(&session_id_clone);
+                        let display_len = this
+                            .chat_display_rows
+                            .get(&session_id_clone)
+                            .map(|v| v.len())
+                            .unwrap_or(0);
+                        this.chat_list_state = gpui::ListState::new(display_len, gpui::ListAlignment::Bottom, px(200.));
+                        cx.notify();
+                    }))
+                    .child(
+                        h_flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                h_flex()
+                                    .items_center()
+                                    .gap(px(8.))
+                                    .child(Icon::new(icon).size(px(14.)).text_color(theme.muted_foreground))
+                                    .child(div().font_weight(gpui::FontWeight::BOLD).text_size(px(13.)).child(format!("Cross-team {} ({})", handoff_type, count)))
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .text_color(theme.muted_foreground)
+                                    .child(format!("{} • {}", correlation_short, from_team_short))
+                            )
+                    )
+                    .into_any_element();
+            }
+            super::ChatDisplayRow::Message { source_index, msg } => (source_index, msg),
+        };
 
         let is_user = msg.role == "user";
         
-        let msg_key = format!("{}_{}", session_id, ix);
+        let msg_key = format!("{}_{}", session_id, source_index);
         let is_expanded = self.expanded_messages.contains(&msg_key);
         
         // Count lines for user message to see if we need collapse
@@ -1778,8 +1903,15 @@ let db_clone = db.clone();
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     if let Some(session_id) = this.selected_session_id.clone() {
                                         if let Some(history) = this.chat_histories.get_mut(&session_id) {
-                                            if ix < history.len() {
-                                                history.remove(ix);
+                                            if source_index < history.len() {
+                                                history.remove(source_index);
+                                                this.rebuild_chat_display(&session_id);
+                                                let display_len = this
+                                                    .chat_display_rows
+                                                    .get(&session_id)
+                                                    .map(|v| v.len())
+                                                    .unwrap_or(0);
+                                                this.chat_list_state = gpui::ListState::new(display_len, gpui::ListAlignment::Bottom, px(200.));
                                                 cx.notify();
                                             }
                                         }

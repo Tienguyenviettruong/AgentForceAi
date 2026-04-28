@@ -40,7 +40,9 @@ pub struct TeamWorkspacePanel {
     chat_active_tab: usize,
     members_active_tab: usize,
     chat_histories: std::collections::HashMap<String, Vec<crate::providers::ChatMessage>>,
+    chat_display_rows: std::collections::HashMap<String, Vec<ChatDisplayRow>>,
     expanded_messages: std::collections::HashSet<String>,
+    expanded_threads: std::collections::HashSet<String>,
     chat_bus_epoch: Arc<AtomicUsize>,
     chat_input_state: Entity<gpui_component::input::InputState>,
     chat_list_state: ListState,
@@ -86,7 +88,9 @@ impl TeamWorkspacePanel {
             chat_active_tab: 0,
             members_active_tab: 0,
             chat_histories: std::collections::HashMap::new(),
+            chat_display_rows: std::collections::HashMap::new(),
             expanded_messages: std::collections::HashSet::new(),
+            expanded_threads: std::collections::HashSet::new(),
             chat_bus_epoch: Arc::new(AtomicUsize::new(0)),
             chat_input_state,
             chat_list_state: ListState::new(0, ListAlignment::Bottom, px(200.)),
@@ -114,6 +118,106 @@ impl TeamWorkspacePanel {
         .detach();
 
         panel
+    }
+
+    fn parse_cross_team_payload(content: &str) -> Option<serde_json::Value> {
+        if !content.starts_with("[CROSS_TEAM_HANDOFF]") {
+            return None;
+        }
+        let payload_str = content
+            .trim_start_matches("[CROSS_TEAM_HANDOFF]")
+            .trim();
+        serde_json::from_str::<serde_json::Value>(payload_str).ok()
+    }
+
+    pub(crate) fn rebuild_chat_display(&mut self, session_id: &str) {
+        let history = match self.chat_histories.get(session_id) {
+            Some(h) => h,
+            None => {
+                self.chat_display_rows.remove(session_id);
+                return;
+            }
+        };
+
+        let mut first_index_for_correlation: HashMap<String, usize> = HashMap::new();
+        let mut thread_indices: HashMap<String, Vec<usize>> = HashMap::new();
+        let mut thread_last_meta: HashMap<String, (String, String)> = HashMap::new();
+
+        for (ix, msg) in history.iter().enumerate() {
+            if let Some(payload) = Self::parse_cross_team_payload(msg.content.as_ref()) {
+                let correlation_id = payload
+                    .get("correlation_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                if correlation_id.is_empty() {
+                    continue;
+                }
+                first_index_for_correlation.entry(correlation_id.clone()).or_insert(ix);
+                thread_indices.entry(correlation_id.clone()).or_default().push(ix);
+                let handoff_type = payload
+                    .get("handoff_type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("handoff")
+                    .to_string();
+                let from_team = payload
+                    .get("from_team")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                thread_last_meta.insert(correlation_id, (handoff_type, from_team));
+            }
+        }
+
+        let mut by_first_index: HashMap<usize, String> = HashMap::new();
+        let mut skip_indices: HashSet<usize> = HashSet::new();
+        for (cid, first_ix) in first_index_for_correlation.iter() {
+            by_first_index.insert(*first_ix, cid.clone());
+            if let Some(ixs) = thread_indices.get(cid) {
+                for ix in ixs {
+                    if ix != first_ix {
+                        skip_indices.insert(*ix);
+                    }
+                }
+            }
+        }
+
+        let mut rows = Vec::new();
+        for ix in 0..history.len() {
+            if skip_indices.contains(&ix) {
+                continue;
+            }
+            if let Some(cid) = by_first_index.get(&ix) {
+                let count = thread_indices.get(cid).map(|v| v.len()).unwrap_or(1);
+                let (handoff_type, from_team) = thread_last_meta
+                    .get(cid)
+                    .cloned()
+                    .unwrap_or_else(|| ("handoff".to_string(), "".to_string()));
+                rows.push(ChatDisplayRow::CrossTeamThreadHeader {
+                    correlation_id: cid.clone(),
+                    handoff_type,
+                    from_team,
+                    count,
+                });
+                if self.expanded_threads.contains(cid) {
+                    if let Some(ixs) = thread_indices.get(cid) {
+                        for ix in ixs {
+                            rows.push(ChatDisplayRow::Message {
+                                source_index: *ix,
+                                msg: history[*ix].clone(),
+                            });
+                        }
+                    }
+                }
+                continue;
+            }
+            rows.push(ChatDisplayRow::Message {
+                source_index: ix,
+                msg: history[ix].clone(),
+            });
+        }
+
+        self.chat_display_rows.insert(session_id.to_string(), rows);
     }
 
     pub(crate) fn start_team_bus_subscription(
@@ -151,18 +255,26 @@ impl TeamWorkspacePanel {
                                     .cloned()
                                     .or_else(|| this.selected_session_id.clone());
                                 if let Some(session_id) = session_id {
-                                    let history =
-                                        this.chat_histories.entry(session_id.clone()).or_default();
-                                    history.push(crate::providers::ChatMessage {
-                                        role: "assistant".into(),
-                                        content: msg.content.into(),
-                                        agent_name: Some(agent_name.into()),
-                                    });
+                                    {
+                                        let history =
+                                            this.chat_histories.entry(session_id.clone()).or_default();
+                                        history.push(crate::providers::ChatMessage {
+                                            role: "assistant".into(),
+                                            content: msg.content.into(),
+                                            agent_name: Some(agent_name.into()),
+                                        });
+                                    }
+                                    this.rebuild_chat_display(&session_id);
                                     if this.selected_session_id.as_deref()
                                         == Some(session_id.as_str())
                                     {
+                                        let display_len = this
+                                            .chat_display_rows
+                                            .get(&session_id)
+                                            .map(|v| v.len())
+                                            .unwrap_or(0);
                                         this.chat_list_state = gpui::ListState::new(
-                                            history.len(),
+                                            display_len,
                                             gpui::ListAlignment::Bottom,
                                             px(200.),
                                         );
@@ -259,6 +371,20 @@ impl TeamWorkspacePanel {
 
         cx.notify();
     }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum ChatDisplayRow {
+    Message {
+        source_index: usize,
+        msg: crate::providers::ChatMessage,
+    },
+    CrossTeamThreadHeader {
+        correlation_id: String,
+        handoff_type: String,
+        from_team: String,
+        count: usize,
+    },
 }
 impl Render for TeamWorkspacePanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
