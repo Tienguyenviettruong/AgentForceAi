@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use crate::core::traits::database::DatabasePort;
 use crate::infrastructure::message_bus::routing::{TeamBusRouter, TeamMessage, MessageType};
+use crate::providers::BaseProviderAdapter;
 use std::collections::HashMap;
 use tokio::sync::Mutex;
 use uuid::Uuid;
@@ -33,11 +34,21 @@ impl AgentWorker {
         let mut rx = self.team_bus
             .register_member(&self.team_instance_id, &self.agent_id, &agent_role)
             .await;
+        let mut bc_rx = self.team_bus.subscribe_broadcast(&self.team_instance_id).await;
 
         println!("AgentWorker {} (Role: {}) started for instance {}", self.agent_id, agent_role, self.team_instance_id);
 
-        while let Some(msg) = rx.recv().await {
-            self.handle_message(msg).await;
+        loop {
+            tokio::select! {
+                msg = rx.recv() => {
+                    let Some(msg) = msg else { break; };
+                    self.handle_message(msg).await;
+                }
+                msg = bc_rx.recv() => {
+                    let Ok(msg) = msg else { break; };
+                    self.handle_message(msg).await;
+                }
+            }
         }
 
         self.team_bus.unregister_member(&self.team_instance_id, &self.agent_id, &agent_role).await;
@@ -60,7 +71,144 @@ impl AgentWorker {
         if let Some(metadata) = &msg.metadata {
             if metadata.starts_with("iflow_dispatch:") {
                 self.execute_iflow_task(msg).await;
+                return;
             }
+        }
+
+        if let Some(handoff) = Self::parse_cross_team_handoff(&msg) {
+            if handoff.handoff_type == "review_request" && !handoff.reply_to_team.is_empty() {
+                let role = self.get_agent_role().await.unwrap_or_default();
+                let role_lower = role.to_lowercase();
+                if role_lower.contains("critic") {
+                    self.execute_cross_team_review(&msg, handoff).await;
+                }
+            }
+        }
+    }
+
+    fn parse_cross_team_handoff(msg: &TeamMessage) -> Option<CrossTeamHandoff> {
+        let mut payload_str = msg.metadata.clone();
+        if payload_str.is_none() {
+            let prefix = "[CROSS_TEAM_HANDOFF]";
+            if msg.content.starts_with(prefix) {
+                payload_str = Some(msg.content[prefix.len()..].trim().to_string());
+            }
+        }
+        let payload_str = payload_str?;
+        let v: serde_json::Value = serde_json::from_str(&payload_str).ok()?;
+        Some(CrossTeamHandoff {
+            handoff_type: v.get("handoff_type").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+            correlation_id: v.get("correlation_id").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+            from_team: v.get("from_team").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+            reply_to_team: v.get("reply_to_team").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+            briefing_package: v.get("briefing_package").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+        })
+    }
+
+    async fn execute_cross_team_review(&self, original_msg: &TeamMessage, handoff: CrossTeamHandoff) {
+        let agent = match self.db.get_agent(&self.agent_id) {
+            Ok(Some(a)) => a,
+            _ => return,
+        };
+
+        let provider_config = match self.db.get_provider_by_name(&agent.provider) {
+            Ok(Some(p)) => p,
+            _ => return,
+        };
+
+        let team_id = self.db
+            .list_instances()
+            .ok()
+            .and_then(|instances| instances.into_iter().find(|i| i.id == self.team_instance_id).map(|i| i.team_id))
+            .unwrap_or_default();
+
+        let chat_service = crate::application::services::chat_service::ChatService::new(self.db.clone(), self.team_bus.clone());
+        let mut sys = chat_service
+            .build_dynamic_system_prompt(&team_id, &self.team_instance_id, &self.agent_id)
+            .unwrap_or_default();
+
+        sys.push_str("\n\nROLE: CRITIC\nYou are performing a cross-team review.\nYou MUST output a structured critique (numbered issues + concrete fixes).\nAfter writing the critique, you MUST respond to the requester by calling the tool handoff_to_team with handoff_type='review_response', correlation_id preserved, target_team=reply_to_team, reply_to_team may be empty.\n");
+
+        let user_text = format!(
+            "Cross-team review request\ncorrelation_id: {}\nfrom_team: {}\noriginal_message: {}\n\nArtifact to review:\n{}",
+            handoff.correlation_id,
+            handoff.from_team,
+            original_msg.content,
+            handoff.briefing_package
+        );
+
+        let history = vec![
+            crate::providers::ChatMessage {
+                role: "system".into(),
+                content: sys.into(),
+                agent_name: Some(agent.name.clone().into()),
+            },
+            crate::providers::ChatMessage {
+                role: "user".into(),
+                content: user_text.into(),
+                agent_name: None,
+            },
+        ];
+
+        let adapter: Option<Arc<dyn crate::providers::BaseProviderAdapter>> = match provider_config.provider_name.as_str() {
+            "openrouter" => {
+                let mut a = crate::providers::openrouter::OpenRouterAdapter::new();
+                if a.initialize(&provider_config).is_ok() { Some(Arc::new(a)) } else { None }
+            }
+            "claude" => {
+                let mut a = crate::providers::claude::ClaudeAdapter::new();
+                if a.initialize(&provider_config).is_ok() { Some(Arc::new(a)) } else { None }
+            }
+            "gemini" => {
+                let mut a = crate::providers::gemini::GeminiAdapter::new();
+                if a.initialize(&provider_config).is_ok() { Some(Arc::new(a)) } else { None }
+            }
+            "codex" => {
+                let mut a = crate::providers::codex::CodexAdapter::new();
+                if a.initialize(&provider_config).is_ok() { Some(Arc::new(a)) } else { None }
+            }
+            "opencode" => {
+                let mut a = crate::providers::opencode::OpenCodeAdapter::new();
+                if a.initialize(&provider_config).is_ok() { Some(Arc::new(a)) } else { None }
+            }
+            _ => None,
+        };
+
+        let Some(adapter) = adapter else { return; };
+
+        let mcp_registry = Arc::new(crate::infrastructure::mcp::registry::McpToolRegistry::new(self.db.clone()));
+        let executor = crate::application::orchestration::executor::AgentExecutor::new(
+            adapter,
+            mcp_registry,
+            self.db.clone(),
+            self.team_bus.clone(),
+            self.team_instance_id.clone(),
+            agent.id.clone(),
+        );
+
+        let result = executor.execute_task(history).await.ok().unwrap_or_default();
+        if handoff.reply_to_team.is_empty() {
+            return;
+        }
+
+        if !result.is_empty() {
+            let payload = serde_json::json!({
+                "handoff_type": "review_response",
+                "correlation_id": handoff.correlation_id,
+                "from_team": self.team_instance_id,
+                "reply_to_team": handoff.reply_to_team,
+                "briefing_package": result
+            })
+            .to_string();
+
+            let mut msg = TeamMessage::new_broadcast(
+                handoff.reply_to_team,
+                self.agent_id.clone(),
+                format!("[CROSS_TEAM_HANDOFF] {}", payload),
+            );
+            msg.metadata = Some(payload);
+            let _ = self.db.insert_team_message(&msg);
+            let _ = self.team_bus.route_message(msg).await;
         }
     }
 
@@ -156,6 +304,15 @@ impl AgentWorker {
 
         let _ = self.team_bus.route_message(completion_msg).await;
     }
+}
+
+#[derive(Clone, Debug)]
+struct CrossTeamHandoff {
+    handoff_type: String,
+    correlation_id: String,
+    from_team: String,
+    reply_to_team: String,
+    briefing_package: String,
 }
 
 pub struct WorkerManager {
