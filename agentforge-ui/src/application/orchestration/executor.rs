@@ -41,6 +41,144 @@ impl AgentExecutor {
         // Apply Sliding Window context pruning
         history = self.prune_history(&history, 20);
 
+        // 1. Tool Injection
+        let mut tools_json = serde_json::json!({
+            "tools": [
+                {
+                    "name": "save_to_knowledge",
+                    "description": "Save important long-term information to the knowledge base.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "title": { "type": "string" },
+                            "content": { "type": "string" }
+                        },
+                        "required": ["title", "content"]
+                    }
+                },
+                {
+                    "name": "declare_consensus",
+                    "description": "Declare that a consensus has been reached and broadcast it to the team.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "message": { "type": "string" }
+                        },
+                        "required": ["message"]
+                    }
+                },
+                {
+                    "name": "handoff_to_team",
+                    "description": "Handoff the task to another team.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "target_team": { "type": "string" },
+                            "briefing_package": { "type": "string" }
+                        },
+                        "required": ["target_team", "briefing_package"]
+                    }
+                },
+                {
+                    "name": "create_subtasks",
+                    "description": "Create subtasks and dispatch them to agents with specific roles.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "tasks": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "description": { "type": "string" },
+                                        "role": { "type": "string" }
+                                    },
+                                    "required": ["description", "role"]
+                                }
+                            }
+                        },
+                        "required": ["tasks"]
+                    }
+                },
+                {
+                    "name": "web_search",
+                    "description": "Search the web for information.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": { "type": "string" }
+                        },
+                        "required": ["query"]
+                    }
+                },
+                {
+                    "name": "run_cli",
+                    "description": "Run a shell command on the host machine.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "command": { "type": "string" },
+                            "args": {
+                                "type": "array",
+                                "items": { "type": "string" }
+                            }
+                        },
+                        "required": ["command", "args"]
+                    }
+                }
+            ]
+        });
+
+        // Add MCP tools
+        let mcp_tools = self.mcp_registry.list_tools();
+        if let Some(tools_arr) = tools_json["tools"].as_array_mut() {
+            for mcp_tool in mcp_tools {
+                if let Ok(schema) = serde_json::from_str::<serde_json::Value>(&mcp_tool.input_schema) {
+                    tools_arr.push(serde_json::json!({
+                        "name": mcp_tool.name,
+                        "description": mcp_tool.description,
+                        "parameters": schema
+                    }));
+                }
+            }
+        }
+
+        let tools_schema_str = serde_json::to_string_pretty(&tools_json).unwrap();
+
+        // 2. Semantic Memory (RAG)
+        let mut rag_context = String::new();
+        if let Some(last_msg) = history.last() {
+            if last_msg.role == "user" {
+                let query = last_msg.content.to_string();
+                if let Ok(entries) = self.db.search_knowledge_entries_fts(&query, 3) {
+                    if !entries.is_empty() {
+                        rag_context.push_str("\n\n--- RELEVANT KNOWLEDGE (RAG) ---\n");
+                        for entry in entries {
+                            rag_context.push_str(&format!("Title: {}\nContent: {}\n\n", entry.title, entry.content));
+                        }
+                        rag_context.push_str("----------------------------------\n");
+                    }
+                }
+            }
+        }
+
+        let injection = format!(
+            "\n\n[SYSTEM INJECTION]\nYou have access to the following tools:\n{}\n\nTo use a tool, you MUST return ONLY a JSON object wrapped in `<tool_call>` tags like this:\n<tool_call>{{\"name\": \"tool_name\", \"arguments\": \"{{\\\"key\\\": \\\"value\\\"}}\"}}</tool_call>\nDo not output any other text when making a tool call.{}",
+            tools_schema_str, rag_context
+        );
+
+        if let Some(sys_msg) = history.first_mut().filter(|m| m.role == "system") {
+            sys_msg.content = format!("{}{}", sys_msg.content, injection).into();
+        } else {
+            history.insert(0, ChatMessage {
+                role: "system".into(),
+                content: injection.into(),
+                agent_name: None,
+
+            });
+        }
+
+
         while iteration < max_iterations {
             let mut response_text = String::new();
             let mut tool_calls = Vec::<ToolCall>::new();
@@ -172,6 +310,88 @@ impl AgentExecutor {
             }
         }
         
+
+        if name == "web_search" {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(args) {
+                let query = v["query"].as_str().unwrap_or("");
+                let url = format!("https://html.duckduckgo.com/html/?q={}", urlencoding::encode(query));
+                
+                let client = reqwest::Client::new();
+                match client.get(&url).header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)").send().await {
+                    Ok(resp) => {
+                        if let Ok(text) = resp.text().await {
+                            let mut in_tag = false;
+                            let mut stripped = String::new();
+                            for c in text.chars() {
+                                if c == '<' { in_tag = true; continue; }
+                                if c == '>' { in_tag = false; stripped.push(' '); continue; }
+                                if !in_tag { stripped.push(c); }
+                            }
+                            let truncated: String = stripped.split_whitespace().collect::<Vec<_>>().join(" ");
+                            let limit = std::cmp::min(3000, truncated.len());
+                            return format!("Search results:\n{}", &truncated[..limit]);
+                        }
+                    }
+                    Err(e) => {
+                        return format!("Web search failed: {}", e);
+                    }
+                }
+            }
+        }
+
+        if name == "run_cli" {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(args) {
+                let cmd = v["command"].as_str().unwrap_or("");
+                let cmd_args: Vec<String> = v["args"]
+                    .as_array()
+                    .unwrap_or(&vec![])
+                    .iter()
+                    .filter_map(|a| a.as_str().map(|s| s.to_string()))
+                    .collect();
+
+                let output = std::process::Command::new(cmd)
+                    .args(cmd_args)
+                    .output();
+
+                match output {
+                    Ok(out) => {
+                        let stdout = String::from_utf8_lossy(&out.stdout);
+                        let stderr = String::from_utf8_lossy(&out.stderr);
+                        let mut result = String::new();
+                        if !stdout.is_empty() { result.push_str(&format!("STDOUT:\n{}\n", stdout)); }
+                        if !stderr.is_empty() { result.push_str(&format!("STDERR:\n{}\n", stderr)); }
+                        return if result.is_empty() { "Command executed with no output.".to_string() } else { result };
+                    }
+                    Err(e) => {
+                        return format!("Failed to execute command: {}", e);
+                    }
+                }
+            }
+        }
+
+        if let Some(mcp_tool) = self.mcp_registry.list_tools().into_iter().find(|t| t.name == name) {
+            let mut process_args = mcp_tool.args.clone();
+            process_args.push(args.to_string());
+            
+            let output = std::process::Command::new(&mcp_tool.command)
+                .args(process_args)
+                .output();
+
+            match output {
+                Ok(out) => {
+                    let stdout = String::from_utf8_lossy(&out.stdout);
+                    let stderr = String::from_utf8_lossy(&out.stderr);
+                    let mut result = String::new();
+                    if !stdout.is_empty() { result.push_str(&format!("STDOUT:\n{}\n", stdout)); }
+                    if !stderr.is_empty() { result.push_str(&format!("STDERR:\n{}\n", stderr)); }
+                    return if result.is_empty() { "MCP Tool executed with no output.".to_string() } else { result };
+                }
+                Err(e) => {
+                    return format!("Failed to execute MCP tool: {}", e);
+                }
+            }
+        }
+
         format!("Tool {} executed successfully with args: {}", name, args)
     }
 }
