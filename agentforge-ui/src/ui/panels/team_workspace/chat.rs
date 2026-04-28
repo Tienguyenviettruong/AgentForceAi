@@ -1752,22 +1752,24 @@ let db_clone = db.clone();
         let theme = cx.theme().clone();
 
         let (source_index, msg) = match row {
-            super::ChatDisplayRow::CrossTeamThreadHeader { correlation_id, handoff_type, from_team, count } => {
+            super::ChatDisplayRow::CrossTeamThreadHeader { correlation_id, handoff_type, from_team, count, preview, has_request: _, has_response } => {
                 let is_expanded = self.expanded_threads.contains(&correlation_id);
                 let icon = if is_expanded { IconName::ChevronDown } else { IconName::ChevronRight };
                 let session_id_clone = session_id.clone();
                 let correlation_id_clone = correlation_id.clone();
                 let from_team_short = if from_team.len() > 12 { format!("{}…", &from_team[..12]) } else { from_team };
                 let correlation_short = if correlation_id.len() > 8 { &correlation_id[..8] } else { &correlation_id };
+                let status_color = if has_response { gpui::green() } else { gpui::yellow() };
+                let status_label = if has_response { "Responded" } else { "Pending" };
                 return div()
                     .id(("cross-team-thread", ix))
                     .w_full()
                     .px(px(12.))
                     .py(px(8.))
                     .rounded_md()
-                    .bg(theme.muted.opacity(0.08))
+                    .bg(status_color.opacity(0.06))
                     .border(px(1.))
-                    .border_color(theme.border)
+                    .border_color(status_color.opacity(0.25))
                     .cursor_pointer()
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if this.expanded_threads.contains(&correlation_id_clone) {
@@ -1785,21 +1787,48 @@ let db_clone = db.clone();
                         cx.notify();
                     }))
                     .child(
-                        h_flex()
-                            .items_center()
-                            .justify_between()
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(4.))
                             .child(
                                 h_flex()
                                     .items_center()
-                                    .gap(px(8.))
-                                    .child(Icon::new(icon).size(px(14.)).text_color(theme.muted_foreground))
-                                    .child(div().font_weight(gpui::FontWeight::BOLD).text_size(px(13.)).child(format!("Cross-team {} ({})", handoff_type, count)))
+                                    .justify_between()
+                                    .child(
+                                        h_flex()
+                                            .items_center()
+                                            .gap(px(8.))
+                                            .child(Icon::new(icon).size(px(14.)).text_color(theme.muted_foreground))
+                                            .child(div().font_weight(gpui::FontWeight::BOLD).text_size(px(13.)).child(format!("Cross-team {} ({})", handoff_type, count)))
+                                    )
+                                    .child(
+                                        h_flex()
+                                            .items_center()
+                                            .gap(px(8.))
+                                            .child(
+                                                div()
+                                                    .px(px(8.))
+                                                    .py(px(3.))
+                                                    .rounded_full()
+                                                    .bg(status_color.opacity(0.14))
+                                                    .text_color(status_color)
+                                                    .text_size(px(11.))
+                                                    .child(status_label)
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_size(px(12.))
+                                                    .text_color(theme.muted_foreground)
+                                                    .child(format!("{} • {}", correlation_short, from_team_short))
+                                            )
+                                    )
                             )
                             .child(
                                 div()
                                     .text_size(px(12.))
                                     .text_color(theme.muted_foreground)
-                                    .child(format!("{} • {}", correlation_short, from_team_short))
+                                    .child(preview)
                             )
                     )
                     .into_any_element();

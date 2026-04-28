@@ -141,7 +141,7 @@ impl TeamWorkspacePanel {
 
         let mut first_index_for_correlation: HashMap<String, usize> = HashMap::new();
         let mut thread_indices: HashMap<String, Vec<usize>> = HashMap::new();
-        let mut thread_last_meta: HashMap<String, (String, String)> = HashMap::new();
+        let mut thread_meta: HashMap<String, (String, String, bool, bool, String)> = HashMap::new();
 
         for (ix, msg) in history.iter().enumerate() {
             if let Some(payload) = Self::parse_cross_team_payload(msg.content.as_ref()) {
@@ -165,7 +165,38 @@ impl TeamWorkspacePanel {
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
-                thread_last_meta.insert(correlation_id, (handoff_type, from_team));
+                let briefing = payload
+                    .get("briefing_package")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let preview = briefing
+                    .lines()
+                    .map(|l| l.trim())
+                    .find(|l| !l.is_empty())
+                    .unwrap_or("")
+                    .to_string();
+                let preview = if preview.len() > 96 {
+                    format!("{}…", &preview[..96])
+                } else {
+                    preview
+                };
+                let has_request = handoff_type == "review_request";
+                let has_response = handoff_type == "review_response";
+                thread_meta
+                    .entry(correlation_id)
+                    .and_modify(|e| {
+                        e.2 = e.2 || has_request;
+                        e.3 = e.3 || has_response;
+                        if !from_team.is_empty() {
+                            e.0 = from_team.clone();
+                        }
+                        if e.1.is_empty() && !preview.is_empty() {
+                            e.1 = preview.clone();
+                        }
+                        e.4 = handoff_type.clone();
+                    })
+                    .or_insert((from_team, preview, has_request, has_response, handoff_type));
             }
         }
 
@@ -189,15 +220,18 @@ impl TeamWorkspacePanel {
             }
             if let Some(cid) = by_first_index.get(&ix) {
                 let count = thread_indices.get(cid).map(|v| v.len()).unwrap_or(1);
-                let (handoff_type, from_team) = thread_last_meta
+                let (from_team, preview, has_request, has_response, handoff_type) = thread_meta
                     .get(cid)
                     .cloned()
-                    .unwrap_or_else(|| ("handoff".to_string(), "".to_string()));
+                    .unwrap_or_else(|| ("".to_string(), "".to_string(), false, false, "handoff".to_string()));
                 rows.push(ChatDisplayRow::CrossTeamThreadHeader {
                     correlation_id: cid.clone(),
                     handoff_type,
                     from_team,
                     count,
+                    preview,
+                    has_request,
+                    has_response,
                 });
                 if self.expanded_threads.contains(cid) {
                     if let Some(ixs) = thread_indices.get(cid) {
@@ -384,6 +418,9 @@ pub(crate) enum ChatDisplayRow {
         handoff_type: String,
         from_team: String,
         count: usize,
+        preview: String,
+        has_request: bool,
+        has_response: bool,
     },
 }
 impl Render for TeamWorkspacePanel {
