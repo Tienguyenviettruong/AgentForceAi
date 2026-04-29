@@ -11,6 +11,7 @@ pub struct AgentWorker {
     pub team_instance_id: String,
     db: Arc<dyn DatabasePort>,
     team_bus: Arc<TeamBusRouter>,
+    task_exec_lock: Mutex<()>,
 }
 
 impl AgentWorker {
@@ -25,6 +26,7 @@ impl AgentWorker {
             team_instance_id,
             db,
             team_bus,
+            task_exec_lock: Mutex::new(()),
         }
     }
 
@@ -35,11 +37,15 @@ impl AgentWorker {
             .register_member(&self.team_instance_id, &self.agent_id, &agent_role)
             .await;
         let mut bc_rx = self.team_bus.subscribe_broadcast(&self.team_instance_id).await;
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(2));
 
         println!("AgentWorker {} (Role: {}) started for instance {}", self.agent_id, agent_role, self.team_instance_id);
 
         loop {
             tokio::select! {
+                _ = tick.tick() => {
+                    self.try_execute_next_task().await;
+                }
                 msg = rx.recv() => {
                     let Some(msg) = msg else { break; };
                     self.handle_message(msg).await;
@@ -120,6 +126,244 @@ impl AgentWorker {
                     self.execute_cross_team_message(&msg, handoff).await;
                 }
             }
+        }
+    }
+
+    async fn try_execute_next_task(&self) {
+        let Ok(_guard) = self.task_exec_lock.try_lock() else {
+            return;
+        };
+
+        let Ok(Some(agent)) = self.db.get_agent(&self.agent_id) else {
+            return;
+        };
+        let Ok(Some(provider_config)) = self.db.get_provider_by_name(&agent.provider) else {
+            return;
+        };
+
+        let team_id = self
+            .db
+            .list_instances()
+            .ok()
+            .and_then(|instances| {
+                instances
+                    .into_iter()
+                    .find(|i| i.id == self.team_instance_id)
+                    .map(|i| i.team_id)
+            })
+            .unwrap_or_default();
+
+        let tasks = self
+            .db
+            .list_tasks_for_instance(&self.team_instance_id)
+            .unwrap_or_default();
+
+        let mut next_task: Option<crate::tasks::shared_task_list::Task> = None;
+        for task in &tasks {
+            if task.status != "pending" || task.assignee_id.as_ref() != Some(&self.agent_id) {
+                continue;
+            }
+            if let Some(payload) = &task.payload {
+                if let Ok(dag_task) =
+                    serde_json::from_str::<crate::application::orchestration::core::DagTask>(payload)
+                {
+                    let mut all_deps_met = true;
+                    for dep_id in dag_task.dependencies {
+                        let full_dep_id = format!("{}:{}", self.team_instance_id, dep_id);
+                        if let Some(dt) = tasks.iter().find(|t| t.id == full_dep_id) {
+                            if dt.status != "completed" {
+                                all_deps_met = false;
+                                break;
+                            }
+                        }
+                    }
+                    if all_deps_met {
+                        next_task = Some(task.clone());
+                        break;
+                    }
+                } else {
+                    next_task = Some(task.clone());
+                    break;
+                }
+            } else {
+                next_task = Some(task.clone());
+                break;
+            }
+        }
+
+        let Some(task) = next_task else {
+            return;
+        };
+
+        let claimed = self
+            .db
+            .claim_task_for_instance(&task.id, &self.agent_id, &self.team_instance_id)
+            .unwrap_or(false);
+        if !claimed {
+            return;
+        }
+
+        let workspace_dir = self
+            .db
+            .get_setting(&format!("workspace_{}", self.team_instance_id))
+            .ok()
+            .flatten();
+
+        let chat_service =
+            crate::application::services::chat_service::ChatService::new(self.db.clone(), self.team_bus.clone());
+        let sys_prompt = chat_service
+            .build_dynamic_system_prompt(&team_id, &self.team_instance_id, &self.agent_id)
+            .unwrap_or_default();
+
+        let task_text = task.payload.clone().unwrap_or_else(|| task.id.clone());
+        let mut instructions = if let Some(ref ws) = workspace_dir {
+            format!("Execute the following task. You are working in the directory: {}. If you generate or modify any files, use a markdown code block starting with ```file:<filepath> and ending with ```. Please output absolute file paths within this directory. For example:\n```file:{}/example.txt\nFile contents here\n```\nTask:\n", ws, ws)
+        } else {
+            "Execute the following task. If you generate or modify any files, use a markdown code block starting with ```file:<filepath> and ending with ```. For example:\n```file:/workspace/example.txt\nFile contents here\n```\nTask:\n".to_string()
+        };
+
+        if let Ok(query_vec) = crate::providers::embeddings::EmbeddingProvider::new()
+            .get_embedding(&task_text)
+            .await
+        {
+            if let Ok(similar) = self.db.search_similar_chunks(&query_vec, 3) {
+                if !similar.is_empty() {
+                    instructions.push_str("\n\n[SYSTEM KNOWLEDGE RETRIEVAL]\nHere is context retrieved from the user's Obsidian Vault that might be relevant to your task:\n");
+                    for (title, chunk_content, sim) in similar {
+                        if sim > 0.6 {
+                            instructions.push_str(&format!(
+                                "\n--- Document: {} (Similarity: {:.2}) ---\n{}\n",
+                                title, sim, chunk_content
+                            ));
+                        }
+                    }
+                    instructions.push_str("\n[END KNOWLEDGE RETRIEVAL]\n\n");
+                }
+            }
+        }
+
+        let history = vec![
+            crate::providers::ChatMessage {
+                role: "system".into(),
+                content: sys_prompt.into(),
+                agent_name: Some(agent.name.clone().into()),
+            },
+            crate::providers::ChatMessage {
+                role: "user".into(),
+                content: format!("{}{}", instructions, task_text).into(),
+                agent_name: None,
+            },
+        ];
+
+        let adapter: Option<Arc<dyn BaseProviderAdapter>> = match provider_config.provider_name.as_str() {
+            "openrouter" => {
+                let mut a = crate::providers::openrouter::OpenRouterAdapter::new();
+                if a.initialize(&provider_config).is_ok() { Some(Arc::new(a)) } else { None }
+            }
+            "claude" => {
+                let mut a = crate::providers::claude::ClaudeAdapter::new();
+                if a.initialize(&provider_config).is_ok() { Some(Arc::new(a)) } else { None }
+            }
+            "gemini" => {
+                let mut a = crate::providers::gemini::GeminiAdapter::new();
+                if a.initialize(&provider_config).is_ok() { Some(Arc::new(a)) } else { None }
+            }
+            "codex" => {
+                let mut a = crate::providers::codex::CodexAdapter::new();
+                if a.initialize(&provider_config).is_ok() { Some(Arc::new(a)) } else { None }
+            }
+            "opencode" => {
+                let mut a = crate::providers::opencode::OpenCodeAdapter::new();
+                if a.initialize(&provider_config).is_ok() { Some(Arc::new(a)) } else { None }
+            }
+            _ => None,
+        };
+
+        let Some(adapter) = adapter else {
+            let _ = self.db.mark_task_failed(&task.id);
+            return;
+        };
+
+        let result = adapter.send_message(history).await;
+        let (status_text, ok) = match result {
+            Ok(resp) => {
+                let text = resp.content.to_string();
+                let _ = self.db.insert_token_usage(
+                    Some(&self.team_instance_id),
+                    &self.agent_id,
+                    resp.token_usage.input_tokens,
+                    resp.token_usage.output_tokens,
+                    resp.token_usage.total_tokens,
+                );
+
+                let chat_service = crate::application::services::chat_service::ChatService::new(
+                    self.db.clone(),
+                    self.team_bus.clone(),
+                );
+                let (files_written, _) = chat_service.parse_and_write_files(&text, workspace_dir.as_ref());
+                let mut final_text = format!("[Task Completed] {}:\n{}", task.id, text);
+                if !files_written.is_empty() {
+                    final_text.push_str("\n\n**Files Generated/Modified:**\n");
+                    for f in files_written {
+                        let display_path = if let Some(ws) = workspace_dir.as_ref() {
+                            f.replace(ws, "")
+                        } else {
+                            std::path::Path::new(&f)
+                                .file_name()
+                                .map(|s| s.to_string_lossy().to_string())
+                                .unwrap_or(f)
+                        };
+                        let display_path = display_path
+                            .trim_start_matches('/')
+                            .trim_start_matches('\\');
+                        final_text.push_str(&format!("- `{}`\n", display_path));
+                    }
+                }
+                (final_text, true)
+            }
+            Err(e) => (format!("[Task Failed] {}:\n{}", task.id, e), false),
+        };
+
+        let _ = if ok {
+            self.db.mark_task_completed(&task.id)
+        } else {
+            self.db.mark_task_failed(&task.id)
+        };
+
+        let metadata = serde_json::json!({"agent_name": agent.name}).to_string();
+        let mut msg = TeamMessage::new_broadcast(
+            self.team_instance_id.clone(),
+            "assistant".to_string(),
+            status_text.clone(),
+        );
+        msg.metadata = Some(metadata.clone());
+        let _ = self.db.insert_team_message(&msg);
+        let _ = self.team_bus.route_message(msg).await;
+
+        let mut session = self
+            .db
+            .get_latest_session_for_instance(&self.team_instance_id)
+            .ok()
+            .flatten();
+        if session.is_none() {
+            let _ = self.db.create_session_for_instance(&self.team_instance_id, &self.agent_id);
+            session = self
+                .db
+                .get_latest_session_for_instance(&self.team_instance_id)
+                .ok()
+                .flatten();
+        }
+        if let Some(session) = session {
+            let _ = self
+                .db
+                .ensure_session(&session.id, &self.agent_id, Some(&self.team_instance_id));
+            let _ = self.db.append_conversation_turn(
+                &session.id,
+                "assistant",
+                &status_text,
+                Some(&metadata),
+            );
+            let _ = self.db.touch_session(&session.id);
         }
     }
 

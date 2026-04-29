@@ -360,13 +360,18 @@ impl AgentExecutor {
                     let desc = t.get("description").and_then(|v| v.as_str()).unwrap_or("");
                     let role = t.get("role").and_then(|v| v.as_str()).unwrap_or("");
                     let assignee_id = name_map.get(role).map(|s| s.as_str());
-                    let task_id = format!("{}:{}", self.team_instance_id, uuid::Uuid::new_v4());
-                    let payload = serde_json::json!({
-                        "type": "subtask",
-                        "description": desc,
-                        "role": role
+                    let dag_id = uuid::Uuid::new_v4().to_string();
+                    let task_id = format!("{}:{}", self.team_instance_id, dag_id);
+                    let payload = serde_json::to_string(&crate::application::orchestration::core::DagTask {
+                        id: dag_id,
+                        name: role.to_string(),
+                        description: desc.to_string(),
+                        dependencies: Vec::new(),
+                        priority: 2,
+                        deadline: None,
+                        assignee_id: assignee_id.map(|s| s.to_string()),
                     })
-                    .to_string();
+                    .unwrap_or_default();
                     if !team_id.is_empty() {
                         let _ = self.db.upsert_task(
                             &task_id,
