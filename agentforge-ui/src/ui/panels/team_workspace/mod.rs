@@ -176,10 +176,21 @@ impl TeamWorkspacePanel {
                     .find(|l| !l.is_empty())
                     .unwrap_or("")
                     .to_string();
-                let preview = if preview.len() > 96 {
-                    format!("{}…", &preview[..96])
-                } else {
-                    preview
+                let preview = {
+                    let mut end = preview.len();
+                    let mut chars = 0usize;
+                    for (i, _) in preview.char_indices() {
+                        if chars == 96 {
+                            end = i;
+                            break;
+                        }
+                        chars += 1;
+                    }
+                    if chars >= 96 && end < preview.len() {
+                        format!("{}…", &preview[..end])
+                    } else {
+                        preview
+                    }
                 };
                 let has_request = handoff_type == "review_request";
                 let has_response = handoff_type == "review_response";
