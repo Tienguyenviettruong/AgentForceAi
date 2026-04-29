@@ -162,7 +162,19 @@ impl TeamWorkspacePanel {
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.selected_instance_id = Some(id_str.clone());
                 this.selected_team_id = None;
-                this.cross_team_target_instance_id = None;
+                let db = crate::AppState::global(cx).db.clone();
+                let target_key = format!("cross_team_target_{}", id_str);
+                this.cross_team_target_instance_id = db
+                    .get_setting(&target_key)
+                    .ok()
+                    .flatten()
+                    .filter(|v| !v.trim().is_empty());
+                let peer_key = format!("cross_team_peer_{}", id_str);
+                this.cross_team_peer_instance_id = db
+                    .get_setting(&peer_key)
+                    .ok()
+                    .flatten()
+                    .filter(|v| !v.trim().is_empty());
                 this.start_team_bus_subscription(id_str.clone(), cx);
 
                 let mut sessions = this
@@ -210,7 +222,6 @@ impl TeamWorkspacePanel {
                 }
 
                 let key = format!("workspace_{}", id_str);
-                let db = crate::AppState::global(cx).db.clone();
                 if let Ok(Some(path)) = db.get_setting(&key) {
                     this.workspace_path = Some(path);
                 } else {

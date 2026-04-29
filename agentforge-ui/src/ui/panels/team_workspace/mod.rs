@@ -33,6 +33,7 @@ pub struct TeamWorkspacePanel {
     pub(crate) agents: Vec<Agent>,
     pub(crate) workspace_path: Option<String>,
     pub(crate) cross_team_target_instance_id: Option<String>,
+    pub(crate) cross_team_peer_instance_id: Option<String>,
     pub(crate) show_history_sheet: bool,
     instances_expanded: bool,
     templates_expanded: bool,
@@ -81,6 +82,7 @@ impl TeamWorkspacePanel {
             agents: Vec::new(),
             workspace_path: None,
             cross_team_target_instance_id: None,
+            cross_team_peer_instance_id: None,
             show_history_sheet: false,
             instances_expanded: true,
             templates_expanded: true,
@@ -410,8 +412,23 @@ impl TeamWorkspacePanel {
             } else {
                 self.workspace_path = None;
             }
+
+            let target_key = format!("cross_team_target_{}", instance_id);
+            self.cross_team_target_instance_id = db
+                .get_setting(&target_key)
+                .ok()
+                .flatten()
+                .filter(|v| !v.trim().is_empty());
+            let peer_key = format!("cross_team_peer_{}", instance_id);
+            self.cross_team_peer_instance_id = db
+                .get_setting(&peer_key)
+                .ok()
+                .flatten()
+                .filter(|v| !v.trim().is_empty());
         } else {
             self.workspace_path = None;
+            self.cross_team_target_instance_id = None;
+            self.cross_team_peer_instance_id = None;
         }
 
         cx.notify();

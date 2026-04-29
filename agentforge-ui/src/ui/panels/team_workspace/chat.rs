@@ -134,7 +134,7 @@ impl TeamWorkspacePanel {
                                                         continue;
                                                     }
                                                     let team_name = this.teams.iter().find(|t| t.id == instance.team_id).map(|t| t.name.as_str()).unwrap_or("Unknown Team");
-                                                    let label = format!("{} - {}", team_name, instance.id.split('-').next_back().unwrap_or(&instance.id));
+                                                    let label = format!("{} - {}", team_name, instance.name);
                                                     options.push(gpui::SharedString::from(label));
                                                     instance_ids.push(instance.id.clone());
                                                 }
@@ -200,7 +200,30 @@ impl TeamWorkspacePanel {
                                                                                     }
                                                                                 }
                                                                                 view.update(cx, |this: &mut super::TeamWorkspacePanel, cx| {
-                                                                                    this.cross_team_target_instance_id = if value.is_empty() { None } else { Some(value) };
+                                                                                    let instance_id = this.selected_instance_id.clone().unwrap_or_default();
+                                                                                    let db = crate::AppState::global(cx).db.clone();
+                                                                                    let old_target = this.cross_team_target_instance_id.clone().unwrap_or_default();
+                                                                                    this.cross_team_target_instance_id = if value.trim().is_empty() { None } else { Some(value.clone()) };
+                                                                                    if !instance_id.is_empty() {
+                                                                                        let key = format!("cross_team_target_{}", instance_id);
+                                                                                        let _ = db.set_setting(&key, value.trim());
+                                                                                    }
+                                                                                    if !old_target.trim().is_empty() && old_target != value {
+                                                                                        let old_peer_key = format!("cross_team_peer_{}", old_target);
+                                                                                        let _ = db.set_setting(&old_peer_key, "");
+                                                                                    }
+                                                                                    if !value.trim().is_empty() && !instance_id.is_empty() {
+                                                                                        let peer_key = format!("cross_team_peer_{}", value);
+                                                                                        let _ = db.set_setting(&peer_key, &instance_id);
+                                                                                    }
+                                                                                    if !instance_id.is_empty() {
+                                                                                        let peer_key = format!("cross_team_peer_{}", instance_id);
+                                                                                        this.cross_team_peer_instance_id = db
+                                                                                            .get_setting(&peer_key)
+                                                                                            .ok()
+                                                                                            .flatten()
+                                                                                            .filter(|v| !v.trim().is_empty());
+                                                                                    }
                                                                                     cx.notify();
                                                                                 });
                                                                                 window.close_dialog(cx);
@@ -213,6 +236,46 @@ impl TeamWorkspacePanel {
                                                 });
                                             }))
                                     )
+                                    .child({
+                                        let target_name = self
+                                            .cross_team_target_instance_id
+                                            .as_ref()
+                                            .and_then(|id| self.instances.iter().find(|i| i.id == *id).map(|i| i.name.clone()))
+                                            .or_else(|| self.cross_team_target_instance_id.clone())
+                                            .unwrap_or_default();
+                                        let peer_name = self
+                                            .cross_team_peer_instance_id
+                                            .as_ref()
+                                            .and_then(|id| self.instances.iter().find(|i| i.id == *id).map(|i| i.name.clone()))
+                                            .or_else(|| self.cross_team_peer_instance_id.clone())
+                                            .unwrap_or_default();
+                                        let mut row = h_flex().gap(px(6.)).items_center();
+                                        if !peer_name.is_empty() {
+                                            row = row.child(
+                                                div()
+                                                    .px(px(8.))
+                                                    .py(px(2.))
+                                                    .rounded_full()
+                                                    .bg(theme.secondary)
+                                                    .text_size(px(11.))
+                                                    .text_color(theme.muted_foreground)
+                                                    .child(format!("← {}", peer_name)),
+                                            );
+                                        }
+                                        if !target_name.is_empty() {
+                                            row = row.child(
+                                                div()
+                                                    .px(px(8.))
+                                                    .py(px(2.))
+                                                    .rounded_full()
+                                                    .bg(theme.secondary)
+                                                    .text_size(px(11.))
+                                                    .text_color(theme.muted_foreground)
+                                                    .child(format!("→ {}", target_name)),
+                                            );
+                                        }
+                                        row
+                                    })
                                     .child(
                                         Button::new("new-conversation-top")
                                             .ghost()
@@ -1353,7 +1416,7 @@ let db_clone = db.clone();
                                                 let history = this.chat_histories.entry(session_id_for_ai.clone()).or_default();
                                                 history.push(crate::providers::ChatMessage {
                                                     role: "assistant".into(),
-                                                    content: "AI thinking...".into(),
+                                                    content: "".into(),
                                                     agent_name: Some(agent.name.clone().into())
                                                 });
                                                 msg_idx = history.len() - 1;
@@ -1369,6 +1432,43 @@ let db_clone = db.clone();
                                         });
                                     });
 
+                                        let (stream_tx, mut stream_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+                                        let view_stream = view.clone();
+                                        let db_stream = db_clone.clone();
+                                        let office_msg_id_stream = office_msg_id.clone();
+                                        let session_id_stream = session_id_for_ai.clone();
+                                        let msg_idx_stream = msg_idx;
+                                        cx.spawn(async move |cx| {
+                                            while let Some(partial) = stream_rx.recv().await {
+                                                let _ = db_stream.update_team_message_content(&office_msg_id_stream, &partial);
+                                                let _ = cx
+                                                    .update(|cx| {
+                                                        view_stream.update(cx, |this: &mut Self, cx| {
+                                                            if let Some(history) = this.chat_histories.get_mut(&session_id_stream) {
+                                                                if msg_idx_stream < history.len() {
+                                                                    history[msg_idx_stream].content = partial.clone().into();
+                                                                }
+                                                            }
+                                                            this.rebuild_chat_display(&session_id_stream);
+                                                            if this.selected_session_id.as_deref() == Some(session_id_stream.as_str()) {
+                                                                let display_len = this
+                                                                    .chat_display_rows
+                                                                    .get(&session_id_stream)
+                                                                    .map(|v| v.len())
+                                                                    .unwrap_or(0);
+                                                                this.chat_list_state = gpui::ListState::new(
+                                                                    display_len,
+                                                                    gpui::ListAlignment::Bottom,
+                                                                    gpui::px(200.),
+                                                                );
+                                                            }
+                                                            cx.notify();
+                                                        });
+                                                    })
+                                                    .ok();
+                                            }
+                                        })
+                                        .detach();
                                         
                                         let mcp_registry = std::sync::Arc::new(crate::infrastructure::mcp::registry::McpToolRegistry::new(db.clone()));
                                         let executor = crate::application::orchestration::executor::AgentExecutor::new(
@@ -1377,7 +1477,10 @@ let db_clone = db.clone();
                                             db.clone(),
                                             team_bus_clone.clone(),
                                             instance_id.clone(),
-                                            agent.id.clone()
+                                            agent.id.clone(),
+                                            Some(std::sync::Arc::new(move |partial| {
+                                                let _ = stream_tx.send(partial);
+                                            })),
                                         );
                                         
                                         match executor.execute_task(full_history).await {
@@ -1430,7 +1533,7 @@ let db_clone = db.clone();
                                                 let history = this.chat_histories.entry(session_id_for_ai.clone()).or_default();
                                                 history.push(crate::providers::ChatMessage {
                                                     role: "assistant".into(),
-                                                    content: "AI thinking...".into(),
+                                                    content: "".into(),
                                                     agent_name: Some(agent.name.clone().into())
                                                 });
                                                 msg_idx = history.len() - 1;
@@ -1446,6 +1549,43 @@ let db_clone = db.clone();
                                         });
                                     });
 
+                                        let (stream_tx, mut stream_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+                                        let view_stream = view.clone();
+                                        let db_stream = db_clone.clone();
+                                        let office_msg_id_stream = office_msg_id.clone();
+                                        let session_id_stream = session_id_for_ai.clone();
+                                        let msg_idx_stream = msg_idx;
+                                        cx.spawn(async move |cx| {
+                                            while let Some(partial) = stream_rx.recv().await {
+                                                let _ = db_stream.update_team_message_content(&office_msg_id_stream, &partial);
+                                                let _ = cx
+                                                    .update(|cx| {
+                                                        view_stream.update(cx, |this: &mut Self, cx| {
+                                                            if let Some(history) = this.chat_histories.get_mut(&session_id_stream) {
+                                                                if msg_idx_stream < history.len() {
+                                                                    history[msg_idx_stream].content = partial.clone().into();
+                                                                }
+                                                            }
+                                                            this.rebuild_chat_display(&session_id_stream);
+                                                            if this.selected_session_id.as_deref() == Some(session_id_stream.as_str()) {
+                                                                let display_len = this
+                                                                    .chat_display_rows
+                                                                    .get(&session_id_stream)
+                                                                    .map(|v| v.len())
+                                                                    .unwrap_or(0);
+                                                                this.chat_list_state = gpui::ListState::new(
+                                                                    display_len,
+                                                                    gpui::ListAlignment::Bottom,
+                                                                    gpui::px(200.),
+                                                                );
+                                                            }
+                                                            cx.notify();
+                                                        });
+                                                    })
+                                                    .ok();
+                                            }
+                                        })
+                                        .detach();
                                         
                                         let mcp_registry = std::sync::Arc::new(crate::infrastructure::mcp::registry::McpToolRegistry::new(db.clone()));
                                         let executor = crate::application::orchestration::executor::AgentExecutor::new(
@@ -1454,7 +1594,10 @@ let db_clone = db.clone();
                                             db.clone(),
                                             team_bus_clone.clone(),
                                             instance_id.clone(),
-                                            agent.id.clone()
+                                            agent.id.clone(),
+                                            Some(std::sync::Arc::new(move |partial| {
+                                                let _ = stream_tx.send(partial);
+                                            })),
                                         );
                                         
                                         match executor.execute_task(full_history).await {
@@ -1506,7 +1649,7 @@ let db_clone = db.clone();
                                                     let history = this.chat_histories.entry(session_id_for_ai.clone()).or_default();
                                                     history.push(crate::providers::ChatMessage {
                                                         role: "assistant".into(),
-                                                        content: "AI thinking...".into(),
+                                                        content: "".into(),
                                                         agent_name: Some(agent.name.clone().into())
                                                     });
                                                     msg_idx = history.len() - 1;
@@ -1522,6 +1665,43 @@ let db_clone = db.clone();
                                             });
                                         });
 
+                                        let (stream_tx, mut stream_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+                                        let view_stream = view.clone();
+                                        let db_stream = db_clone.clone();
+                                        let office_msg_id_stream = office_msg_id.clone();
+                                        let session_id_stream = session_id_for_ai.clone();
+                                        let msg_idx_stream = msg_idx;
+                                        cx.spawn(async move |cx| {
+                                            while let Some(partial) = stream_rx.recv().await {
+                                                let _ = db_stream.update_team_message_content(&office_msg_id_stream, &partial);
+                                                let _ = cx
+                                                    .update(|cx| {
+                                                        view_stream.update(cx, |this: &mut Self, cx| {
+                                                            if let Some(history) = this.chat_histories.get_mut(&session_id_stream) {
+                                                                if msg_idx_stream < history.len() {
+                                                                    history[msg_idx_stream].content = partial.clone().into();
+                                                                }
+                                                            }
+                                                            this.rebuild_chat_display(&session_id_stream);
+                                                            if this.selected_session_id.as_deref() == Some(session_id_stream.as_str()) {
+                                                                let display_len = this
+                                                                    .chat_display_rows
+                                                                    .get(&session_id_stream)
+                                                                    .map(|v| v.len())
+                                                                    .unwrap_or(0);
+                                                                this.chat_list_state = gpui::ListState::new(
+                                                                    display_len,
+                                                                    gpui::ListAlignment::Bottom,
+                                                                    gpui::px(200.),
+                                                                );
+                                                            }
+                                                            cx.notify();
+                                                        });
+                                                    })
+                                                    .ok();
+                                            }
+                                        })
+                                        .detach();
                                         
                                         let mcp_registry = std::sync::Arc::new(crate::infrastructure::mcp::registry::McpToolRegistry::new(db.clone()));
                                         let executor = crate::application::orchestration::executor::AgentExecutor::new(
@@ -1530,7 +1710,10 @@ let db_clone = db.clone();
                                             db.clone(),
                                             team_bus_clone.clone(),
                                             instance_id.clone(),
-                                            agent.id.clone()
+                                            agent.id.clone(),
+                                            Some(std::sync::Arc::new(move |partial| {
+                                                let _ = stream_tx.send(partial);
+                                            })),
                                         );
                                         
                                         match executor.execute_task(full_history).await {
@@ -1582,7 +1765,7 @@ let db_clone = db.clone();
                                                     let history = this.chat_histories.entry(session_id_for_ai.clone()).or_default();
                                                     history.push(crate::providers::ChatMessage {
                                                         role: "assistant".into(),
-                                                        content: "AI thinking...".into(),
+                                                        content: "".into(),
                                                         agent_name: Some(agent.name.clone().into())
                                                     });
                                                     msg_idx = history.len() - 1;
@@ -1598,6 +1781,44 @@ let db_clone = db.clone();
                                             });
                                         });
 
+                                        let (stream_tx, mut stream_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+                                        let view_stream = view.clone();
+                                        let db_stream = db_clone.clone();
+                                        let office_msg_id_stream = office_msg_id.clone();
+                                        let session_id_stream = session_id_for_ai.clone();
+                                        let msg_idx_stream = msg_idx;
+                                        cx.spawn(async move |cx| {
+                                            while let Some(partial) = stream_rx.recv().await {
+                                                let _ = db_stream.update_team_message_content(&office_msg_id_stream, &partial);
+                                                let _ = cx
+                                                    .update(|cx| {
+                                                        view_stream.update(cx, |this: &mut Self, cx| {
+                                                            if let Some(history) = this.chat_histories.get_mut(&session_id_stream) {
+                                                                if msg_idx_stream < history.len() {
+                                                                    history[msg_idx_stream].content = partial.clone().into();
+                                                                }
+                                                            }
+                                                            this.rebuild_chat_display(&session_id_stream);
+                                                            if this.selected_session_id.as_deref() == Some(session_id_stream.as_str()) {
+                                                                let display_len = this
+                                                                    .chat_display_rows
+                                                                    .get(&session_id_stream)
+                                                                    .map(|v| v.len())
+                                                                    .unwrap_or(0);
+                                                                this.chat_list_state = gpui::ListState::new(
+                                                                    display_len,
+                                                                    gpui::ListAlignment::Bottom,
+                                                                    gpui::px(200.),
+                                                                );
+                                                            }
+                                                            cx.notify();
+                                                        });
+                                                    })
+                                                    .ok();
+                                            }
+                                        })
+                                        .detach();
+                                        
                                         
                                         let mcp_registry = std::sync::Arc::new(crate::infrastructure::mcp::registry::McpToolRegistry::new(db.clone()));
                                         let executor = crate::application::orchestration::executor::AgentExecutor::new(
@@ -1606,9 +1827,11 @@ let db_clone = db.clone();
                                             db.clone(),
                                             team_bus_clone.clone(),
                                             instance_id.clone(),
-                                            agent.id.clone()
+                                            agent.id.clone(),
+                                            Some(std::sync::Arc::new(move |partial| {
+                                                let _ = stream_tx.send(partial);
+                                            })),
                                         );
-                                        
                                         match executor.execute_task(full_history).await {
                                             Ok(full_text) => {
                                                 let _ = db_clone.update_team_message_content(&office_msg_id, &full_text);
@@ -1658,7 +1881,7 @@ let db_clone = db.clone();
                                                     let history = this.chat_histories.entry(session_id_for_ai.clone()).or_default();
                                                     history.push(crate::providers::ChatMessage {
                                                         role: "assistant".into(),
-                                                        content: "AI thinking...".into(),
+                                                        content: "".into(),
                                                         agent_name: Some(agent.name.clone().into())
                                                     });
                                                     msg_idx = history.len() - 1;
@@ -1674,6 +1897,43 @@ let db_clone = db.clone();
                                             });
                                         });
 
+                                        let (stream_tx, mut stream_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+                                        let view_stream = view.clone();
+                                        let db_stream = db_clone.clone();
+                                        let office_msg_id_stream = office_msg_id.clone();
+                                        let session_id_stream = session_id_for_ai.clone();
+                                        let msg_idx_stream = msg_idx;
+                                        cx.spawn(async move |cx| {
+                                            while let Some(partial) = stream_rx.recv().await {
+                                                let _ = db_stream.update_team_message_content(&office_msg_id_stream, &partial);
+                                                let _ = cx
+                                                    .update(|cx| {
+                                                        view_stream.update(cx, |this: &mut Self, cx| {
+                                                            if let Some(history) = this.chat_histories.get_mut(&session_id_stream) {
+                                                                if msg_idx_stream < history.len() {
+                                                                    history[msg_idx_stream].content = partial.clone().into();
+                                                                }
+                                                            }
+                                                            this.rebuild_chat_display(&session_id_stream);
+                                                            if this.selected_session_id.as_deref() == Some(session_id_stream.as_str()) {
+                                                                let display_len = this
+                                                                    .chat_display_rows
+                                                                    .get(&session_id_stream)
+                                                                    .map(|v| v.len())
+                                                                    .unwrap_or(0);
+                                                                this.chat_list_state = gpui::ListState::new(
+                                                                    display_len,
+                                                                    gpui::ListAlignment::Bottom,
+                                                                    gpui::px(200.),
+                                                                );
+                                                            }
+                                                            cx.notify();
+                                                        });
+                                                    })
+                                                    .ok();
+                                            }
+                                        })
+                                        .detach();
                                         
                                         let mcp_registry = std::sync::Arc::new(crate::infrastructure::mcp::registry::McpToolRegistry::new(db.clone()));
                                         let executor = crate::application::orchestration::executor::AgentExecutor::new(
@@ -1682,7 +1942,10 @@ let db_clone = db.clone();
                                             db.clone(),
                                             team_bus_clone.clone(),
                                             instance_id.clone(),
-                                            agent.id.clone()
+                                            agent.id.clone(),
+                                            Some(std::sync::Arc::new(move |partial| {
+                                                let _ = stream_tx.send(partial);
+                                            })),
                                         );
                                         
                                         match executor.execute_task(full_history).await {
@@ -1798,7 +2061,28 @@ let db_clone = db.clone();
                 let icon = if is_expanded { IconName::ChevronDown } else { IconName::ChevronRight };
                 let session_id_clone = session_id.clone();
                 let correlation_id_clone = correlation_id.clone();
-                let from_team_short = if from_team.len() > 12 { format!("{}…", &from_team[..12]) } else { from_team };
+                let from_team_label = self
+                    .instances
+                    .iter()
+                    .find(|i| i.id == from_team)
+                    .map(|i| i.name.clone())
+                    .unwrap_or(from_team);
+                let from_team_short = {
+                    let mut end = from_team_label.len();
+                    let mut chars = 0usize;
+                    for (i, _) in from_team_label.char_indices() {
+                        if chars == 12 {
+                            end = i;
+                            break;
+                        }
+                        chars += 1;
+                    }
+                    if chars >= 12 && end < from_team_label.len() {
+                        format!("{}…", &from_team_label[..end])
+                    } else {
+                        from_team_label
+                    }
+                };
                 let correlation_short = if correlation_id.len() > 8 { &correlation_id[..8] } else { &correlation_id };
                 let status_color = if has_response { gpui::green() } else { gpui::yellow() };
                 let status_label = if has_response { "Responded" } else { "Pending" };

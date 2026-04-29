@@ -22,6 +22,7 @@ pub struct AgentExecutor {
     team_bus: Arc<TeamBusRouter>,
     team_instance_id: String,
     agent_id: String,
+    stream_callback: Option<Arc<dyn Fn(String) + Send + Sync>>,
 }
 
 impl AgentExecutor {
@@ -32,8 +33,9 @@ impl AgentExecutor {
         team_bus: Arc<TeamBusRouter>,
         team_instance_id: String,
         agent_id: String,
+        stream_callback: Option<Arc<dyn Fn(String) + Send + Sync>>,
     ) -> Self {
-        Self { provider, mcp_registry, db, team_bus, team_instance_id, agent_id }
+        Self { provider, mcp_registry, db, team_bus, team_instance_id, agent_id, stream_callback }
     }
 
     pub async fn execute_task(&self, mut history: Vec<ChatMessage>) -> Result<String> {
@@ -206,7 +208,12 @@ impl AgentExecutor {
             use futures::StreamExt;
             while let Some(chunk) = stream.next().await {
                 match chunk {
-                    Ok(crate::core::models::chat::StreamChunk::Text(t)) => response_text.push_str(&t),
+                    Ok(crate::core::models::chat::StreamChunk::Text(t)) => {
+                        response_text.push_str(&t);
+                        if let Some(cb) = &self.stream_callback {
+                            cb(response_text.clone());
+                        }
+                    }
                     Ok(crate::core::models::chat::StreamChunk::Done(u)) => {
                         token_usage = u;
                         break;
