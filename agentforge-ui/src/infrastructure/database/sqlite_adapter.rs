@@ -439,8 +439,14 @@ impl crate::core::traits::database::DatabasePort for Database {
 
     fn get_provider_by_name(&self, provider_name: &str) -> Result<Option<Provider>> {
         let conn = self.conn.lock().unwrap();
+        let normalized = provider_name
+            .split(" / ")
+            .next()
+            .unwrap_or(provider_name)
+            .trim()
+            .to_string();
         let mut stmt = conn.prepare("SELECT id, provider_name, model, adapter_type, command, api_key_ref, status FROM provider_configs WHERE provider_name = ?1 LIMIT 1")?;
-        let mut rows = stmt.query(rusqlite::params![provider_name])?;
+        let mut rows = stmt.query(rusqlite::params![normalized])?;
 
         if let Some(row) = rows.next()? {
             Ok(Some(Provider {

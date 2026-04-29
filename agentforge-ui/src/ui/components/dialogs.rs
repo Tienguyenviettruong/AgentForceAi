@@ -327,7 +327,15 @@ pub fn open_new_agent_dialog<V: 'static>(
                                     let provider = provider_select3
                                         .read(cx)
                                         .selected_value()
-                                        .map(|s| s.to_string())
+                                        .map(|s| {
+                                            let label = s.to_string();
+                                            label
+                                                .split(" / ")
+                                                .next()
+                                                .unwrap_or(label.as_str())
+                                                .trim()
+                                                .to_string()
+                                        })
                                         .unwrap_or_else(|| "unconfigured".to_string());
 
                                     let now = Utc::now().to_rfc3339();
@@ -768,7 +776,18 @@ pub fn open_edit_agent_dialog<V: 'static>(
         .map(|p| SharedString::from(format!("{} / {}", p.provider_name, p.model)))
         .collect();
         
-    let initial_provider_idx = providers.iter().position(|p| p.as_ref() == agent_to_edit.provider.as_str()).map(|i| gpui_component::IndexPath::new(i));
+    let current_provider = agent_to_edit
+        .provider
+        .split(" / ")
+        .next()
+        .unwrap_or(agent_to_edit.provider.as_str())
+        .trim()
+        .to_string();
+    let initial_provider_idx = providers
+        .iter()
+        .position(|p| p.as_ref().starts_with(&format!("{} /", current_provider)))
+        .or_else(|| providers.iter().position(|p| p.as_ref() == current_provider))
+        .map(|i| gpui_component::IndexPath::new(i));
     let provider_select = cx.new(|cx| SelectState::new(providers, initial_provider_idx, window, cx));
 
     window.open_dialog(cx, move |dialog, _window, _cx| {
@@ -875,8 +894,24 @@ pub fn open_edit_agent_dialog<V: 'static>(
                                     let provider = provider_select3
                                         .read(cx)
                                         .selected_value()
-                                        .map(|s| s.to_string())
-                                        .unwrap_or_else(|| agent_to_edit_save3.provider.clone());
+                                        .map(|s| {
+                                            let label = s.to_string();
+                                            label
+                                                .split(" / ")
+                                                .next()
+                                                .unwrap_or(label.as_str())
+                                                .trim()
+                                                .to_string()
+                                        })
+                                        .unwrap_or_else(|| {
+                                            agent_to_edit_save3
+                                                .provider
+                                                .split(" / ")
+                                                .next()
+                                                .unwrap_or(agent_to_edit_save3.provider.as_str())
+                                                .trim()
+                                                .to_string()
+                                        });
 
                                     let role = role_input3.read(cx).text().to_string();
                                     let details = details_input3.read(cx).text().to_string();

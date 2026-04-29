@@ -529,6 +529,18 @@ impl AgentWorker {
             .unwrap_or_default();
 
         sys.push_str("\n\nCROSS-TEAM HANDOFF\nYou received a cross-team handoff from another instance.\nYou MUST (1) acknowledge the request, (2) create an execution plan for your team, and (3) delegate via create_subtasks if needed.\nAfter you have a plan, output a short summary update for the requester.\n");
+        let role_mapping = self
+            .db
+            .get_instance_agent_name_mapping(&self.team_instance_id)
+            .unwrap_or_default();
+        if !role_mapping.is_empty() {
+            let mut roles: Vec<String> = role_mapping.keys().cloned().collect();
+            roles.sort();
+            sys.push_str(&format!(
+                "\nAvailable roles in this instance: {}. When calling create_subtasks, each task.role MUST match one of these exactly.\n",
+                roles.join(", ")
+            ));
+        }
 
         let correlation_id = if handoff.correlation_id.is_empty() {
             Uuid::new_v4().to_string()
