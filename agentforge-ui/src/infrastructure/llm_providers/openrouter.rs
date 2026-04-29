@@ -205,7 +205,8 @@ impl BaseProviderAdapter for OpenRouterAdapter {
             let request_body = serde_json::json!({
                 "model": model,
                 "messages": req_messages,
-                "stream": true
+                "stream": true,
+                "include_usage": true
             });
 
             let req = client
@@ -228,17 +229,23 @@ impl BaseProviderAdapter for OpenRouterAdapter {
                     }
                 };
 
+                let mut usage = crate::providers::TokenUsage::default();
                 while let Some(event) = es.next().await {
                     match event {
                         Ok(reqwest_eventsource::Event::Open) => continue,
                         Ok(reqwest_eventsource::Event::Message(message)) => {
                             if message.data == "[DONE]" {
-                                let _ = tx.unbounded_send(Ok(crate::providers::StreamChunk::Done(crate::providers::TokenUsage::default())));
+                                let _ = tx.unbounded_send(Ok(crate::providers::StreamChunk::Done(usage)));
                                 break;
                             }
                             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&message.data) {
                                 if let Some(content) = v["choices"][0]["delta"]["content"].as_str() {
                                     let _ = tx.unbounded_send(Ok(crate::providers::StreamChunk::Text(content.to_string())));
+                                }
+                                if let Some(u) = v.get("usage").and_then(|u| u.as_object()) {
+                                    usage.input_tokens = u.get("prompt_tokens").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+                                    usage.output_tokens = u.get("completion_tokens").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+                                    usage.total_tokens = u.get("total_tokens").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
                                 }
                             }
                         }

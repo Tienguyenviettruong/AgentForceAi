@@ -527,7 +527,7 @@ impl AgentWorker {
             .build_dynamic_system_prompt(&team_id, &self.team_instance_id, &self.agent_id)
             .unwrap_or_default();
 
-        sys.push_str("\n\nCROSS-TEAM MESSAGE\nYou received a message from another instance.\nWrite a helpful response. Do not call any tools.\n");
+        sys.push_str("\n\nCROSS-TEAM HANDOFF\nYou received a cross-team handoff from another instance.\nYou MUST (1) acknowledge the request, (2) create an execution plan for your team, and (3) delegate via create_subtasks if needed.\nAfter you have a plan, output a short summary update for the requester.\n");
 
         let correlation_id = if handoff.correlation_id.is_empty() {
             Uuid::new_v4().to_string()
