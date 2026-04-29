@@ -89,8 +89,8 @@ impl TeamMessage {
 }
 
 pub struct TeamBusRouter {
-    // member_id -> sender channel
-    direct_channels: Arc<RwLock<HashMap<String, mpsc::Sender<TeamMessage>>>>,
+    // member_id -> [(team_instance_id, sender channel)]
+    direct_channels: Arc<RwLock<HashMap<String, Vec<(String, mpsc::Sender<TeamMessage>)>>>>,
     // team_instance_id -> broadcast channel
     broadcast_channels: Arc<RwLock<HashMap<String, broadcast::Sender<TeamMessage>>>>,
     // team_instance_id -> role -> set of member_ids
@@ -114,7 +114,11 @@ impl TeamBusRouter {
 
     pub async fn register_member(&self, team_instance_id: &str, member_id: &str, role: &str) -> mpsc::Receiver<TeamMessage> {
         let (tx, rx) = mpsc::channel(100);
-        self.direct_channels.write().await.insert(member_id.to_string(), tx);
+        let mut direct_guard = self.direct_channels.write().await;
+        direct_guard
+            .entry(member_id.to_string())
+            .or_default()
+            .push((team_instance_id.to_string(), tx));
 
         let mut roles_guard = self.role_members.write().await;
         let team_roles = roles_guard.entry(team_instance_id.to_string()).or_default();
@@ -131,7 +135,13 @@ impl TeamBusRouter {
     }
 
     pub async fn unregister_member(&self, team_instance_id: &str, member_id: &str, role: &str) {
-        self.direct_channels.write().await.remove(member_id);
+        let mut direct_guard = self.direct_channels.write().await;
+        if let Some(list) = direct_guard.get_mut(member_id) {
+            list.retain(|(iid, _)| iid != team_instance_id);
+            if list.is_empty() {
+                direct_guard.remove(member_id);
+            }
+        }
 
         if let Some(team_roles) = self.role_members.write().await.get_mut(team_instance_id) {
             if let Some(members) = team_roles.get_mut(role) {
@@ -157,9 +167,17 @@ impl TeamBusRouter {
             MessageType::Direct => {
                 if let Some(recipient) = &message.recipient_member_id {
                     let channels = self.direct_channels.read().await;
-                    if let Some(tx) = channels.get(recipient) {
-                        tx.send(message).await.map_err(|e| e.to_string())?;
-                        return Ok(());
+                    if let Some(txs) = channels.get(recipient) {
+                        let mut delivered = false;
+                        for (iid, tx) in txs {
+                            if iid == &message.team_instance_id {
+                                tx.send(message.clone()).await.map_err(|e| e.to_string())?;
+                                delivered = true;
+                            }
+                        }
+                        if delivered {
+                            return Ok(());
+                        }
                     }
                     return Err("Recipient not found".to_string());
                 }
@@ -194,8 +212,12 @@ impl TeamBusRouter {
                     
                     let channels = self.direct_channels.read().await;
                     for recipient in recipients {
-                        if let Some(tx) = channels.get(&recipient) {
-                            let _ = tx.send(message.clone()).await;
+                        if let Some(txs) = channels.get(&recipient) {
+                            for (iid, tx) in txs {
+                                if iid == &message.team_instance_id {
+                                    let _ = tx.send(message.clone()).await;
+                                }
+                            }
                         }
                     }
                     return Ok(());
