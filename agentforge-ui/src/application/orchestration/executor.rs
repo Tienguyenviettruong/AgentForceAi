@@ -199,18 +199,18 @@ impl AgentExecutor {
 
 
         while iteration < max_iterations {
-            let mut response_text = String::new();
+            let response_text: String;
             let mut tool_calls = Vec::<ToolCall>::new();
 
-            let mut stream = self.provider.send_message_stream(history.clone()).await?;
-            use futures::StreamExt;
-            while let Some(chunk) = stream.next().await {
-                match chunk {
-                    Ok(crate::core::models::chat::StreamChunk::Text(t)) => response_text.push_str(&t),
-                    Ok(crate::core::models::chat::StreamChunk::Done(_)) => break,
-                    Err(e) => return Err(anyhow::anyhow!("Stream error: {}", e)),
-                }
-            }
+            let resp = self.provider.send_message(history.clone()).await?;
+            response_text = resp.content.to_string();
+            let _ = self.db.insert_token_usage(
+                Some(&self.team_instance_id),
+                &self.agent_id,
+                resp.token_usage.input_tokens,
+                resp.token_usage.output_tokens,
+                resp.token_usage.total_tokens,
+            );
 
             let mut search_idx = 0usize;
             while let Some(start) = response_text[search_idx..].find("<tool_call>") {

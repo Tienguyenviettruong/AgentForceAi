@@ -117,7 +117,7 @@ impl BaseProviderAdapter for OpenRouterAdapter {
                 model,
                 messages: req_messages,
                 stream: None,
-                include_usage: None,
+                include_usage: Some(true),
             };
 
             let request_future = async move {

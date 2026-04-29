@@ -5,7 +5,7 @@ use gpui::{
 };
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::WindowExt;
-use gpui_component::{h_flex, v_flex, ActiveTheme as _, IconName};
+use gpui_component::{h_flex, ActiveTheme as _, IconName};
 
 use super::TeamWorkspacePanel;
 
@@ -532,6 +532,20 @@ impl TeamWorkspacePanel {
                                     "in_progress" => IconName::LoaderCircle,
                                     _ => IconName::Asterisk,
                                 };
+                                let (task_title, task_desc) = t
+                                    .payload
+                                    .as_deref()
+                                    .and_then(|p| serde_json::from_str::<crate::application::orchestration::core::DagTask>(p).ok())
+                                    .map(|dt| (dt.name, dt.description))
+                                    .unwrap_or_else(|| ("Task".to_string(), "".to_string()));
+                                let short_id = t
+                                    .id
+                                    .split(':')
+                                    .last()
+                                    .unwrap_or(&t.id)
+                                    .chars()
+                                    .take(8)
+                                    .collect::<String>();
                                 let assignee_name = if let Some(aid) = &t.assignee_id {
                                     agents.iter().find(|a| &a.id == aid).map(|a| a.name.clone()).unwrap_or_else(|| "Unknown".to_string())
                                 } else {
@@ -549,12 +563,24 @@ impl TeamWorkspacePanel {
                                         .child(
                                             h_flex()
                                                 .justify_between()
-                                                .child(div().font_weight(gpui::FontWeight::SEMIBOLD).text_size(px(14.)).child(t.id.split(':').next_back().unwrap_or(&t.id).to_string()))
+                                                .child(
+                                                    h_flex()
+                                                        .gap(px(6.))
+                                                        .items_center()
+                                                        .child(div().font_weight(gpui::FontWeight::SEMIBOLD).text_size(px(14.)).child(task_title))
+                                                        .child(
+                                                            div()
+                                                                .text_size(px(12.))
+                                                                .text_color(theme.muted_foreground.opacity(0.7))
+                                                                .child(format!("#{}", short_id)),
+                                                        ),
+                                                )
                                                 .child(
                                                     h_flex()
                                                         .gap(px(4.))
                                                         .text_color(status_color)
                                                         .child(status_icon)
+                                                        .child(div().text_size(px(12.)).child(t.status.clone()))
                                                 )
                                         )
                                         .child(
@@ -574,27 +600,13 @@ impl TeamWorkspacePanel {
                                                         .child(format!("Priority: {}", t.priority))
                                                 )
                                         )
-                                        .when_some(t.payload.clone(), |d, payload| {
-                                            if let Ok(dag_task) = serde_json::from_str::<crate::application::orchestration::core::DagTask>(&payload) {
-                                                d.child(
-                                                    div()
-                                                        .text_size(px(12.))
-                                                        .text_color(theme.muted_foreground)
-                                                        .child(
-                                                            v_flex()
-                                                                .gap_1()
-                                                                .child(div().font_weight(gpui::FontWeight::SEMIBOLD).text_color(theme.foreground).child(dag_task.name))
-                                                                .child(div().child(dag_task.description))
-                                                        )
-                                                )
-                                            } else {
-                                                d.child(
-                                                    div()
-                                                        .text_size(px(12.))
-                                                        .text_color(theme.muted_foreground)
-                                                        .child(payload)
-                                                )
-                                            }
+                                        .when(!task_desc.is_empty(), |d| {
+                                            d.child(
+                                                div()
+                                                    .text_size(px(12.))
+                                                    .text_color(theme.muted_foreground)
+                                                    .child(task_desc),
+                                            )
                                         })
                                 );
                             }

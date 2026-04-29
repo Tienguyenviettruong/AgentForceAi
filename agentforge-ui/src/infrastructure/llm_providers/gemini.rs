@@ -120,10 +120,28 @@ impl BaseProviderAdapter for GeminiAdapter {
                     .as_str()
                     .unwrap_or_default()
                     .to_string();
+                let token_usage = json
+                    .get("usageMetadata")
+                    .and_then(|u| u.as_object())
+                    .map(|u| TokenUsage {
+                        input_tokens: u
+                            .get("promptTokenCount")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0) as usize,
+                        output_tokens: u
+                            .get("candidatesTokenCount")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0) as usize,
+                        total_tokens: u
+                            .get("totalTokenCount")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0) as usize,
+                    })
+                    .unwrap_or_default();
 
                 Ok(ChatResponse {
                     content: SharedString::from(text),
-                    token_usage: TokenUsage::default(),
+                    token_usage,
                 })
             };
 

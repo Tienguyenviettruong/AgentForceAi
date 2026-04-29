@@ -121,10 +121,31 @@ impl BaseProviderAdapter for ClaudeAdapter {
             }
 
             let text = body["content"][0]["text"].as_str().unwrap_or("").to_string();
+            let token_usage = body
+                .get("usage")
+                .and_then(|u| u.as_object())
+                .map(|u| TokenUsage {
+                    input_tokens: u
+                        .get("input_tokens")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0) as usize,
+                    output_tokens: u
+                        .get("output_tokens")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0) as usize,
+                    total_tokens: u
+                        .get("input_tokens")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0) as usize
+                        + u.get("output_tokens")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0) as usize,
+                })
+                .unwrap_or_default();
 
             Ok(ChatResponse {
                 content: SharedString::from(text),
-                token_usage: TokenUsage::default(),
+                token_usage,
             })
         })
     }
