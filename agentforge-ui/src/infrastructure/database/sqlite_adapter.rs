@@ -733,6 +733,8 @@ impl crate::core::traits::database::DatabasePort for Database {
         id: &str,
         team_id: &str,
         instance_id: Option<&str>,
+        assignee_id: Option<&str>,
+        status: &str,
         priority: &str,
         payload: Option<&str>,
     ) -> Result<()> {
@@ -742,8 +744,8 @@ impl crate::core::traits::database::DatabasePort for Database {
             "INSERT OR REPLACE INTO tasks
                 (id, team_id, instance_id, assignee_id, status, priority, payload, claimed_at, created_at, updated_at)
              VALUES
-                (?1, ?2, ?3, NULL, 'pending', ?4, ?5, NULL, ?6, ?7)",
-            params![id, team_id, instance_id, priority, payload, now, now],
+                (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, ?8, ?9)",
+            params![id, team_id, instance_id, assignee_id, status, priority, payload, now, now],
         )?;
         Ok(())
     }

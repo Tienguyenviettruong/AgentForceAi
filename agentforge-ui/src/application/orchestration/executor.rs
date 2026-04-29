@@ -341,9 +341,43 @@ impl AgentExecutor {
 
         if name == "create_subtasks" {
             if let Some(tasks) = args.get("tasks").and_then(|v| v.as_array()) {
+                let team_id = self
+                    .db
+                    .list_instances()
+                    .ok()
+                    .and_then(|instances| {
+                        instances
+                            .into_iter()
+                            .find(|i| i.id == self.team_instance_id)
+                            .map(|i| i.team_id)
+                    })
+                    .unwrap_or_default();
+                let name_map = self
+                    .db
+                    .get_instance_agent_name_mapping(&self.team_instance_id)
+                    .unwrap_or_default();
                 for t in tasks {
                     let desc = t.get("description").and_then(|v| v.as_str()).unwrap_or("");
                     let role = t.get("role").and_then(|v| v.as_str()).unwrap_or("");
+                    let assignee_id = name_map.get(role).map(|s| s.as_str());
+                    let task_id = format!("{}:{}", self.team_instance_id, uuid::Uuid::new_v4());
+                    let payload = serde_json::json!({
+                        "type": "subtask",
+                        "description": desc,
+                        "role": role
+                    })
+                    .to_string();
+                    if !team_id.is_empty() {
+                        let _ = self.db.upsert_task(
+                            &task_id,
+                            &team_id,
+                            Some(&self.team_instance_id),
+                            assignee_id,
+                            "pending",
+                            "medium",
+                            Some(&payload),
+                        );
+                    }
                     let msg = crate::infrastructure::message_bus::routing::TeamMessage::new_role_group(
                         self.team_instance_id.clone(),
                         self.agent_id.clone(),

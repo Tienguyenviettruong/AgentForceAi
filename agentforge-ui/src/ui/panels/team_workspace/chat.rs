@@ -905,7 +905,13 @@ impl TeamWorkspacePanel {
                 .get_instance_agents(&instance_id)
                 .ok()
                 .and_then(|ids| ids.first().cloned());
-            let Some(agent_id) = agent_id else { return };
+            let Some(agent_id) = agent_id else {
+                window.push_notification(
+                    (gpui_component::notification::NotificationType::Error, "No agents available for this instance/team. Add agents to the team (Manage Team Members) or assign agents to the instance."),
+                    cx,
+                );
+                return;
+            };
             let Ok(session_id) = db.create_session_for_instance(&instance_id, &agent_id) else { return };
             self.selected_session_id = Some(session_id.clone());
             self.instance_active_session
@@ -954,18 +960,53 @@ impl TeamWorkspacePanel {
 
         if let Some(target_instance_id) = self.cross_team_target_instance_id.clone() {
             if target_instance_id != instance_id {
-                let forwarded = format!("[Cross-Team from {}]: {}", instance_id, text);
+                let correlation_id = uuid::Uuid::new_v4().to_string();
+                let payload = serde_json::json!({
+                    "handoff_type": "message",
+                    "correlation_id": correlation_id,
+                    "from_team": instance_id,
+                    "reply_to_team": instance_id,
+                    "briefing_package": text
+                })
+                .to_string();
+                let content = format!("[CROSS_TEAM_HANDOFF] {}", payload);
+
                 let cross_msg = crate::teambus::routing::TeamMessage::new_broadcast(
                     target_instance_id.clone(),
                     "cross-team".to_string(),
-                    forwarded,
+                    content.clone(),
                 );
                 let _ = db.insert_team_message(&cross_msg);
                 let team_bus = self.team_bus.clone();
+                let cross_msg_clone = cross_msg.clone();
                 cx.spawn(async move |_, _| {
-                    let _ = team_bus.route_message(cross_msg).await;
+                    let _ = team_bus.route_message(cross_msg_clone).await;
                 })
                 .detach();
+
+                let target_agent_id = db
+                    .get_instance_agents(&target_instance_id)
+                    .ok()
+                    .and_then(|ids| ids.first().cloned());
+                if let Some(target_agent_id) = target_agent_id {
+                    let mut session = db
+                        .get_latest_session_for_instance(&target_instance_id)
+                        .ok()
+                        .flatten();
+                    if session.is_none() {
+                        let _ = db.create_session_for_instance(&target_instance_id, &target_agent_id);
+                        session = db
+                            .get_latest_session_for_instance(&target_instance_id)
+                            .ok()
+                            .flatten();
+                    }
+                    if let Some(session) = session {
+                        let meta = serde_json::json!({"agent_name":"Cross-team"}).to_string();
+                        let _ = db.ensure_session(&session.id, &target_agent_id, Some(&target_instance_id));
+                        let _ = db.append_conversation_turn(&session.id, "assistant", &content, Some(&meta));
+                        let _ = db.touch_session(&session.id);
+                    }
+                }
             }
         }
 

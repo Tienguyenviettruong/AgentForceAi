@@ -84,6 +84,13 @@ impl AgentWorker {
         Some(resolved[0].0.clone())
     }
 
+    async fn select_message_handler_agent_id(&self) -> Option<String> {
+        self.db
+            .get_instance_agents(&self.team_instance_id)
+            .ok()
+            .and_then(|ids| ids.into_iter().next())
+    }
+
     async fn handle_message(&self, msg: TeamMessage) {
         if msg.sender_member_id == self.agent_id {
             return;
@@ -103,7 +110,14 @@ impl AgentWorker {
             if handoff.handoff_type == "review_request" && !handoff.reply_to_team.is_empty() {
                 let handler = self.select_review_handler_agent_id().await;
                 if handler.as_deref() == Some(self.agent_id.as_str()) {
-                    self.execute_cross_team_review(&msg, handoff).await;
+                    self.execute_cross_team_review(&msg, handoff.clone()).await;
+                }
+            }
+
+            if handoff.handoff_type == "message" && !handoff.reply_to_team.is_empty() {
+                let handler = self.select_message_handler_agent_id().await;
+                if handler.as_deref() == Some(self.agent_id.as_str()) {
+                    self.execute_cross_team_message(&msg, handoff).await;
                 }
             }
         }
@@ -238,6 +252,150 @@ impl AgentWorker {
             msg.metadata = Some(payload);
             let _ = self.db.insert_team_message(&msg);
             let _ = self.team_bus.route_message(msg).await;
+        }
+    }
+
+    async fn execute_cross_team_message(&self, original_msg: &TeamMessage, handoff: CrossTeamHandoff) {
+        let agent = match self.db.get_agent(&self.agent_id) {
+            Ok(Some(a)) => a,
+            _ => return,
+        };
+
+        let provider_config = match self.db.get_provider_by_name(&agent.provider) {
+            Ok(Some(p)) => p,
+            _ => return,
+        };
+
+        let team_id = self
+            .db
+            .list_instances()
+            .ok()
+            .and_then(|instances| {
+                instances
+                    .into_iter()
+                    .find(|i| i.id == self.team_instance_id)
+                    .map(|i| i.team_id)
+            })
+            .unwrap_or_default();
+
+        let chat_service = crate::application::services::chat_service::ChatService::new(self.db.clone(), self.team_bus.clone());
+        let mut sys = chat_service
+            .build_dynamic_system_prompt(&team_id, &self.team_instance_id, &self.agent_id)
+            .unwrap_or_default();
+
+        sys.push_str("\n\nCROSS-TEAM MESSAGE\nYou received a message from another instance.\nWrite a helpful response. Do not call any tools.\n");
+
+        let correlation_id = if handoff.correlation_id.is_empty() {
+            Uuid::new_v4().to_string()
+        } else {
+            handoff.correlation_id.clone()
+        };
+
+        let user_text = format!(
+            "Cross-team message\ncorrelation_id: {}\nfrom_instance: {}\noriginal_message: {}\n\nMessage:\n{}",
+            correlation_id, handoff.from_team, original_msg.content, handoff.briefing_package
+        );
+
+        let history = vec![
+            crate::providers::ChatMessage {
+                role: "system".into(),
+                content: sys.into(),
+                agent_name: Some(agent.name.clone().into()),
+            },
+            crate::providers::ChatMessage {
+                role: "user".into(),
+                content: user_text.into(),
+                agent_name: None,
+            },
+        ];
+
+        let adapter: Option<Arc<dyn crate::providers::BaseProviderAdapter>> = match provider_config.provider_name.as_str() {
+            "openrouter" => {
+                let mut a = crate::providers::openrouter::OpenRouterAdapter::new();
+                if a.initialize(&provider_config).is_ok() { Some(Arc::new(a)) } else { None }
+            }
+            "claude" => {
+                let mut a = crate::providers::claude::ClaudeAdapter::new();
+                if a.initialize(&provider_config).is_ok() { Some(Arc::new(a)) } else { None }
+            }
+            "gemini" => {
+                let mut a = crate::providers::gemini::GeminiAdapter::new();
+                if a.initialize(&provider_config).is_ok() { Some(Arc::new(a)) } else { None }
+            }
+            "codex" => {
+                let mut a = crate::providers::codex::CodexAdapter::new();
+                if a.initialize(&provider_config).is_ok() { Some(Arc::new(a)) } else { None }
+            }
+            "opencode" => {
+                let mut a = crate::providers::opencode::OpenCodeAdapter::new();
+                if a.initialize(&provider_config).is_ok() { Some(Arc::new(a)) } else { None }
+            }
+            _ => None,
+        };
+
+        let Some(adapter) = adapter else { return; };
+
+        let mcp_registry = Arc::new(crate::infrastructure::mcp::registry::McpToolRegistry::new(self.db.clone()));
+        let executor = crate::application::orchestration::executor::AgentExecutor::new(
+            adapter,
+            mcp_registry,
+            self.db.clone(),
+            self.team_bus.clone(),
+            self.team_instance_id.clone(),
+            agent.id.clone(),
+        );
+
+        let response_text = executor.execute_task(history).await.ok().unwrap_or_default();
+        if handoff.reply_to_team.is_empty() || response_text.is_empty() {
+            return;
+        }
+
+        let payload = serde_json::json!({
+            "handoff_type": "message_response",
+            "correlation_id": correlation_id,
+            "from_team": self.team_instance_id,
+            "reply_to_team": handoff.reply_to_team,
+            "briefing_package": response_text
+        })
+        .to_string();
+
+        let content = format!("[CROSS_TEAM_HANDOFF] {}", payload.clone());
+        let mut msg = TeamMessage::new_broadcast(
+            handoff.reply_to_team.clone(),
+            self.agent_id.clone(),
+            content.clone(),
+        );
+        msg.metadata = Some(payload);
+        let _ = self.db.insert_team_message(&msg);
+        let _ = self.team_bus.route_message(msg).await;
+
+        let origin_agent_id = self
+            .db
+            .get_instance_agents(&handoff.reply_to_team)
+            .ok()
+            .and_then(|ids| ids.first().cloned());
+        if let Some(origin_agent_id) = origin_agent_id {
+            let mut session = self
+                .db
+                .get_latest_session_for_instance(&handoff.reply_to_team)
+                .ok()
+                .flatten();
+            if session.is_none() {
+                let _ = self.db.create_session_for_instance(&handoff.reply_to_team, &origin_agent_id);
+                session = self
+                    .db
+                    .get_latest_session_for_instance(&handoff.reply_to_team)
+                    .ok()
+                    .flatten();
+            }
+            if let Some(session) = session {
+                let meta = serde_json::json!({"agent_name": agent.name}).to_string();
+                let _ = self
+                    .db
+                    .ensure_session(&session.id, &origin_agent_id, Some(&handoff.reply_to_team));
+                let _ = self.db.append_conversation_turn(&session.id, "assistant", &content, Some(&meta));
+                let _ = self.db.touch_session(&session.id);
+            }
         }
     }
 

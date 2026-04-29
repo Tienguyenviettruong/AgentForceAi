@@ -222,7 +222,7 @@ pub fn init(cx: &mut App) {
                         wm_clone.start_workers_for_instance(&instance.id).await;
                     }
                 }
-                tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
             }
         });
     }

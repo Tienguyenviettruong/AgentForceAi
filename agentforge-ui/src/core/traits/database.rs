@@ -18,7 +18,7 @@ pub trait DatabasePort: Send + Sync {
     fn get_team_agents(&self, team_id: &str) -> anyhow::Result<Vec<String>>;
     fn get_instance_agents(&self, instance_id: &str) -> anyhow::Result<Vec<String>>;
     fn get_instance_agent_name_mapping(&self, instance_id: &str) -> anyhow::Result<std::collections::HashMap<String, String>>;
-    fn upsert_task(&self, id: &str, team_id: &str, instance_id: Option<&str>, priority: &str, payload: Option<&str>,) -> anyhow::Result<()>;
+    fn upsert_task(&self, id: &str, team_id: &str, instance_id: Option<&str>, assignee_id: Option<&str>, status: &str, priority: &str, payload: Option<&str>,) -> anyhow::Result<()>;
     fn get_total_tokens_per_agent(&self) -> anyhow::Result<Vec<(String, usize)>>;
     fn get_total_tokens_per_instance(&self) -> anyhow::Result<Vec<(String, usize)>>;
     fn get_agent_instance_count(&self) -> anyhow::Result<Vec<(String, usize)>>;
