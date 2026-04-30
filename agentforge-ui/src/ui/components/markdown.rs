@@ -3,6 +3,19 @@ use gpui::{div, px, AnyElement, App, FontStyle, FontWeight, InteractiveElement, 
 use gpui_component::{scroll::ScrollableElement as _, Theme};
 use pulldown_cmark::{Alignment, Event, Options, Parser, Tag, TagEnd};
 
+#[derive(Clone, Copy, Debug)]
+pub struct MarkdownRenderConfig {
+    pub enable_obsidian_tags: bool,
+}
+
+impl Default for MarkdownRenderConfig {
+    fn default() -> Self {
+        Self {
+            enable_obsidian_tags: false,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Default, Debug)]
 struct InlineStyle {
     bold: bool,
@@ -272,7 +285,7 @@ fn parse_markdown(content: &str) -> Vec<MdNode> {
     }
 }
 
-fn render_inline(children: &[MdNode], theme: &Theme, cx: &mut Window) -> gpui::Div {
+fn render_inline(children: &[MdNode], theme: &Theme, cx: &mut Window, config: MarkdownRenderConfig) -> gpui::Div {
     let mut container = gpui::div().flex().flex_wrap().gap_x(px(4.)).w_full();
     for child in children {
         match child {
@@ -306,14 +319,16 @@ fn render_inline(children: &[MdNode], theme: &Theme, cx: &mut Window) -> gpui::D
                                 });
                         }
 
-                        if let Some(tag) = word.strip_prefix('#') {
-                            if !tag.is_empty() {
-                                el = el
-                                    .px(px(6.))
-                                    .py(px(2.))
-                                    .rounded_md()
-                                    .bg(theme.secondary)
-                                    .text_color(theme.accent);
+                        if config.enable_obsidian_tags {
+                            if let Some(tag) = word.strip_prefix('#') {
+                                if !tag.is_empty() {
+                                    el = el
+                                        .px(px(6.))
+                                        .py(px(2.))
+                                        .rounded_md()
+                                        .bg(theme.secondary)
+                                        .text_color(theme.accent);
+                                }
                             }
                         }
 
@@ -349,7 +364,7 @@ fn render_inline(children: &[MdNode], theme: &Theme, cx: &mut Window) -> gpui::D
             }
             MdNode::Link(url, link_children) => {
                 let _url = url.clone();
-                let label = render_inline(link_children, theme, cx)
+                let label = render_inline(link_children, theme, cx, config)
                     .text_color(theme.accent)
                     .cursor_pointer();
                 container = container.child(
@@ -370,7 +385,7 @@ fn render_inline(children: &[MdNode], theme: &Theme, cx: &mut Window) -> gpui::D
                         .text_color(theme.muted_foreground)
                 );
             }
-            _ => container = container.child(render_block(child, theme, cx)),
+            _ => container = container.child(render_block(child, theme, cx, config)),
         }
     }
     container
@@ -395,7 +410,7 @@ fn node_text_len(node: &MdNode) -> usize {
     }
 }
 
-fn render_table(table_alignments: &[Alignment], rows: &[MdNode], theme: &Theme, cx: &mut Window) -> AnyElement {
+fn render_table(table_alignments: &[Alignment], rows: &[MdNode], theme: &Theme, cx: &mut Window, config: MarkdownRenderConfig) -> AnyElement {
     let mut col_count = table_alignments.len();
     for row in rows {
         if let MdNode::TableRow(_, _, cells) = row {
@@ -470,9 +485,9 @@ fn render_table(table_alignments: &[Alignment], rows: &[MdNode], theme: &Theme, 
                 if let Some(cell) = cells.get(col_ix) {
                     match cell {
                         MdNode::TableCell(_, children) => {
-                            cell_el = cell_el.child(render_inline(children, theme, cx).w_full());
+                            cell_el = cell_el.child(render_inline(children, theme, cx, config).w_full());
                         }
-                        _ => cell_el = cell_el.child(render_block(cell, theme, cx)),
+                        _ => cell_el = cell_el.child(render_block(cell, theme, cx, config)),
                     }
                 }
 
@@ -481,7 +496,7 @@ fn render_table(table_alignments: &[Alignment], rows: &[MdNode], theme: &Theme, 
 
             table = table.child(row_el);
         } else {
-            table = table.child(render_block(row, theme, cx));
+            table = table.child(render_block(row, theme, cx, config));
         }
     }
 
@@ -492,9 +507,9 @@ fn render_table(table_alignments: &[Alignment], rows: &[MdNode], theme: &Theme, 
         .into_any_element()
 }
 
-fn render_block(node: &MdNode, theme: &Theme, cx: &mut Window) -> AnyElement {
+fn render_block(node: &MdNode, theme: &Theme, cx: &mut Window, config: MarkdownRenderConfig) -> AnyElement {
     match node {
-        MdNode::Paragraph(children) => render_inline(children, theme, cx).mb(px(8.)).into_any_element(),
+        MdNode::Paragraph(children) => render_inline(children, theme, cx, config).mb(px(8.)).into_any_element(),
         MdNode::Heading(level, children) => {
             let size = match level {
                 1 => px(24.),
@@ -508,7 +523,7 @@ fn render_block(node: &MdNode, theme: &Theme, cx: &mut Window) -> AnyElement {
                 .font_weight(FontWeight::BOLD)
                 .mt(px(8.))
                 .mb(px(8.))
-                .child(render_inline(children, theme, cx))
+                .child(render_inline(children, theme, cx, config))
                 .into_any_element()
         }
         MdNode::BlockQuote(children) => gpui::div()
@@ -518,7 +533,7 @@ fn render_block(node: &MdNode, theme: &Theme, cx: &mut Window) -> AnyElement {
             .border_color(theme.border)
             .text_color(theme.muted_foreground)
             .mb(px(8.))
-            .child(render_inline(children, theme, cx))
+            .child(render_inline(children, theme, cx, config))
             .into_any_element(),
         MdNode::List(ordered, children) => {
             let mut container = gpui::div().w_full().flex_col().mb(px(8.)).pl(px(16.));
@@ -535,7 +550,7 @@ fn render_block(node: &MdNode, theme: &Theme, cx: &mut Window) -> AnyElement {
                         .gap_2()
                         .items_start()
                         .child(gpui::div().child(prefix))
-                        .child(render_block(child, theme, cx)),
+                        .child(render_block(child, theme, cx, config)),
                 );
             }
             container.into_any_element()
@@ -550,9 +565,9 @@ fn render_block(node: &MdNode, theme: &Theme, cx: &mut Window) -> AnyElement {
                         .child(checkbox)
                 );
             }
-            item_container.child(render_inline(children, theme, cx)).into_any_element()
+            item_container.child(render_inline(children, theme, cx, config)).into_any_element()
         }
-        MdNode::CodeBlock(_lang, code) => gpui::div()
+        MdNode::CodeBlock(lang, code) => gpui::div()
             .w_full()
             .mb(px(8.))
             .overflow_x_scrollbar()
@@ -566,10 +581,16 @@ fn render_block(node: &MdNode, theme: &Theme, cx: &mut Window) -> AnyElement {
                     .border_color(theme.border)
                     .font_family(theme.mono_font_family.clone())
                     .text_size(theme.mono_font_size)
-                    .child(code.clone()),
+                    .child({
+                        let mut col = gpui_component::v_flex().w_full().gap_2();
+                        if !lang.trim().is_empty() {
+                            col = col.child(div().text_xs().text_color(theme.muted_foreground).child(lang.clone()));
+                        }
+                        col.child(div().child(code.clone()))
+                    }),
             )
             .into_any_element(),
-        MdNode::Table(alignments, rows) => render_table(alignments, rows, theme, cx),
+        MdNode::Table(alignments, rows) => render_table(alignments, rows, theme, cx, config),
         MdNode::TableRow(_, _, _) | MdNode::TableCell(_, _) => div().into_any_element(),
         MdNode::Rule => gpui::div()
             .w_full()
@@ -582,12 +603,21 @@ fn render_block(node: &MdNode, theme: &Theme, cx: &mut Window) -> AnyElement {
             .child(html.clone())
             .into_any_element(),
         MdNode::Text(_, _) | MdNode::CodeInline(_, _) | MdNode::Link(_, _) => {
-            render_inline(std::slice::from_ref(node), theme, cx).into_any_element()
+            render_inline(std::slice::from_ref(node), theme, cx, config).into_any_element()
         }
     }
 }
 
 pub fn render_markdown_message(content: &str, theme: &Theme, cx: &mut Window) -> impl IntoElement {
+    render_markdown_message_with_config(content, theme, cx, MarkdownRenderConfig::default())
+}
+
+pub fn render_markdown_message_with_config(
+    content: &str,
+    theme: &Theme,
+    cx: &mut Window,
+    config: MarkdownRenderConfig,
+) -> impl IntoElement {
     let content = sanitize_markdown(content);
     let ast = parse_markdown(&content);
     let mut body = gpui_component::v_flex()
@@ -597,7 +627,7 @@ pub fn render_markdown_message(content: &str, theme: &Theme, cx: &mut Window) ->
         .text_color(theme.foreground)
         .line_height(gpui::relative(1.5));
     for node in ast {
-        body = body.child(render_block(&node, theme, cx));
+        body = body.child(render_block(&node, theme, cx, config));
     }
     body
 }

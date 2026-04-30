@@ -9,6 +9,7 @@ use gpui_component::dock::{Panel, TitleStyle};
 use gpui_component::{ActiveTheme as _, Icon, IconName, Placement, WindowExt as _, scroll::ScrollableElement};
 use gpui_component::text::TextView;
 use std::sync::Arc;
+use urlencoding::encode;
 
 pub struct KnowledgePanel {
     focus_handle: gpui::FocusHandle,
@@ -72,6 +73,77 @@ impl TreeNode {
 }
 
 impl KnowledgePanel {
+    fn preprocess_obsidian_markdown(input: &str) -> String {
+        let mut out = String::new();
+        let mut in_code = false;
+        for line in input.replace('\r', "").split('\n') {
+            if line.trim_start().starts_with("```") {
+                in_code = !in_code;
+                out.push_str(line);
+                out.push('\n');
+                continue;
+            }
+            if in_code {
+                out.push_str(line);
+                out.push('\n');
+                continue;
+            }
+
+            let mut processed = String::new();
+            let mut i = 0usize;
+            while let Some(start) = line[i..].find("[[") {
+                let abs_start = i + start;
+                processed.push_str(&line[i..abs_start]);
+                if let Some(end) = line[abs_start + 2..].find("]]") {
+                    let abs_end = abs_start + 2 + end;
+                    let inner = &line[abs_start + 2..abs_end];
+                    let (target, label) = inner
+                        .split_once('|')
+                        .map(|(a, b)| (a.trim(), b.trim()))
+                        .unwrap_or((inner.trim(), inner.trim()));
+                    let url = format!("obsidian://open?file={}", encode(target));
+                    processed.push_str(&format!("[{}]({})", label, url));
+                    i = abs_end + 2;
+                } else {
+                    processed.push_str("[[");
+                    i = abs_start + 2;
+                }
+            }
+            processed.push_str(&line[i..]);
+
+            let mut tagged = String::new();
+            let mut chars = processed.chars().peekable();
+            let mut prev_ws = true;
+            while let Some(ch) = chars.next() {
+                if ch == '#' && prev_ws {
+                    let mut tag = String::new();
+                    while let Some(&c2) = chars.peek() {
+                        if c2.is_ascii_alphanumeric() || c2 == '-' || c2 == '_' {
+                            tag.push(c2);
+                            chars.next();
+                        } else {
+                            break;
+                        }
+                    }
+                    if !tag.is_empty() {
+                        let url = format!("agentforge://tag/{}", encode(&tag));
+                        tagged.push_str(&format!("[#{}]({})", tag, url));
+                        prev_ws = false;
+                        continue;
+                    }
+                    tagged.push('#');
+                    prev_ws = false;
+                    continue;
+                }
+                prev_ws = ch.is_whitespace();
+                tagged.push(ch);
+            }
+
+            out.push_str(&tagged);
+            out.push('\n');
+        }
+        out
+    }
     pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
         let db = crate::AppState::global(cx).db.clone();
         let knowledge_service = crate::AppState::global(cx).knowledge_service.clone();
@@ -304,7 +376,7 @@ impl KnowledgePanel {
                     this.selected_item = Some(item.clone());
                     
                     let title = item.title.clone();
-                    let content_text = gpui::SharedString::from(item.content.clone());
+                    let content_text = gpui::SharedString::from(Self::preprocess_obsidian_markdown(&item.content));
                     
                     window.open_sheet_at(Placement::Right, cx, move |sheet, window, cx| {
                         sheet.title(title.clone()).size(px(800.)).child(
@@ -660,16 +732,23 @@ impl KnowledgePanel {
                                                 if e.click_count == 2 {
                                                     if let Some(item) = this.items.iter().find(|it| it.id == item_id) {
                                                         let sheet_title = item.title.clone();
-                                                        let content_text = item.content.clone();
+                                                        let content_text = Self::preprocess_obsidian_markdown(&item.content);
                                                         window.open_sheet_at(Placement::Right, cx, move |sheet, window, cx| {
-                                                            let theme = cx.theme().clone();
                                                             sheet.title(sheet_title.clone()).size(px(800.)).child(
                                                                 div()
                                                                     .id(("knowledge-sheet", 0usize))
                                                                     .w_full()
-                                                                    .child(crate::ui::components::markdown::render_markdown_message(&content_text, &theme, window))
-                                                                .p_6()
-                                                                .overflow_y_scroll()
+                                                                    .overflow_y_scrollbar()
+                                                                    .child(
+                                                                        TextView::markdown(
+                                                                            ("knowledge-sheet", 0usize),
+                                                                            gpui::SharedString::from(content_text.clone()),
+                                                                            window,
+                                                                            cx,
+                                                                        )
+                                                                        .p_6()
+                                                                        .selectable(true),
+                                                                    )
                                                             )
                                                         });
                                                         cx.notify();
@@ -914,5 +993,3 @@ impl Render for KnowledgePanel {
 }
 
 impl EventEmitter<PanelEvent> for KnowledgePanel {}
-
-

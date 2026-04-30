@@ -58,6 +58,29 @@ pub trait DatabasePort: Send + Sync {
     fn upsert_knowledge_chunks(&self, document_id: &str, chunks: Vec<(usize, String, Vec<f32>)>,) -> anyhow::Result<()>;
     fn search_similar_chunks(&self, query_embedding: &[f32], limit: usize) -> anyhow::Result<Vec<(String, String, f32)>>;
 
+    fn upsert_cross_team_case(
+        &self,
+        correlation_id: &str,
+        owner_instance_id: &str,
+        target_instance_id: &str,
+        latest_event_type: &str,
+        summary: &str,
+    ) -> anyhow::Result<()>;
+    fn insert_cross_team_case_event(
+        &self,
+        event: &crate::core::models::CrossTeamCaseEventRecord,
+    ) -> anyhow::Result<()>;
+    fn list_cross_team_cases(
+        &self,
+        instance_id: &str,
+        limit: u32,
+    ) -> anyhow::Result<Vec<crate::core::models::CrossTeamCaseRecord>>;
+    fn list_cross_team_case_events(
+        &self,
+        correlation_id: &str,
+        limit: u32,
+    ) -> anyhow::Result<Vec<crate::core::models::CrossTeamCaseEventRecord>>;
+
     fn upsert_workflow(&self, wf: &crate::core::models::WorkflowRecord) -> anyhow::Result<()>;
     fn list_workflows(&self) -> anyhow::Result<Vec<crate::core::models::WorkflowRecord>>;
     fn get_workflow(&self, workflow_id: &str) -> anyhow::Result<Option<crate::core::models::WorkflowRecord>>;

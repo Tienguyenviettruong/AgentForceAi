@@ -267,6 +267,27 @@ impl Database {
 
             CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_entries_fts 
             USING fts5(title, content, tags, content='knowledge_entries', content_rowid='id');
+
+            CREATE TABLE IF NOT EXISTS cross_team_cases (
+                correlation_id TEXT PRIMARY KEY,
+                owner_instance_id TEXT NOT NULL,
+                target_instance_id TEXT NOT NULL,
+                latest_event_type TEXT NOT NULL,
+                summary TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS cross_team_case_events (
+                id TEXT PRIMARY KEY,
+                correlation_id TEXT NOT NULL REFERENCES cross_team_cases(correlation_id) ON DELETE CASCADE,
+                from_instance_id TEXT NOT NULL,
+                reply_to_instance_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                summary TEXT NOT NULL,
+                payload TEXT,
+                created_at TEXT NOT NULL
+            );
             
             ",
         )?;
@@ -1929,5 +1950,115 @@ impl crate::core::traits::database::DatabasePort for Database {
             entries.push(entry?);
         }
         Ok(entries)
+    }
+
+    fn upsert_cross_team_case(
+        &self,
+        correlation_id: &str,
+        owner_instance_id: &str,
+        target_instance_id: &str,
+        latest_event_type: &str,
+        summary: &str,
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO cross_team_cases
+                (correlation_id, owner_instance_id, target_instance_id, latest_event_type, summary, created_at, updated_at)
+             VALUES
+                (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(correlation_id) DO UPDATE SET
+                owner_instance_id = excluded.owner_instance_id,
+                target_instance_id = excluded.target_instance_id,
+                latest_event_type = excluded.latest_event_type,
+                summary = excluded.summary,
+                updated_at = excluded.updated_at",
+            params![
+                correlation_id,
+                owner_instance_id,
+                target_instance_id,
+                latest_event_type,
+                summary,
+                now,
+                now
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn insert_cross_team_case_event(&self, event: &crate::core::models::CrossTeamCaseEventRecord) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO cross_team_case_events
+                (id, correlation_id, from_instance_id, reply_to_instance_id, event_type, summary, payload, created_at)
+             VALUES
+                (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                event.id,
+                event.correlation_id,
+                event.from_instance_id,
+                event.reply_to_instance_id,
+                event.event_type,
+                event.summary,
+                event.payload,
+                event.created_at
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn list_cross_team_cases(&self, instance_id: &str, limit: u32) -> Result<Vec<crate::core::models::CrossTeamCaseRecord>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT correlation_id, owner_instance_id, target_instance_id, latest_event_type, summary, created_at, updated_at
+             FROM cross_team_cases
+             WHERE owner_instance_id = ?1 OR target_instance_id = ?1
+             ORDER BY updated_at DESC
+             LIMIT ?2",
+        )?;
+        let iter = stmt.query_map(params![instance_id, limit], |row: &rusqlite::Row| {
+            Ok(crate::core::models::CrossTeamCaseRecord {
+                correlation_id: row.get(0)?,
+                owner_instance_id: row.get(1)?,
+                target_instance_id: row.get(2)?,
+                latest_event_type: row.get(3)?,
+                summary: row.get(4)?,
+                created_at: row.get(5)?,
+                updated_at: row.get(6)?,
+            })
+        })?;
+        let mut cases = Vec::new();
+        for c in iter {
+            cases.push(c?);
+        }
+        Ok(cases)
+    }
+
+    fn list_cross_team_case_events(&self, correlation_id: &str, limit: u32) -> Result<Vec<crate::core::models::CrossTeamCaseEventRecord>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, correlation_id, from_instance_id, reply_to_instance_id, event_type, summary, payload, created_at
+             FROM cross_team_case_events
+             WHERE correlation_id = ?1
+             ORDER BY created_at ASC
+             LIMIT ?2",
+        )?;
+        let iter = stmt.query_map(params![correlation_id, limit], |row: &rusqlite::Row| {
+            Ok(crate::core::models::CrossTeamCaseEventRecord {
+                id: row.get(0)?,
+                correlation_id: row.get(1)?,
+                from_instance_id: row.get(2)?,
+                reply_to_instance_id: row.get(3)?,
+                event_type: row.get(4)?,
+                summary: row.get(5)?,
+                payload: row.get(6)?,
+                created_at: row.get(7)?,
+            })
+        })?;
+        let mut events = Vec::new();
+        for e in iter {
+            events.push(e?);
+        }
+        Ok(events)
     }
 }

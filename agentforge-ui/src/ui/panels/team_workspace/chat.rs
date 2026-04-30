@@ -11,6 +11,8 @@ use gpui::{
     ParentElement, StatefulInteractiveElement, Styled, Window
 };
 use gpui_component::{h_flex, ActiveTheme as _, Sizable as _, StyledExt as _, Icon, IconName};
+use gpui_component::scroll::ScrollableElement as _;
+use std::sync::Arc;
 
 use super::TeamWorkspacePanel;
 use crate::ui::components::markdown::render_markdown_message;
@@ -276,6 +278,140 @@ impl TeamWorkspacePanel {
                                         }
                                         row
                                     })
+                                    .child(
+                                        Button::new("open-cross-team-cases")
+                                            .ghost()
+                                            .label("Cases")
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                let instance_id = this.selected_instance_id.clone().unwrap_or_default();
+                                                if instance_id.is_empty() {
+                                                    return;
+                                                }
+                                                let db = crate::AppState::global(cx).db.clone();
+                                                let cases = Arc::new(db.list_cross_team_cases(&instance_id, 100).unwrap_or_default());
+                                                let view = cx.entity().clone();
+                                                window.open_sheet_at(gpui_component::Placement::Right, cx, move |sheet, window, cx| {
+                                                    let theme = cx.theme().clone();
+                                                    sheet
+                                                        .title("Cross-team Cases")
+                                                        .size(px(520.))
+                                                        .child(
+                                                            gpui_component::v_flex()
+                                                                .w_full()
+                                                                .h_full()
+                                                                .p_4()
+                                                                .gap_2()
+                                                                .overflow_y_scrollbar()
+                                                                .child({
+                                                                    let mut col = gpui_component::v_flex().w_full().gap_2();
+                                                                    if cases.is_empty() {
+                                                                        col = col.child(div().text_sm().text_color(theme.muted_foreground).child("No cases yet."));
+                                                                    } else {
+                                                                        for (idx, c) in cases.iter().enumerate() {
+                                                                            let cid = c.correlation_id.clone();
+                                                                            let summary = c.summary.clone();
+                                                                            let latest = c.latest_event_type.clone();
+                                                                            let db2 = db.clone();
+                                                                            let view2 = view.clone();
+                                                                            let btn = gpui_component::button::Button::new(("case", idx))
+                                                                                .ghost()
+                                                                                .on_click({
+                                                                                        let cid2 = cid.clone();
+                                                                                        let summary2 = summary.clone();
+                                                                                        let latest2 = latest.clone();
+                                                                                        move |_, window, cx| {
+                                                                                            view2.update(cx, |this: &mut super::TeamWorkspacePanel, cx| {
+                                                                                                this.selected_cross_team_case_id = Some(cid2.clone());
+                                                                                                cx.notify();
+                                                                                            });
+                                                                                            let cid_for_sheet = cid2.clone();
+                                                                                            let summary_for_sheet = summary2.clone();
+                                                                                            let latest_for_sheet = latest2.clone();
+                                                                                            let events = Arc::new(db2.list_cross_team_case_events(&cid2, 500).unwrap_or_default());
+                                                                                            window.open_sheet_at(gpui_component::Placement::Right, cx, move |sheet, _window, cx| {
+                                                                                                let theme = cx.theme().clone();
+                                                                                                let step_idx = {
+                                                                                                    let t = latest_for_sheet.as_str();
+                                                                                                    match t {
+                                                                                                        "ACK_RECEIVED" => 0,
+                                                                                                        "READBACK_CONFIRMED" => 1,
+                                                                                                        "PLAN_CREATED" | "SUBTASKS_DISPATCHED" => 2,
+                                                                                                        "PARTIAL_RESULT" => 3,
+                                                                                                        "REVIEW_REQUEST" | "REVIEW_RESPONSE" => 4,
+                                                                                                        "FINAL_RESULT" | "CONSENSUS_REACHED" => 5,
+                                                                                                        _ => 0,
+                                                                                                    }
+                                                                                                };
+                                                                                                let step_labels = ["Received", "Readback", "Plan", "In Progress", "Review", "Done"];
+                                                                                                sheet
+                                                                                                    .title("Case Detail")
+                                                                                                    .size(px(720.))
+                                                                                                    .child(
+                                                                                                        gpui_component::v_flex()
+                                                                                                            .w_full()
+                                                                                                            .h_full()
+                                                                                                            .p_4()
+                                                                                                            .gap_3()
+                                                                                                            .child(div().text_sm().text_color(theme.muted_foreground).child(format!("correlation_id: {}", cid_for_sheet)))
+                                                                                                            .child(div().text_sm().child(summary_for_sheet.clone()))
+                                                                                                            .child({
+                                                                                                                let mut row = h_flex().gap(px(10.)).items_center().w_full();
+                                                                                                                for (i, label) in step_labels.iter().enumerate() {
+                                                                                                                    let active = i <= step_idx;
+                                                                                                                    let dot = div()
+                                                                                                                        .w(px(10.))
+                                                                                                                        .h(px(10.))
+                                                                                                                        .rounded_full()
+                                                                                                                        .bg(if active { theme.accent } else { theme.border });
+                                                                                                                    row = row.child(
+                                                                                                                        h_flex()
+                                                                                                                            .gap(px(6.))
+                                                                                                                            .items_center()
+                                                                                                                            .child(dot)
+                                                                                                                            .child(div().text_xs().text_color(if active { theme.foreground } else { theme.muted_foreground }).child(*label)),
+                                                                                                                    );
+                                                                                                                    if i < step_labels.len() - 1 {
+                                                                                                                        row = row.child(div().h(px(1.)).flex_1().bg(theme.border));
+                                                                                                                    }
+                                                                                                                }
+                                                                                                                row
+                                                                                                            })
+                                                                                                            .child(div().text_sm().font_weight(gpui::FontWeight::SEMIBOLD).child("Events"))
+                                                                                                            .child({
+                                                                                                                let mut ev_col = gpui_component::v_flex().w_full().gap_2();
+                                                                                                                for e in events.iter() {
+                                                                                                                    ev_col = ev_col.child(
+                                                                                                                        gpui_component::v_flex()
+                                                                                                                            .w_full()
+                                                                                                                            .p_3()
+                                                                                                                            .rounded_md()
+                                                                                                                            .bg(theme.secondary)
+                                                                                                                            .child(div().text_xs().text_color(theme.muted_foreground).child(format!("{} · {}", e.created_at, e.event_type)))
+                                                                                                                            .child(div().text_sm().child(e.summary.clone())),
+                                                                                                                    );
+                                                                                                                }
+                                                                                                                ev_col.overflow_y_scrollbar()
+                                                                                                            }),
+                                                                                                    )
+                                                                                            });
+                                                                                        }
+                                                                                    })
+                                                                                .label(format!("{} · {}", latest, cid.chars().take(8).collect::<String>()));
+                                                                            col = col.child(
+                                                                                gpui_component::v_flex()
+                                                                                    .w_full()
+                                                                                    .gap_1()
+                                                                                    .child(btn)
+                                                                                    .child(div().text_xs().text_color(theme.muted_foreground).child(summary)),
+                                                                            );
+                                                                        }
+                                                                    }
+                                                                    col
+                                                                }),
+                                                        )
+                                                })
+                                            }))
+                                    )
                                     .child(
                                         Button::new("new-conversation-top")
                                             .ghost()

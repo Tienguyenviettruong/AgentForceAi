@@ -2,6 +2,7 @@ use std::sync::Arc;
 use crate::core::traits::database::DatabasePort;
 use crate::infrastructure::message_bus::routing::{TeamBusRouter, TeamMessage, MessageType};
 use crate::providers::BaseProviderAdapter;
+use serde::Deserialize;
 use std::collections::HashMap;
 use tokio::sync::Mutex;
 use uuid::Uuid;
@@ -113,6 +114,7 @@ impl AgentWorker {
         }
 
         if let Some(handoff) = Self::parse_cross_team_handoff(&msg) {
+            self.persist_cross_team_case_event(&handoff, &msg);
             if handoff.handoff_type == "review_request" && !handoff.reply_to_team.is_empty() {
                 let handler = self.select_review_handler_agent_id().await;
                 if handler.as_deref() == Some(self.agent_id.as_str()) {
@@ -127,6 +129,62 @@ impl AgentWorker {
                 }
             }
         }
+    }
+
+    fn persist_cross_team_case_event(&self, handoff: &CrossTeamHandoff, msg: &TeamMessage) {
+        let owner_instance_id = if !handoff.reply_to_team.is_empty() {
+            handoff.reply_to_team.clone()
+        } else {
+            handoff.from_team.clone()
+        };
+        let target_instance_id = self.team_instance_id.clone();
+
+        let (event_type, summary) = if handoff.handoff_type == "status_event" {
+            let t = handoff
+                .event
+                .as_ref()
+                .and_then(|v| v.get("type"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("STATUS_EVENT")
+                .to_string();
+            let s = handoff
+                .event
+                .as_ref()
+                .and_then(|v| v.get("summary"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            (t, s)
+        } else {
+            (handoff.handoff_type.clone(), handoff.briefing_package.clone())
+        };
+
+        let summary = if summary.len() > 180 {
+            summary.chars().take(180).collect::<String>()
+        } else {
+            summary
+        };
+
+        let _ = self.db.upsert_cross_team_case(
+            &handoff.correlation_id,
+            &owner_instance_id,
+            &target_instance_id,
+            &event_type,
+            &summary,
+        );
+
+        let _ = self
+            .db
+            .insert_cross_team_case_event(&crate::core::models::CrossTeamCaseEventRecord {
+                id: Uuid::new_v4().to_string(),
+                correlation_id: handoff.correlation_id.clone(),
+                from_instance_id: handoff.from_team.clone(),
+                reply_to_instance_id: handoff.reply_to_team.clone(),
+                event_type,
+                summary,
+                payload: msg.metadata.clone(),
+                created_at: chrono::Utc::now().to_rfc3339(),
+            });
     }
 
     async fn try_execute_next_task(&self) {
@@ -376,14 +434,40 @@ impl AgentWorker {
             }
         }
         let payload_str = payload_str?;
-        let v: serde_json::Value = serde_json::from_str(&payload_str).ok()?;
-        Some(CrossTeamHandoff {
-            handoff_type: v.get("handoff_type").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-            correlation_id: v.get("correlation_id").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-            from_team: v.get("from_team").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-            reply_to_team: v.get("reply_to_team").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-            briefing_package: v.get("briefing_package").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-        })
+        serde_json::from_str::<CrossTeamHandoff>(&payload_str).ok()
+    }
+
+    async fn emit_status_event(
+        &self,
+        correlation_id: &str,
+        reply_to_team: &str,
+        event_type: &str,
+        summary: &str,
+    ) {
+        if reply_to_team.trim().is_empty() {
+            return;
+        }
+        let payload = serde_json::json!({
+            "handoff_type": "status_event",
+            "correlation_id": correlation_id,
+            "from_team": self.team_instance_id.clone(),
+            "reply_to_team": reply_to_team,
+            "briefing_package": "",
+            "event": {
+                "type": event_type,
+                "summary": summary,
+                "timestamp": chrono::Utc::now().to_rfc3339()
+            }
+        });
+        let payload_str = payload.to_string();
+        let mut msg = TeamMessage::new_broadcast(
+            reply_to_team.to_string(),
+            self.agent_id.clone(),
+            format!("[CROSS_TEAM_HANDOFF] {}", payload_str.clone()),
+        );
+        msg.metadata = Some(payload_str);
+        let _ = self.db.insert_team_message(&msg);
+        let _ = self.team_bus.route_message(msg).await;
     }
 
     async fn execute_cross_team_review(&self, original_msg: &TeamMessage, handoff: CrossTeamHandoff) {
@@ -501,6 +585,26 @@ impl AgentWorker {
     }
 
     async fn execute_cross_team_message(&self, original_msg: &TeamMessage, handoff: CrossTeamHandoff) {
+        let correlation_id = if handoff.correlation_id.is_empty() {
+            Uuid::new_v4().to_string()
+        } else {
+            handoff.correlation_id.clone()
+        };
+        self.emit_status_event(
+            &correlation_id,
+            &handoff.reply_to_team,
+            "ACK_RECEIVED",
+            "Received cross-team handoff.",
+        )
+        .await;
+        self.emit_status_event(
+            &correlation_id,
+            &handoff.reply_to_team,
+            "READBACK_CONFIRMED",
+            &format!("I understand the request: {}", handoff.briefing_package),
+        )
+        .await;
+
         let agent = match self.db.get_agent(&self.agent_id) {
             Ok(Some(a)) => a,
             _ => return,
@@ -541,12 +645,6 @@ impl AgentWorker {
                 roles.join(", ")
             ));
         }
-
-        let correlation_id = if handoff.correlation_id.is_empty() {
-            Uuid::new_v4().to_string()
-        } else {
-            handoff.correlation_id.clone()
-        };
 
         let user_text = format!(
             "Cross-team message\ncorrelation_id: {}\nfrom_instance: {}\noriginal_message: {}\n\nMessage:\n{}",
@@ -751,13 +849,18 @@ impl AgentWorker {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize)]
 struct CrossTeamHandoff {
     handoff_type: String,
     correlation_id: String,
     from_team: String,
     reply_to_team: String,
+    #[serde(default)]
     briefing_package: String,
+    #[serde(default)]
+    context: Option<serde_json::Value>,
+    #[serde(default)]
+    event: Option<serde_json::Value>,
 }
 
 pub struct WorkerManager {

@@ -34,6 +34,8 @@ pub struct TeamWorkspacePanel {
     pub(crate) workspace_path: Option<String>,
     pub(crate) cross_team_target_instance_id: Option<String>,
     pub(crate) cross_team_peer_instance_id: Option<String>,
+    pub(crate) cross_team_cases: Vec<crate::core::models::CrossTeamCaseRecord>,
+    pub(crate) selected_cross_team_case_id: Option<String>,
     pub(crate) show_history_sheet: bool,
     instances_expanded: bool,
     templates_expanded: bool,
@@ -83,6 +85,8 @@ impl TeamWorkspacePanel {
             workspace_path: None,
             cross_team_target_instance_id: None,
             cross_team_peer_instance_id: None,
+            cross_team_cases: Vec::new(),
+            selected_cross_team_case_id: None,
             show_history_sheet: false,
             instances_expanded: true,
             templates_expanded: true,
@@ -425,10 +429,19 @@ impl TeamWorkspacePanel {
                 .ok()
                 .flatten()
                 .filter(|v| !v.trim().is_empty());
+
+            self.cross_team_cases = db.list_cross_team_cases(instance_id, 50).unwrap_or_default();
+            if let Some(sel) = self.selected_cross_team_case_id.clone() {
+                if !self.cross_team_cases.iter().any(|c| c.correlation_id == sel) {
+                    self.selected_cross_team_case_id = None;
+                }
+            }
         } else {
             self.workspace_path = None;
             self.cross_team_target_instance_id = None;
             self.cross_team_peer_instance_id = None;
+            self.cross_team_cases = Vec::new();
+            self.selected_cross_team_case_id = None;
         }
 
         cx.notify();
