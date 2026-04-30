@@ -472,11 +472,29 @@ impl TeamWorkspacePanel {
                     #[cfg(any(target_os = "windows", target_os = "macos"))]
                     {
                         // Native Embedded Office View via WebView (macOS / Windows)
-                        if self.office_webview.is_none() {
-                            let builder = wry::WebViewBuilder::new();
-                            let html_content = include_str!("../../../../assets/office/index.html");
-                            if let Ok(view) = builder.with_html(html_content).build_as_child(window) {
-                                self.office_webview = Some(cx.new(|cx| gpui_component::webview::WebView::new(view, window, cx)));
+                        if self.office_webview.is_none() && !self.office_webview_init_attempted {
+                            self.office_webview_init_attempted = true;
+                            self.office_webview_error = None;
+
+                            let build_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                let builder = wry::WebViewBuilder::new();
+                                let html_content = include_str!("../../../../assets/office/index.html");
+                                builder.with_html(html_content).build_as_child(window)
+                            }));
+
+                            match build_result {
+                                Ok(Ok(view)) => {
+                                    self.office_webview = Some(cx.new(|cx| {
+                                        gpui_component::webview::WebView::new(view, window, cx)
+                                    }));
+                                }
+                                Ok(Err(e)) => {
+                                    self.office_webview_error = Some(e.to_string());
+                                }
+                                Err(_) => {
+                                    self.office_webview_error =
+                                        Some("WebView initialization panicked".to_string());
+                                }
                             }
                         }
 
@@ -488,10 +506,10 @@ impl TeamWorkspacePanel {
                                     for agent in &self.agents {
                                         if agent_ids.contains(&agent.id) {
                                             active_agents.push(serde_json::json!({
-                                                "id": agent.id,
-                                                "name": agent.name,
-                                                "provider": agent.provider,
-                                                "status": agent.status,
+                                                "id": agent.id.clone(),
+                                                "name": agent.name.clone(),
+                                                "provider": agent.provider.clone(),
+                                                "status": agent.status.clone(),
                                                 "message": None::<String>
                                             }));
                                         }
@@ -514,7 +532,11 @@ impl TeamWorkspacePanel {
                                 .flex()
                                 .justify_center()
                                 .items_center()
-                                .child("Failed to initialize WebView")
+                                .child(
+                                    self.office_webview_error
+                                        .as_deref()
+                                        .unwrap_or("Failed to initialize WebView"),
+                                )
                                 .into_any_element()
                         }
                     }
