@@ -55,6 +55,10 @@ pub struct TeamWorkspacePanel {
     pub(crate) debate_mode: bool,
     #[cfg(any(target_os = "windows", target_os = "macos"))]
     pub(crate) office_webview: Option<Entity<gpui_component::webview::WebView>>,
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    pub(crate) office_webview_error: Option<String>,
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    pub(crate) office_webview_init_attempted: bool,
 }
 
 impl TeamWorkspacePanel {
@@ -106,6 +110,10 @@ impl TeamWorkspacePanel {
             debate_mode: false,
             #[cfg(any(target_os = "windows", target_os = "macos"))]
             office_webview: None,
+            #[cfg(any(target_os = "windows", target_os = "macos"))]
+            office_webview_error: None,
+            #[cfg(any(target_os = "windows", target_os = "macos"))]
+            office_webview_init_attempted: false,
         };
 
         panel.reload(cx);
