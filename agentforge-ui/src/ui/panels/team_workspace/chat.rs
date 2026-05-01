@@ -536,16 +536,15 @@ impl TeamWorkspacePanel {
                                 .child(webview.clone())
                                 .into_any_element()
                         } else {
+                            let office_error_text = self.office_webview_error.clone().unwrap_or_else(|| {
+                                "Failed to initialize WebView. Try installing WebView runtime or set AGENTFORGE_DISABLE_OFFICE_WEBVIEW=1.".to_string()
+                            });
                             div()
                                 .flex_1()
                                 .flex()
                                 .justify_center()
                                 .items_center()
-                                .child(
-                                    self.office_webview_error
-                                        .as_deref()
-                                        .unwrap_or("Failed to initialize WebView. Try installing WebView runtime or set AGENTFORGE_DISABLE_OFFICE_WEBVIEW=1."),
-                                )
+                                .child(office_error_text)
                                 .into_any_element()
                         }
                     }
