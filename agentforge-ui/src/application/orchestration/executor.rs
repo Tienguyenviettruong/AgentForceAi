@@ -81,7 +81,9 @@ impl AgentExecutor {
                             "briefing_package": { "type": "string" },
                             "handoff_type": { "type": "string", "description": "e.g. review_request, review_response, handoff" },
                             "correlation_id": { "type": "string", "description": "optional id to link request/response" },
-                            "reply_to_team": { "type": "string", "description": "if set, receiver should reply to this team instance id" }
+                            "reply_to_team": { "type": "string", "description": "if set, receiver should reply to this team instance id" },
+                            "context": { "type": "object", "description": "optional handoff context (objective/decisions/open_questions/references/deliverables)" },
+                            "event": { "type": "object", "description": "optional status_event payload: {type, summary, timestamp}" }
                         },
                         "required": ["target_team", "briefing_package"]
                     }
@@ -332,17 +334,25 @@ impl AgentExecutor {
             let handoff_type = args.get("handoff_type").and_then(|v| v.as_str()).unwrap_or("handoff");
             let mut correlation_id = args.get("correlation_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
             let reply_to_team = args.get("reply_to_team").and_then(|v| v.as_str()).unwrap_or("");
+            let context = args.get("context").cloned();
+            let event = args.get("event").cloned();
             if correlation_id.is_empty() {
                 correlation_id = uuid::Uuid::new_v4().to_string();
             }
 
-            let payload = serde_json::json!({
+            let mut payload = serde_json::json!({
                 "handoff_type": handoff_type,
                 "correlation_id": correlation_id,
                 "from_team": self.team_instance_id.clone(),
                 "reply_to_team": reply_to_team,
                 "briefing_package": package
             });
+            if let Some(c) = context {
+                payload["context"] = c;
+            }
+            if let Some(e) = event {
+                payload["event"] = e;
+            }
             let payload_str = payload.to_string();
 
             let mut msg = crate::infrastructure::message_bus::routing::TeamMessage::new_broadcast(

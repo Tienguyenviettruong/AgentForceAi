@@ -180,6 +180,7 @@ impl AgentWorker {
                 correlation_id: handoff.correlation_id.clone(),
                 from_instance_id: handoff.from_team.clone(),
                 reply_to_instance_id: handoff.reply_to_team.clone(),
+                source_message_id: Some(msg.id.clone()),
                 event_type,
                 summary,
                 payload: msg.metadata.clone(),
@@ -632,7 +633,7 @@ impl AgentWorker {
             .build_dynamic_system_prompt(&team_id, &self.team_instance_id, &self.agent_id)
             .unwrap_or_default();
 
-        sys.push_str("\n\nCROSS-TEAM HANDOFF\nYou received a cross-team handoff from another instance.\nYou MUST (1) acknowledge the request, (2) create an execution plan for your team, and (3) delegate via create_subtasks if needed.\nAfter you have a plan, output a short summary update for the requester.\n");
+        sys.push_str("\n\nCROSS-TEAM HANDOFF\nYou received a cross-team handoff from another instance.\nYou MUST work like a human collaborator:\n(1) Confirm what you understand (brief readback).\n(2) Identify missing inputs/decisions; if anything critical is missing, ask clarifying questions and DO NOT create subtasks yet.\n(3) Only when inputs are sufficient: propose a concrete plan and then delegate via create_subtasks.\n(4) When you reach a plan, emit a status_event PLAN_CREATED; when you dispatch subtasks, emit SUBTASKS_DISPATCHED. Use handoff_to_team with handoff_type='status_event', preserve correlation_id, and set reply_to_team to the requester.\nAfter you have a plan (or questions), send a short message_response update back to the requester.\n");
         let role_mapping = self
             .db
             .get_instance_agent_name_mapping(&self.team_instance_id)

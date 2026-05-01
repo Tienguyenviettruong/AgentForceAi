@@ -15,9 +15,9 @@ pub struct CrossTeamCaseEventRecord {
     pub correlation_id: String,
     pub from_instance_id: String,
     pub reply_to_instance_id: String,
+    pub source_message_id: Option<String>,
     pub event_type: String,
     pub summary: String,
     pub payload: Option<String>,
     pub created_at: String,
 }
-
