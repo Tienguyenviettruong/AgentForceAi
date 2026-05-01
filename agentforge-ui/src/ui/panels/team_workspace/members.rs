@@ -158,6 +158,15 @@ impl TeamWorkspacePanel {
                         "in_progress" => IconName::LoaderCircle,
                         _ => IconName::Asterisk,
                     };
+                    let (task_title, task_desc) = t
+                        .payload
+                        .as_deref()
+                        .and_then(|p| serde_json::from_str::<crate::application::orchestration::core::DagTask>(p).ok())
+                        .map(|dt| (dt.name, dt.description))
+                        .unwrap_or_else(|| {
+                            let short_id = t.id.split(':').next_back().unwrap_or(&t.id);
+                            (short_id.to_string(), String::new())
+                        });
                     tasks_list = tasks_list.child(
                         div()
                             .p(px(12.))
@@ -174,9 +183,7 @@ impl TeamWorkspacePanel {
                                         div()
                                             .font_weight(gpui::FontWeight::SEMIBOLD)
                                             .text_size(px(13.))
-                                            .child(
-                                                t.id.split(':').next_back().unwrap_or(&t.id).to_string(),
-                                            ),
+                                            .child(task_title),
                                     )
                                     .child(
                                         h_flex()
@@ -185,12 +192,12 @@ impl TeamWorkspacePanel {
                                             .child(status_icon),
                                     ),
                             )
-                            .when_some(t.payload.clone(), |d, payload| {
+                            .when(!task_desc.is_empty(), |d| {
                                 d.child(
                                     div()
                                         .text_size(px(12.))
                                         .text_color(theme.muted_foreground)
-                                        .child(payload),
+                                        .child(task_desc),
                                 )
                             }),
                     );
@@ -326,8 +333,10 @@ impl TeamWorkspacePanel {
             // Header
             .child(
                 div()
+                    .h(px(36.))
+                    .flex()
+                    .items_center()
                     .pl(px(16.))
-                    // .py(px(2.))
                     .pr(px(8.))
                     .border_b(px(1.))
                     .border_color(theme.border)
@@ -423,7 +432,9 @@ impl TeamWorkspacePanel {
             // Tabs
             .child(
                 h_flex()
+                    .h(px(36.))
                     .w_full()
+                    .items_center()
                     .border_b(px(1.))
                     .border_color(theme.border)
                     .child(

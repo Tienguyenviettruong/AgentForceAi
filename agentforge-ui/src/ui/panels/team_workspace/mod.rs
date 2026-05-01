@@ -1,8 +1,8 @@
 use crate::core::traits::database::DatabasePort;
 use gpui::AppContext;
 use gpui::{
-    div, px, Context, Entity, FocusHandle, IntoElement, ListAlignment, ListState,
-    ParentElement, Render, Styled, Window,
+    div, px, Context, Entity, FocusHandle, IntoElement, ListAlignment, ListState, ParentElement,
+    Render, Styled, Window,
 };
 use gpui_component::button::ButtonVariants;
 use gpui_component::resizable::{h_resizable, resizable_panel};
@@ -148,9 +148,7 @@ impl TeamWorkspacePanel {
         if !content.starts_with("[CROSS_TEAM_HANDOFF]") {
             return None;
         }
-        let payload_str = content
-            .trim_start_matches("[CROSS_TEAM_HANDOFF]")
-            .trim();
+        let payload_str = content.trim_start_matches("[CROSS_TEAM_HANDOFF]").trim();
         serde_json::from_str::<serde_json::Value>(payload_str).ok()
     }
 
@@ -177,8 +175,13 @@ impl TeamWorkspacePanel {
                 if correlation_id.is_empty() {
                     continue;
                 }
-                first_index_for_correlation.entry(correlation_id.clone()).or_insert(ix);
-                thread_indices.entry(correlation_id.clone()).or_default().push(ix);
+                first_index_for_correlation
+                    .entry(correlation_id.clone())
+                    .or_insert(ix);
+                thread_indices
+                    .entry(correlation_id.clone())
+                    .or_default()
+                    .push(ix);
                 let handoff_type = payload
                     .get("handoff_type")
                     .and_then(|v| v.as_str())
@@ -255,10 +258,16 @@ impl TeamWorkspacePanel {
             }
             if let Some(cid) = by_first_index.get(&ix) {
                 let count = thread_indices.get(cid).map(|v| v.len()).unwrap_or(1);
-                let (from_team, preview, has_request, has_response, handoff_type) = thread_meta
-                    .get(cid)
-                    .cloned()
-                    .unwrap_or_else(|| ("".to_string(), "".to_string(), false, false, "handoff".to_string()));
+                let (from_team, preview, has_request, has_response, handoff_type) =
+                    thread_meta.get(cid).cloned().unwrap_or_else(|| {
+                        (
+                            "".to_string(),
+                            "".to_string(),
+                            false,
+                            false,
+                            "handoff".to_string(),
+                        )
+                    });
                 rows.push(ChatDisplayRow::CrossTeamThreadHeader {
                     correlation_id: cid.clone(),
                     handoff_type,
@@ -325,8 +334,10 @@ impl TeamWorkspacePanel {
                                     .or_else(|| this.selected_session_id.clone());
                                 if let Some(session_id) = session_id {
                                     {
-                                        let history =
-                                            this.chat_histories.entry(session_id.clone()).or_default();
+                                        let history = this
+                                            .chat_histories
+                                            .entry(session_id.clone())
+                                            .or_default();
                                         history.push(crate::providers::ChatMessage {
                                             role: "assistant".into(),
                                             content: msg.content.into(),
@@ -385,11 +396,11 @@ impl TeamWorkspacePanel {
                     .ok()
                     .and_then(|ids| ids.first().cloned());
                 if let Some(agent_id) = agent_id {
-                    if let Ok(session_id) =
-                        self.team_service.create_session_for_instance(instance_id, &agent_id)
+                    if let Ok(session_id) = self
+                        .team_service
+                        .create_session_for_instance(instance_id, &agent_id)
                     {
-                        let _ = db
-                            .ensure_session(&session_id, &agent_id, Some(instance_id));
+                        let _ = db.ensure_session(&session_id, &agent_id, Some(instance_id));
                         sessions = self
                             .team_service
                             .list_sessions_for_instance(instance_id)
@@ -410,9 +421,7 @@ impl TeamWorkspacePanel {
             if let Some(session_id) = next_session_id {
                 self.instance_active_session
                     .insert(instance_id.clone(), session_id.clone());
-                let msgs = db
-                    .get_conversation_turns(&session_id)
-                    .unwrap_or_default();
+                let msgs = db.get_conversation_turns(&session_id).unwrap_or_default();
                 self.chat_histories.insert(session_id.clone(), msgs);
                 let history_len = self
                     .chat_histories
@@ -448,9 +457,15 @@ impl TeamWorkspacePanel {
                 .flatten()
                 .filter(|v| !v.trim().is_empty());
 
-            self.cross_team_cases = db.list_cross_team_cases(instance_id, 50).unwrap_or_default();
+            self.cross_team_cases = db
+                .list_cross_team_cases(instance_id, 50)
+                .unwrap_or_default();
             if let Some(sel) = self.selected_cross_team_case_id.clone() {
-                if !self.cross_team_cases.iter().any(|c| c.correlation_id == sel) {
+                if !self
+                    .cross_team_cases
+                    .iter()
+                    .any(|c| c.correlation_id == sel)
+                {
                     self.selected_cross_team_case_id = None;
                 }
             }
@@ -488,7 +503,8 @@ impl Render for TeamWorkspacePanel {
 
         let breadcrumb_title = if let Some(instance_id) = &self.selected_instance_id {
             let inst = self.instances.iter().find(|i| i.id == *instance_id);
-            inst.map(|i| i.name.clone()).unwrap_or_else(|| instance_id[..std::cmp::min(6, instance_id.len())].to_string())
+            inst.map(|i| i.name.clone())
+                .unwrap_or_else(|| instance_id[..std::cmp::min(6, instance_id.len())].to_string())
         } else {
             "Agent Workspaces".to_string()
         };
@@ -506,7 +522,11 @@ impl Render for TeamWorkspacePanel {
                 h_flex()
                     .gap(px(8.))
                     .child(div().text_color(theme.muted_foreground).child("Teams"))
-                    .child(div().text_color(theme.muted_foreground).child(">"))
+                    .child(
+                        div()
+                            .text_color(theme.muted_foreground)
+                            .child(IconName::ChevronRight),
+                    )
                     .child(div().child(breadcrumb_title)),
             )
             .child(

@@ -9,7 +9,7 @@ use gpui_component::{ActiveTheme as _,
 use std::sync::Arc;
 use chrono::Utc;
 use std::collections::HashSet;
-use gpui_component::v_flex;
+use gpui_component::{v_flex, h_flex};
 use crate::core::traits::database::DatabasePort;
 use crate::db::{Team, Agent};
 
@@ -66,8 +66,9 @@ pub fn open_new_team_dialog<V: 'static>(
                     .pt(px(8.))
                     .child(div().font_weight(FontWeight::BOLD).child("Agents"))
                     .child(
-                        v_flex()
+                        h_flex()
                             .gap(px(8.))
+                            .flex_wrap()
                             .max_h(px(280.))
                             .id("new-team-agent-scroll")
                             .overflow_y_scroll()
@@ -75,15 +76,26 @@ pub fn open_new_team_dialog<V: 'static>(
                                 let agent_id = agent.id.clone();
                                 let is_selected = state.read(cx).selected_agents.contains(&agent_id);
                                 let state_clone = state.clone();
-                                gpui_component::checkbox::Checkbox::new(SharedString::from(agent.id.clone()))
-                                    .label(agent.name.clone())
-                                    .checked(is_selected)
-                                    .on_click(move |checked, _window, cx| {
+                                let theme = cx.theme().clone();
+                                
+                                div()
+                                    .id(SharedString::from(format!("agent-tag-{}", agent.id)))
+                                    .px(px(12.))
+                                    .py(px(4.))
+                                    .rounded_full()
+                                    .border(px(1.))
+                                    .border_color(if is_selected { theme.primary } else { theme.border })
+                                    .bg(if is_selected { theme.primary.opacity(0.1) } else { theme.transparent })
+                                    .text_color(if is_selected { theme.primary } else { theme.muted_foreground })
+                                    .text_size(px(13.))
+                                    .cursor_pointer()
+                                    .child(agent.name.clone())
+                                    .on_click(move |_ev, _window, cx| {
                                         state_clone.update(cx, |s, cx| {
-                                            if *checked {
-                                                s.selected_agents.insert(agent_id.clone());
-                                            } else {
+                                            if s.selected_agents.contains(&agent_id) {
                                                 s.selected_agents.remove(&agent_id);
+                                            } else {
+                                                s.selected_agents.insert(agent_id.clone());
                                             }
                                             cx.notify();
                                         });
@@ -648,8 +660,9 @@ pub fn open_manage_team_dialog<V: 'static>(
             .title("Manage Team Members")
             .w(px(400.))
             .child(
-                v_flex()
-                    .gap(px(12.))
+                h_flex()
+                    .gap(px(8.))
+                    .flex_wrap()
                     .py(px(8.))
                     .max_h(px(400.))
                     .id("manage-team-scroll").overflow_y_scroll()
@@ -657,17 +670,26 @@ pub fn open_manage_team_dialog<V: 'static>(
                         let agent_id = agent.id.clone();
                         let is_selected = state.read(cx).selected_agents.contains(&agent_id);
                         let state_clone = state.clone();
+                        let theme = cx.theme().clone();
                         
-                        // We use a checkbox for each agent
-                        gpui_component::checkbox::Checkbox::new(SharedString::from(agent.id.clone()))
-                            .label(agent.name.clone())
-                            .checked(is_selected)
-                            .on_click(move |checked, _window, cx| {
+                        div()
+                            .id(SharedString::from(format!("manage-agent-tag-{}", agent.id)))
+                            .px(px(12.))
+                            .py(px(4.))
+                            .rounded_full()
+                            .border(px(1.))
+                            .border_color(if is_selected { theme.primary } else { theme.border })
+                            .bg(if is_selected { theme.primary.opacity(0.1) } else { theme.transparent })
+                            .text_color(if is_selected { theme.primary } else { theme.muted_foreground })
+                            .text_size(px(13.))
+                            .cursor_pointer()
+                            .child(agent.name.clone())
+                            .on_click(move |_ev, _window, cx| {
                                 state_clone.update(cx, |s, cx| {
-                                    if *checked {
-                                        s.selected_agents.insert(agent_id.clone());
-                                    } else {
+                                    if s.selected_agents.contains(&agent_id) {
                                         s.selected_agents.remove(&agent_id);
+                                    } else {
+                                        s.selected_agents.insert(agent_id.clone());
                                     }
                                     cx.notify();
                                 });

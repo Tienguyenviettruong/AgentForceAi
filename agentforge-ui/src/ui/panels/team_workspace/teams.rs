@@ -147,7 +147,15 @@ impl TeamWorkspacePanel {
             .config
             .as_deref()
             .unwrap_or("No configuration provided");
-        let time = &instance.created_at;
+        let time_display = {
+            let raw = &instance.created_at;
+            chrono::DateTime::parse_from_rfc3339(raw)
+                .map(|dt| {
+                    let local = dt.with_timezone(&chrono::Local);
+                    local.format("%Y-%m-%d %H:%M").to_string()
+                })
+                .unwrap_or_else(|_| raw.clone())
+        };
         let status = instance.state.as_deref().unwrap_or("Initializing");
 
         div()
@@ -318,7 +326,7 @@ impl TeamWorkspacePanel {
                         div()
                             .text_size(px(12.))
                             .text_color(theme.muted_foreground.opacity(0.5))
-                            .child(time.to_string()),
+                            .child(time_display),
                     ),
             )
     }

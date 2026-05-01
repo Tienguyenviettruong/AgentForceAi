@@ -6,7 +6,7 @@ use gpui::{StatefulInteractiveElement, Entity,
 };
 use gpui_component::dock::PanelEvent;
 use gpui_component::dock::{Panel, TitleStyle};
-use gpui_component::{ActiveTheme as _, Icon, IconName, Placement, WindowExt as _, scroll::ScrollableElement};
+use gpui_component::{ActiveTheme as _, Icon, IconName, Placement, WindowExt as _, scroll::ScrollableElement, h_flex, v_flex};
 use gpui_component::text::TextView;
 use std::sync::Arc;
 use urlencoding::encode;
@@ -915,18 +915,19 @@ impl KnowledgePanel {
                     .flex_1()
                     .p_4()
                     .id("scroll-sheet").overflow_y_scroll()
-                    .flex_col()
-                    .gap_4()
-                    .child(div().text_sm().font_weight(gpui::FontWeight::SEMIBOLD).text_color(theme.muted_foreground).child("OVERVIEW"))
-                    .child(self.render_stat_card(IconName::File, "Total Documents".to_string(), format!("{}", self.items.len()), cx))
-                    .child(self.render_stat_card(IconName::Info, "Connections".to_string(), "0".to_string(), cx))
-                    .child(self.render_stat_card(IconName::Info, "Tags Used".to_string(), "0".to_string(), cx))
-                    .child(self.render_stat_card(IconName::Info, "Orphan Nodes".to_string(), "0".to_string(), cx))
                     .child(
-                        div()
+                        v_flex()
+                            .gap(px(12.))
+                            .child(div().text_sm().font_weight(gpui::FontWeight::SEMIBOLD).text_color(theme.muted_foreground).child("OVERVIEW"))
+                            .child(self.render_stat_card(IconName::File, "Total Documents".to_string(), format!("{}", self.items.len()), cx))
+                            .child(self.render_stat_card(IconName::Info, "Connections".to_string(), "0".to_string(), cx))
+                            .child(self.render_stat_card(IconName::Info, "Tags Used".to_string(), "0".to_string(), cx))
+                            .child(self.render_stat_card(IconName::Info, "Orphan Nodes".to_string(), "0".to_string(), cx))
+                    )
+                    .child(
+                        v_flex()
                             .mt_4()
-                            .flex_col()
-                            .gap_2()
+                            .gap(px(12.))
                             .child(div().text_sm().font_weight(gpui::FontWeight::SEMIBOLD).text_color(theme.muted_foreground).child("RECENT ACTIVITY"))
                             .child(
                                 div()

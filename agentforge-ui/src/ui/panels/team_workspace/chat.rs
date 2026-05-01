@@ -37,7 +37,7 @@ impl TeamWorkspacePanel {
             "Team Chat".to_string()
         };
 
-        let sessions_row = div().into_any_element();
+
 
         div()
             .h_full()
@@ -50,6 +50,9 @@ impl TeamWorkspacePanel {
                 // Tabs 
                 div()
                     .w_full()
+                    .h(px(36.))
+                    .flex()
+                    .items_center()
                     .border_b(px(1.))
                     .border_color(theme.border)
                     .bg(theme.background)
@@ -72,52 +75,52 @@ impl TeamWorkspacePanel {
                     )
             )
             .child(
-                // Top Header (Quality and Compliance Testing style)
-                div()
+                // Top Header
+                h_flex()
                     .w_full()
-                    .flex()
-                    .flex_col()
+                    .h(px(36.))
+                    .items_center()
+                    .justify_between()
+                    .px(px(12.))
                     .border_b(px(1.))
                     .border_color(theme.border)
                     .bg(theme.background)
                     .child(
                         h_flex()
-                            .justify_between()
+                            .gap(px(8.))
                             .items_center()
-                            .p(px(16.))
                             .child(
-                                h_flex()
-                                    .gap(px(12.))
-                                    .child(
-                                        div()
-                                            .w(px(32.))
-                                            .h(px(32.))
-                                            .rounded_lg()
-                                            .bg(gpui::red().opacity(0.2))
-                                            .text_color(gpui::red())
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .child(IconName::User)
-                                    )
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .flex_col()
-                                            .child(div().font_weight(gpui::FontWeight::BOLD).text_size(px(15.)).child(title))
-                                            .child(
-                                                h_flex()
-                                                    .gap(px(6.))
-                                                    .text_color(theme.muted_foreground)
-                                                    .text_size(px(12.))
-                                                    .child("Supervisor Chat")
-                                                    .child(div().text_color(gpui::green()).ml(px(4.)).child("Active"))
-                                            )
-                                    )
+                                div()
+                                    .w(px(24.))
+                                    .h(px(24.))
+                                    .rounded_md()
+                                    .bg(gpui::red().opacity(0.2))
+                                    .text_color(gpui::red())
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .child(IconName::User)
+                            )
+                            .child(
+                                div()
+                                    .font_weight(gpui::FontWeight::BOLD)
+                                    .text_size(px(14.))
+                                    .child(title)
                             )
                             .child(
                                 h_flex()
-                                    .gap(px(4.))
+                                    .gap(px(6.))
+                                    .text_color(theme.muted_foreground)
+                                    .text_size(px(12.))
+                                    .child("\u{2014}")
+                                    .child("Supervisor Chat")
+                                    .child(div().text_color(gpui::green()).child("Active"))
+                            )
+                    )
+                    .child(
+                        h_flex()
+                            .gap(px(4.))
+                            .items_center()
                                     .child(
                                         Button::new("cross-team-target-top")
                                             .ghost()
@@ -451,7 +454,7 @@ impl TeamWorkspacePanel {
                                     .child(
                                         Switch::new("debate-mode")
                                             .checked(self.debate_mode)
-                                            .label("Debate Mode")
+                                            // .label("Debate Mode")
                                             .tooltip("Enable agent debate before execution")
                                             .on_click({
                                                 let view = view.clone();
@@ -463,9 +466,7 @@ impl TeamWorkspacePanel {
                                                 }
                                             })
                                     )
-                            )
                     )
-                    .child(sessions_row)
             )
             .child(
                 if self.chat_active_tab == 3 {
