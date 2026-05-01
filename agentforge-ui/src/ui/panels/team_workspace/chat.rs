@@ -486,6 +486,15 @@ impl TeamWorkspacePanel {
                                 self.office_webview_init_attempted = true;
                                 self.office_webview_error = None;
 
+                                crate::ui::framework::reentrancy::set_office_webview_init_in_progress(true);
+                                struct OfficeWebviewInitGuard;
+                                impl Drop for OfficeWebviewInitGuard {
+                                    fn drop(&mut self) {
+                                        crate::ui::framework::reentrancy::set_office_webview_init_in_progress(false);
+                                    }
+                                }
+                                let _guard = OfficeWebviewInitGuard;
+
                                 let build_result =
                                     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                                         let builder = wry::WebViewBuilder::new();

@@ -178,6 +178,9 @@ impl KnowledgePanel {
         cx.spawn(async move |view, cx| {
             loop {
                 cx.background_executor().timer(std::time::Duration::from_secs(3)).await;
+                if crate::ui::framework::reentrancy::office_webview_init_in_progress() {
+                    continue;
+                }
                 if cx.update(|cx| {
                     let _ = view.update(cx, |this: &mut Self, cx| {
                         this.reload_items(cx);
@@ -192,6 +195,9 @@ impl KnowledgePanel {
         cx.spawn(async move |view, cx| {
             loop {
                 cx.background_executor().timer(std::time::Duration::from_millis(16)).await;
+                if crate::ui::framework::reentrancy::office_webview_init_in_progress() {
+                    continue;
+                }
                 if cx.update(|cx| {
                     let _ = view.update(cx, |this: &mut Self, cx| {
                         if this.node_positions.is_empty() { return; }

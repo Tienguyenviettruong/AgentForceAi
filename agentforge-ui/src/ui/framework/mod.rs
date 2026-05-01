@@ -10,3 +10,4 @@ pub mod onboarding;
 pub mod command_palette;
 pub mod i18n;
 pub mod export;
+pub mod reentrancy;
