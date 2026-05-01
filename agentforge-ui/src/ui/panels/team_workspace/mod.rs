@@ -59,6 +59,8 @@ pub struct TeamWorkspacePanel {
     pub(crate) office_webview_error: Option<String>,
     #[cfg(any(target_os = "windows", target_os = "macos"))]
     pub(crate) office_webview_init_attempted: bool,
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    pub(crate) office_webview_disabled: bool,
 }
 
 impl TeamWorkspacePanel {
@@ -114,6 +116,14 @@ impl TeamWorkspacePanel {
             office_webview_error: None,
             #[cfg(any(target_os = "windows", target_os = "macos"))]
             office_webview_init_attempted: false,
+            #[cfg(any(target_os = "windows", target_os = "macos"))]
+            office_webview_disabled: std::env::var("AGENTFORGE_DISABLE_OFFICE_WEBVIEW")
+                .ok()
+                .map(|v| {
+                    let v = v.to_ascii_lowercase();
+                    v == "1" || v == "true" || v == "yes"
+                })
+                .unwrap_or(false),
         };
 
         panel.reload(cx);

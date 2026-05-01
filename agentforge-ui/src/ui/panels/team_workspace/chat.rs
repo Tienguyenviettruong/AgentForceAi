@@ -472,6 +472,15 @@ impl TeamWorkspacePanel {
                     #[cfg(any(target_os = "windows", target_os = "macos"))]
                     {
                         // Native Embedded Office View via WebView (macOS / Windows)
+                        if self.office_webview_disabled {
+                            div()
+                                .flex_1()
+                                .flex()
+                                .justify_center()
+                                .items_center()
+                                .child("Office WebView is disabled (AGENTFORGE_DISABLE_OFFICE_WEBVIEW=1).")
+                                .into_any_element()
+                        } else
                         if self.office_webview.is_none() && !self.office_webview_init_attempted {
                             self.office_webview_init_attempted = true;
                             self.office_webview_error = None;
@@ -535,7 +544,7 @@ impl TeamWorkspacePanel {
                                 .child(
                                     self.office_webview_error
                                         .as_deref()
-                                        .unwrap_or("Failed to initialize WebView"),
+                                        .unwrap_or("Failed to initialize WebView. Try installing WebView runtime or set AGENTFORGE_DISABLE_OFFICE_WEBVIEW=1."),
                                 )
                                 .into_any_element()
                         }
