@@ -480,72 +480,81 @@ impl TeamWorkspacePanel {
                                 .items_center()
                                 .child("Office WebView is disabled (AGENTFORGE_DISABLE_OFFICE_WEBVIEW=1).")
                                 .into_any_element()
-                        } else
-                        if self.office_webview.is_none() && !self.office_webview_init_attempted {
-                            self.office_webview_init_attempted = true;
-                            self.office_webview_error = None;
+                        } else {
+                            if self.office_webview.is_none() && !self.office_webview_init_attempted {
+                                self.office_webview_init_attempted = true;
+                                self.office_webview_error = None;
 
-                            let build_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                let builder = wry::WebViewBuilder::new();
-                                let html_content = include_str!("../../../../assets/office/index.html");
-                                builder.with_html(html_content).build_as_child(window)
-                            }));
-
-                            match build_result {
-                                Ok(Ok(view)) => {
-                                    self.office_webview = Some(cx.new(|cx| {
-                                        gpui_component::webview::WebView::new(view, window, cx)
+                                let build_result =
+                                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                        let builder = wry::WebViewBuilder::new();
+                                        let html_content =
+                                            include_str!("../../../../assets/office/index.html");
+                                        builder.with_html(html_content).build_as_child(window)
                                     }));
-                                }
-                                Ok(Err(e)) => {
-                                    self.office_webview_error = Some(e.to_string());
-                                }
-                                Err(_) => {
-                                    self.office_webview_error =
-                                        Some("WebView initialization panicked".to_string());
+
+                                match build_result {
+                                    Ok(Ok(view)) => {
+                                        self.office_webview = Some(cx.new(|cx| {
+                                            gpui_component::webview::WebView::new(view, window, cx)
+                                        }));
+                                    }
+                                    Ok(Err(e)) => {
+                                        self.office_webview_error = Some(e.to_string());
+                                    }
+                                    Err(_) => {
+                                        self.office_webview_error =
+                                            Some("WebView initialization panicked".to_string());
+                                    }
                                 }
                             }
-                        }
 
-                        if let Some(webview) = &self.office_webview {
-                            // Update webview state
-                            if let Some(instance_id) = &self.selected_instance_id {
-                                if let Ok(agent_ids) = crate::AppState::global(cx).db.get_instance_agents(instance_id) {
-                                    let mut active_agents = Vec::new();
-                                    for agent in &self.agents {
-                                        if agent_ids.contains(&agent.id) {
-                                            active_agents.push(serde_json::json!({
-                                                "id": agent.id.clone(),
-                                                "name": agent.name.clone(),
-                                                "provider": agent.provider.clone(),
-                                                "status": agent.status.clone(),
-                                                "message": None::<String>
-                                            }));
+                            if let Some(webview) = &self.office_webview {
+                                if let Some(instance_id) = &self.selected_instance_id {
+                                    if let Ok(agent_ids) = crate::AppState::global(cx)
+                                        .db
+                                        .get_instance_agents(instance_id)
+                                    {
+                                        let mut active_agents = Vec::new();
+                                        for agent in &self.agents {
+                                            if agent_ids.contains(&agent.id) {
+                                                active_agents.push(serde_json::json!({
+                                                    "id": agent.id.clone(),
+                                                    "name": agent.name.clone(),
+                                                    "provider": agent.provider.clone(),
+                                                    "status": agent.status.clone(),
+                                                    "message": None::<String>
+                                                }));
+                                            }
+                                        }
+                                        if let Ok(json) = serde_json::to_string(&active_agents) {
+                                            let script = format!(
+                                                "window.updateAgents && window.updateAgents({});",
+                                                json
+                                            );
+                                            let _ = webview.read(cx).evaluate_script(&script);
                                         }
                                     }
-                                    if let Ok(json) = serde_json::to_string(&active_agents) {
-                                        let script = format!("window.updateAgents && window.updateAgents({});", json);
-                                        let _ = webview.read(cx).evaluate_script(&script);
-                                    }
                                 }
-                            }
 
-                            div()
-                                .flex_1()
-                                .w_full()
-                                .child(webview.clone())
-                                .into_any_element()
-                        } else {
-                            let office_error_text = self.office_webview_error.clone().unwrap_or_else(|| {
-                                "Failed to initialize WebView. Try installing WebView runtime or set AGENTFORGE_DISABLE_OFFICE_WEBVIEW=1.".to_string()
-                            });
-                            div()
-                                .flex_1()
-                                .flex()
-                                .justify_center()
-                                .items_center()
-                                .child(office_error_text)
-                                .into_any_element()
+                                div()
+                                    .flex_1()
+                                    .w_full()
+                                    .child(webview.clone())
+                                    .into_any_element()
+                            } else {
+                                let office_error_text =
+                                    self.office_webview_error.clone().unwrap_or_else(|| {
+                                        "Failed to initialize WebView. Try installing WebView runtime or set AGENTFORGE_DISABLE_OFFICE_WEBVIEW=1.".to_string()
+                                    });
+                                div()
+                                    .flex_1()
+                                    .flex()
+                                    .justify_center()
+                                    .items_center()
+                                    .child(office_error_text)
+                                    .into_any_element()
+                            }
                         }
                     }
 
