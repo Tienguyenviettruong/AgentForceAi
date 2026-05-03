@@ -556,6 +556,7 @@ impl AgentWorker {
             self.team_instance_id.clone(),
             agent.id.clone(),
             None,
+            None,
         );
 
         let result = executor.execute_task(history).await.ok().unwrap_or_default();
@@ -698,6 +699,7 @@ impl AgentWorker {
             self.team_bus.clone(),
             self.team_instance_id.clone(),
             agent.id.clone(),
+            None,
             None,
         );
 

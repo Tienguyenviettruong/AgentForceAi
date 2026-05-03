@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use crate::core::traits::database::DatabasePort;
 use crate::providers::BaseProviderAdapter;
 use crate::core::models::chat::ChatMessage;
@@ -22,6 +23,7 @@ pub struct AgentExecutor {
     team_bus: Arc<TeamBusRouter>,
     team_instance_id: String,
     agent_id: String,
+    cancel_flag: Option<Arc<AtomicBool>>,
     stream_callback: Option<Arc<dyn Fn(String) + Send + Sync>>,
 }
 
@@ -33,12 +35,16 @@ impl AgentExecutor {
         team_bus: Arc<TeamBusRouter>,
         team_instance_id: String,
         agent_id: String,
+        cancel_flag: Option<Arc<AtomicBool>>,
         stream_callback: Option<Arc<dyn Fn(String) + Send + Sync>>,
     ) -> Self {
-        Self { provider, mcp_registry, db, team_bus, team_instance_id, agent_id, stream_callback }
+        Self { provider, mcp_registry, db, team_bus, team_instance_id, agent_id, cancel_flag, stream_callback }
     }
 
     pub async fn execute_task(&self, mut history: Vec<ChatMessage>) -> Result<String> {
+        if self.cancel_flag.as_ref().is_some_and(|f| f.load(Ordering::SeqCst)) {
+            return Ok("Cancelled.".to_string());
+        }
         let mut iteration = 0;
         let max_iterations = 5;
 
@@ -201,12 +207,18 @@ impl AgentExecutor {
 
 
         while iteration < max_iterations {
+            if self.cancel_flag.as_ref().is_some_and(|f| f.load(Ordering::SeqCst)) {
+                return Ok("Cancelled.".to_string());
+            }
             let mut response_text = String::new();
             let mut tool_calls = Vec::<ToolCall>::new();
             let mut token_usage = crate::core::models::TokenUsage::default();
             let mut stream = self.provider.send_message_stream(history.clone()).await?;
             use futures::StreamExt;
             while let Some(chunk) = stream.next().await {
+                if self.cancel_flag.as_ref().is_some_and(|f| f.load(Ordering::SeqCst)) {
+                    return Ok("Cancelled.".to_string());
+                }
                 match chunk {
                     Ok(crate::core::models::chat::StreamChunk::Text(t)) => {
                         response_text.push_str(&t);

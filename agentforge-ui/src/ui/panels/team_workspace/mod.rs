@@ -51,6 +51,9 @@ pub struct TeamWorkspacePanel {
     chat_list_state: ListState,
     pub(crate) attached_files: Vec<String>,
     pub(crate) is_workspace_dropdown_open: bool,
+    pub(crate) is_slash_dropdown_open: bool,
+    pub(crate) is_generating: bool,
+    pub(crate) generation_cancel_flag: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     pub(crate) recent_workspaces: Vec<String>,
     pub(crate) debate_mode: bool,
     #[cfg(any(target_os = "windows", target_os = "macos"))]
@@ -108,6 +111,9 @@ impl TeamWorkspacePanel {
             chat_list_state: ListState::new(0, ListAlignment::Bottom, px(200.)),
             attached_files: Vec::new(),
             is_workspace_dropdown_open: false,
+            is_slash_dropdown_open: false,
+            is_generating: false,
+            generation_cancel_flag: None,
             recent_workspaces: Vec::new(),
             debate_mode: false,
             #[cfg(any(target_os = "windows", target_os = "macos"))]

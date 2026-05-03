@@ -13,6 +13,8 @@ use gpui::{
 use gpui_component::{h_flex, ActiveTheme as _, Sizable as _, StyledExt as _, Icon, IconName};
 use gpui_component::scroll::ScrollableElement as _;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use chrono::Utc;
 
 use super::TeamWorkspacePanel;
 use crate::ui::components::markdown::render_markdown_message;
@@ -974,9 +976,92 @@ impl TeamWorkspacePanel {
                                 .child(gpui_component::divider::Divider::vertical().h(px(16.)))
                                 .child(
                                     div()
-                                        .id("slash-cmd")
-                                        .cursor_pointer()
-                                        .child(div().text_sm().font_weight(gpui::FontWeight::BOLD).text_color(theme.muted_foreground).child("/"))
+                                        .relative()
+                                        .child(
+                                            div()
+                                                .id("slash-cmd")
+                                                .cursor_pointer()
+                                                .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
+                                                    this.is_slash_dropdown_open = !this.is_slash_dropdown_open;
+                                                    if this.is_slash_dropdown_open {
+                                                        this.is_workspace_dropdown_open = false;
+                                                    }
+                                                    cx.notify();
+                                                }))
+                                                .child(div().text_sm().font_weight(gpui::FontWeight::BOLD).text_color(theme.muted_foreground).child("/"))
+                                        )
+                                        .child(
+                                            if self.is_slash_dropdown_open {
+                                                div()
+                                                    .absolute()
+                                                    .bottom(px(32.))
+                                                    .left(px(-8.))
+                                                    .w(px(260.))
+                                                    .bg(theme.background)
+                                                    .border_1()
+                                                    .border_color(theme.border)
+                                                    .rounded_md()
+                                                    .shadow_lg()
+                                                    .p_2()
+                                                    .flex_col()
+                                                    .gap_1()
+                                                    .child(div().text_sm().text_color(theme.muted_foreground).child("Commands"))
+                                                    .child(
+                                                        div()
+                                                            .id("slash-item-plan")
+                                                            .px_2()
+                                                            .py_1()
+                                                            .rounded_md()
+                                                            .hover(|s| s.bg(theme.secondary))
+                                                            .cursor_pointer()
+                                                            .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, window, cx| {
+                                                                this.chat_input_state.update(cx, |state, cx| {
+                                                                    state.set_value("/plan ", window, cx);
+                                                                });
+                                                                this.is_slash_dropdown_open = false;
+                                                                cx.notify();
+                                                            }))
+                                                            .child(div().text_sm().child("/plan — tạo kế hoạch"))
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .id("slash-item-spec")
+                                                            .px_2()
+                                                            .py_1()
+                                                            .rounded_md()
+                                                            .hover(|s| s.bg(theme.secondary))
+                                                            .cursor_pointer()
+                                                            .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, window, cx| {
+                                                                this.chat_input_state.update(cx, |state, cx| {
+                                                                    state.set_value("/spec ", window, cx);
+                                                                });
+                                                                this.is_slash_dropdown_open = false;
+                                                                cx.notify();
+                                                            }))
+                                                            .child(div().text_sm().child("/spec — tạo đặc tả"))
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .id("slash-item-run")
+                                                            .px_2()
+                                                            .py_1()
+                                                            .rounded_md()
+                                                            .hover(|s| s.bg(theme.secondary))
+                                                            .cursor_pointer()
+                                                            .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, window, cx| {
+                                                                this.chat_input_state.update(cx, |state, cx| {
+                                                                    state.set_value("/run", window, cx);
+                                                                });
+                                                                this.is_slash_dropdown_open = false;
+                                                                cx.notify();
+                                                            }))
+                                                            .child(div().text_sm().child("/run — chạy task pending"))
+                                                    )
+                                                    .into_any_element()
+                                            } else {
+                                                div().into_any_element()
+                                            }
+                                        )
                                 )
                                 .child(
                                     div()
@@ -1002,7 +1087,7 @@ impl TeamWorkspacePanel {
                             Button::new("send-chat")
                                 .rounded_full()
                                 .bg(theme.accent)
-                                .icon(IconName::ArrowUp)
+                                .icon(if self.is_generating { IconName::Close } else { IconName::ArrowUp })
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.handle_send_chat(window, cx);
                                 }))
@@ -1127,11 +1212,24 @@ impl TeamWorkspacePanel {
 
     pub(crate) fn handle_send_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let db = crate::AppState::global(cx).db.clone();
-        let text = self.chat_input_state.read(cx).text().to_string();
-        let text = text.trim().to_string();
-        if text.is_empty() {
+        if self.is_generating {
+            if let Some(flag) = &self.generation_cancel_flag {
+                flag.store(true, Ordering::SeqCst);
+                window.push_notification(
+                    (gpui_component::notification::NotificationType::Info, "Stopping generation..."),
+                    cx,
+                );
+            }
             return;
         }
+
+        let raw_text = self.chat_input_state.read(cx).text().to_string();
+        let raw_text = raw_text.trim().to_string();
+        if raw_text.is_empty() {
+            return;
+        }
+        self.is_slash_dropdown_open = false;
+        cx.notify();
         
         let instance_id = if let Some(id) = &self.selected_instance_id {
             id.clone()
@@ -1169,6 +1267,44 @@ impl TeamWorkspacePanel {
                 .unwrap_or_default();
             session_id
         };
+
+        let mut text = raw_text.clone();
+        if raw_text == "/" {
+            window.push_notification(
+                (gpui_component::notification::NotificationType::Info, "Commands: /plan <goal>, /spec <goal>, /run"),
+                cx,
+            );
+            return;
+        }
+        if let Some(rest) = raw_text.strip_prefix("/plan") {
+            let goal = rest.trim();
+            if goal.is_empty() {
+                window.push_notification(
+                    (gpui_component::notification::NotificationType::Info, "Dùng: /plan <mục tiêu>"),
+                    cx,
+                );
+                return;
+            }
+            let ts = Utc::now().format("%Y%m%d_%H%M%S").to_string();
+            text = format!(
+                "Tạo kế hoạch thực thi cho mục tiêu sau:\n{}\n\nYêu cầu:\n- Trả về checklist các bước + rủi ro + tiêu chí hoàn thành.\n- Nếu phù hợp, tạo subtasks theo vai trò bằng create_subtasks.\n- Xuất plan ra file markdown theo format ```file:...```.\n\n```file:docs/plans/plan_{}.md\n# Plan\n\n## Goal\n{}\n\n## Plan\n- \n\n## Risks\n- \n\n## Done\n- \n```\n",
+                goal, ts, goal
+            );
+        } else if let Some(rest) = raw_text.strip_prefix("/spec") {
+            let goal = rest.trim();
+            if goal.is_empty() {
+                window.push_notification(
+                    (gpui_component::notification::NotificationType::Info, "Dùng: /spec <mục tiêu>"),
+                    cx,
+                );
+                return;
+            }
+            let ts = Utc::now().format("%Y%m%d_%H%M%S").to_string();
+            text = format!(
+                "Tạo đặc tả (spec) cho mục tiêu sau:\n{}\n\nYêu cầu:\n- Spec rõ scope/in-scope/out-of-scope, API/behavior, dữ liệu, edge cases.\n- Nêu open_questions nếu thiếu thông tin.\n- Xuất spec ra file markdown theo format ```file:...```.\n\n```file:docs/specs/spec_{}.md\n# Spec\n\n## Objective\n{}\n\n## Scope\n\n## Requirements\n\n## API\n\n## Data Model\n\n## Edge Cases\n\n## Open Questions\n\n```\n",
+                goal, ts, goal
+            );
+        }
 
         {
             let history = self.chat_histories.entry(session_id.clone()).or_default();
@@ -1259,7 +1395,7 @@ impl TeamWorkspacePanel {
         }
 
 
-        let is_run_command = text == "/run";
+        let is_run_command = raw_text == "/run";
         let mode_clone = mode;
         let db_clone = db.clone();
         let _text_clone = text.clone();
@@ -1498,6 +1634,9 @@ impl TeamWorkspacePanel {
             return;
         }
         
+        let cancel_flag = Arc::new(AtomicBool::new(false));
+        self.is_generating = true;
+        self.generation_cancel_flag = Some(cancel_flag.clone());
         self.chat_list_state = gpui::ListState::new(display_len, gpui::ListAlignment::Bottom, px(200.));
         self.chat_input_state.update(cx, |state, cx| {
             state.set_value("", window, cx);
@@ -1518,10 +1657,23 @@ impl TeamWorkspacePanel {
 let db_clone = db.clone();
         let team_bus_for_ai = self.team_bus.clone();
         let team_bus_clone = self.team_bus.clone();
+        let workspace_dir_for_ai = workspace_dir_clone.clone();
+        let cancel_flag_for_ai = cancel_flag.clone();
         cx.spawn(async move |_, cx| {
             use crate::providers::BaseProviderAdapter;
 
             let mut use_mock = false;
+
+            if cancel_flag_for_ai.load(Ordering::SeqCst) {
+                let _ = cx.update(|cx| {
+                    view.update(cx, |this: &mut Self, cx| {
+                        this.is_generating = false;
+                        this.generation_cancel_flag = None;
+                        cx.notify();
+                    });
+                });
+                return;
+            }
 
             if let Ok(agent_ids) = db.get_instance_agents(&instance_id_for_ai) {
                 let agent_ids: Vec<String> = agent_ids;
@@ -1545,6 +1697,9 @@ let db_clone = db.clone();
                 };
 
                 for (step_ix, (agent_id, debate_role)) in debate_steps.iter().enumerate() {
+                    if cancel_flag_for_ai.load(Ordering::SeqCst) {
+                        break;
+                    }
                     if !agent_id.is_empty() {
                         let agent_id = agent_id.clone();
                         if let Ok(Some(agent)) = db.get_agent(&agent_id) {
@@ -1656,6 +1811,7 @@ let db_clone = db.clone();
                                         .detach();
                                         
                                         let mcp_registry = std::sync::Arc::new(crate::infrastructure::mcp::registry::McpToolRegistry::new(db.clone()));
+                                        let cancel_for_stream = cancel_flag_for_ai.clone();
                                         let executor = crate::application::orchestration::executor::AgentExecutor::new(
                                             std::sync::Arc::new(adapter) as std::sync::Arc<dyn crate::providers::BaseProviderAdapter>,
                                             mcp_registry,
@@ -1663,18 +1819,25 @@ let db_clone = db.clone();
                                             team_bus_clone.clone(),
                                             instance_id.clone(),
                                             agent.id.clone(),
+                                            Some(cancel_flag_for_ai.clone()),
                                             Some(std::sync::Arc::new(move |partial| {
-                                                let _ = stream_tx.send(partial);
+                                                if !cancel_for_stream.load(Ordering::SeqCst) {
+                                                    let _ = stream_tx.send(partial);
+                                                }
                                             })),
                                         );
                                         
                                         match executor.execute_task(full_history).await {
                                             Ok(full_text) => {
                                                 let _ = db_clone.update_team_message_content(&office_msg_id, &full_text);
+                                            if cancel_flag_for_ai.load(Ordering::SeqCst) {
+                                                let _ = db_clone.update_team_message_delivery_status(&office_msg_id, "cancelled");
+                                            } else {
                                                 let _ = db_clone.update_team_message_delivery_status(&office_msg_id, "delivered");
+                                            }
                                                 
                                                 let chat_service = crate::application::services::chat_service::ChatService::new(db_clone.clone(), team_bus_clone.clone());
-                                                let (files_written, clean_text) = chat_service.parse_and_write_files(&full_text, None);
+                                            let (files_written, clean_text) = chat_service.parse_and_write_files(&full_text, workspace_dir_for_ai.as_ref());
                                                 if !files_written.is_empty() {
                                                     let _ = db_clone.update_team_message_content(&office_msg_id, &clean_text);
                                                 }
@@ -1773,6 +1936,7 @@ let db_clone = db.clone();
                                         .detach();
                                         
                                         let mcp_registry = std::sync::Arc::new(crate::infrastructure::mcp::registry::McpToolRegistry::new(db.clone()));
+                                        let cancel_for_stream = cancel_flag_for_ai.clone();
                                         let executor = crate::application::orchestration::executor::AgentExecutor::new(
                                             std::sync::Arc::new(adapter) as std::sync::Arc<dyn crate::providers::BaseProviderAdapter>,
                                             mcp_registry,
@@ -1780,18 +1944,25 @@ let db_clone = db.clone();
                                             team_bus_clone.clone(),
                                             instance_id.clone(),
                                             agent.id.clone(),
+                                        Some(cancel_flag_for_ai.clone()),
                                             Some(std::sync::Arc::new(move |partial| {
-                                                let _ = stream_tx.send(partial);
+                                                if !cancel_for_stream.load(Ordering::SeqCst) {
+                                                    let _ = stream_tx.send(partial);
+                                                }
                                             })),
                                         );
                                         
                                         match executor.execute_task(full_history).await {
                                             Ok(full_text) => {
                                                 let _ = db_clone.update_team_message_content(&office_msg_id, &full_text);
+                                            if cancel_flag_for_ai.load(Ordering::SeqCst) {
+                                                let _ = db_clone.update_team_message_delivery_status(&office_msg_id, "cancelled");
+                                            } else {
                                                 let _ = db_clone.update_team_message_delivery_status(&office_msg_id, "delivered");
+                                            }
                                                 
                                                 let chat_service = crate::application::services::chat_service::ChatService::new(db_clone.clone(), team_bus_clone.clone());
-                                                let (files_written, clean_text) = chat_service.parse_and_write_files(&full_text, None);
+                                            let (files_written, clean_text) = chat_service.parse_and_write_files(&full_text, workspace_dir_for_ai.as_ref());
                                                 if !files_written.is_empty() {
                                                     let _ = db_clone.update_team_message_content(&office_msg_id, &clean_text);
                                                 }
@@ -1889,6 +2060,7 @@ let db_clone = db.clone();
                                         .detach();
                                         
                                         let mcp_registry = std::sync::Arc::new(crate::infrastructure::mcp::registry::McpToolRegistry::new(db.clone()));
+                                        let cancel_for_stream = cancel_flag_for_ai.clone();
                                         let executor = crate::application::orchestration::executor::AgentExecutor::new(
                                             std::sync::Arc::new(adapter) as std::sync::Arc<dyn crate::providers::BaseProviderAdapter>,
                                             mcp_registry,
@@ -1896,18 +2068,25 @@ let db_clone = db.clone();
                                             team_bus_clone.clone(),
                                             instance_id.clone(),
                                             agent.id.clone(),
+                                        Some(cancel_flag_for_ai.clone()),
                                             Some(std::sync::Arc::new(move |partial| {
-                                                let _ = stream_tx.send(partial);
+                                                if !cancel_for_stream.load(Ordering::SeqCst) {
+                                                    let _ = stream_tx.send(partial);
+                                                }
                                             })),
                                         );
                                         
                                         match executor.execute_task(full_history).await {
                                             Ok(full_text) => {
                                                 let _ = db_clone.update_team_message_content(&office_msg_id, &full_text);
+                                            if cancel_flag_for_ai.load(Ordering::SeqCst) {
+                                                let _ = db_clone.update_team_message_delivery_status(&office_msg_id, "cancelled");
+                                            } else {
                                                 let _ = db_clone.update_team_message_delivery_status(&office_msg_id, "delivered");
+                                            }
                                                 
                                                 let chat_service = crate::application::services::chat_service::ChatService::new(db_clone.clone(), team_bus_clone.clone());
-                                                let (files_written, clean_text) = chat_service.parse_and_write_files(&full_text, None);
+                                            let (files_written, clean_text) = chat_service.parse_and_write_files(&full_text, workspace_dir_for_ai.as_ref());
                                                 if !files_written.is_empty() {
                                                     let _ = db_clone.update_team_message_content(&office_msg_id, &clean_text);
                                                 }
@@ -2006,6 +2185,7 @@ let db_clone = db.clone();
                                         
                                         
                                         let mcp_registry = std::sync::Arc::new(crate::infrastructure::mcp::registry::McpToolRegistry::new(db.clone()));
+                                        let cancel_for_stream = cancel_flag_for_ai.clone();
                                         let executor = crate::application::orchestration::executor::AgentExecutor::new(
                                             std::sync::Arc::new(adapter) as std::sync::Arc<dyn crate::providers::BaseProviderAdapter>,
                                             mcp_registry,
@@ -2013,17 +2193,24 @@ let db_clone = db.clone();
                                             team_bus_clone.clone(),
                                             instance_id.clone(),
                                             agent.id.clone(),
+                                        Some(cancel_flag_for_ai.clone()),
                                             Some(std::sync::Arc::new(move |partial| {
-                                                let _ = stream_tx.send(partial);
+                                                if !cancel_for_stream.load(Ordering::SeqCst) {
+                                                    let _ = stream_tx.send(partial);
+                                                }
                                             })),
                                         );
                                         match executor.execute_task(full_history).await {
                                             Ok(full_text) => {
                                                 let _ = db_clone.update_team_message_content(&office_msg_id, &full_text);
+                                            if cancel_flag_for_ai.load(Ordering::SeqCst) {
+                                                let _ = db_clone.update_team_message_delivery_status(&office_msg_id, "cancelled");
+                                            } else {
                                                 let _ = db_clone.update_team_message_delivery_status(&office_msg_id, "delivered");
+                                            }
                                                 
                                                 let chat_service = crate::application::services::chat_service::ChatService::new(db_clone.clone(), team_bus_clone.clone());
-                                                let (files_written, clean_text) = chat_service.parse_and_write_files(&full_text, None);
+                                            let (files_written, clean_text) = chat_service.parse_and_write_files(&full_text, workspace_dir_for_ai.as_ref());
                                                 if !files_written.is_empty() {
                                                     let _ = db_clone.update_team_message_content(&office_msg_id, &clean_text);
                                                 }
@@ -2121,6 +2308,7 @@ let db_clone = db.clone();
                                         .detach();
                                         
                                         let mcp_registry = std::sync::Arc::new(crate::infrastructure::mcp::registry::McpToolRegistry::new(db.clone()));
+                                        let cancel_for_stream = cancel_flag_for_ai.clone();
                                         let executor = crate::application::orchestration::executor::AgentExecutor::new(
                                             std::sync::Arc::new(adapter) as std::sync::Arc<dyn crate::providers::BaseProviderAdapter>,
                                             mcp_registry,
@@ -2128,18 +2316,25 @@ let db_clone = db.clone();
                                             team_bus_clone.clone(),
                                             instance_id.clone(),
                                             agent.id.clone(),
+                                        Some(cancel_flag_for_ai.clone()),
                                             Some(std::sync::Arc::new(move |partial| {
-                                                let _ = stream_tx.send(partial);
+                                                if !cancel_for_stream.load(Ordering::SeqCst) {
+                                                    let _ = stream_tx.send(partial);
+                                                }
                                             })),
                                         );
                                         
                                         match executor.execute_task(full_history).await {
                                             Ok(full_text) => {
                                                 let _ = db_clone.update_team_message_content(&office_msg_id, &full_text);
+                                            if cancel_flag_for_ai.load(Ordering::SeqCst) {
+                                                let _ = db_clone.update_team_message_delivery_status(&office_msg_id, "cancelled");
+                                            } else {
                                                 let _ = db_clone.update_team_message_delivery_status(&office_msg_id, "delivered");
+                                            }
                                                 
                                                 let chat_service = crate::application::services::chat_service::ChatService::new(db_clone.clone(), team_bus_clone.clone());
-                                                let (files_written, clean_text) = chat_service.parse_and_write_files(&full_text, None);
+                                            let (files_written, clean_text) = chat_service.parse_and_write_files(&full_text, workspace_dir_for_ai.as_ref());
                                                 if !files_written.is_empty() {
                                                     let _ = db_clone.update_team_message_content(&office_msg_id, &clean_text);
                                                 }
@@ -2179,6 +2374,13 @@ let db_clone = db.clone();
                 }
             }
 
+            let _ = cx.update(|cx| {
+                view.update(cx, |this: &mut Self, cx| {
+                    this.is_generating = false;
+                    this.generation_cancel_flag = None;
+                    cx.notify();
+                });
+            });
             if use_mock {
                 let _ = cx.update(|cx| {
                     view.update(cx, |this: &mut Self, cx| {
