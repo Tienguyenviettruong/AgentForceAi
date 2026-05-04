@@ -15,6 +15,10 @@ use gpui_component::{
     v_flex, WindowExt,
 };
 
+fn sanitize_base_url(s: &str) -> String {
+    s.trim().trim_matches('`').trim().to_string()
+}
+
 // ── Component ─────────────────────────────────────────────────────────────
 
 pub struct CustomProviderSection {
@@ -68,7 +72,7 @@ impl CustomProviderSection {
                     let label = val.as_str();
                     if let Some(template) = provider_templates.iter().find(|t| t.label == label) {
                         let models: Vec<SharedString> = template.models.iter().map(|m: &String| SharedString::from(m.clone())).collect();
-                        let url = template.default_base_url.clone();
+                        let url = sanitize_base_url(&template.default_base_url);
 
                         this.model_select.update(cx, |state, cx| {
                             state.set_items(models, window, cx);
@@ -90,7 +94,7 @@ impl CustomProviderSection {
         let provider_name = self.provider_select.read(cx).selected_value();
         let model = self.model_select.read(cx).selected_value();
         let api_key = self.api_key_input.read(cx).text().to_string();
-        let base_url = self.base_url_input.read(cx).text().to_string();
+        let base_url = sanitize_base_url(&self.base_url_input.read(cx).text().to_string());
 
         if provider_name.is_none() || model.is_none() {
             window.push_notification(
