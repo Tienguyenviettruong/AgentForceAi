@@ -54,19 +54,17 @@ impl ActionRecorder {
         let workflow_id = uuid::Uuid::new_v4().to_string();
         let workflow_name = format!("Learned Workflow {}", Utc::now().timestamp());
         
-        let definition = if let Some(llm) = llm_provider {
-            let messages = vec![ChatMessage {
-                role: "user".to_string().into(),
-                content: prompt.into(),
-                agent_name: None,
-            }];
-            
-            llm.send_message(messages)
-                .await
-                .map(|response| response.content.to_string())
-                .unwrap_or_else(|_e| self.generate_mock_dag(&workflow_id, &workflow_name, &logs))
-        } else {
-            self.generate_mock_dag(&workflow_id, &workflow_name, &logs)
+        let Some(llm) = llm_provider else {
+            return Ok("No provider configured to generate iFlow. Configure an AI provider first.".to_string());
+        };
+        let messages = vec![ChatMessage {
+            role: "user".to_string().into(),
+            content: prompt.into(),
+            agent_name: None,
+        }];
+        let definition = match llm.send_message(messages).await {
+            Ok(response) => response.content.to_string(),
+            Err(e) => return Ok(format!("Failed to generate iFlow via provider: {}", e)),
         };
 
         let wf = WorkflowRecord {
