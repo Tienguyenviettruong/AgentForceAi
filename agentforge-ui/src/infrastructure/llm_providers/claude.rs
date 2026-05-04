@@ -95,6 +95,7 @@ impl BaseProviderAdapter for ClaudeAdapter {
                 .clone()
                 .or_else(|| env::var("ANTHROPIC_BASE_URL").ok())
                 .unwrap_or_else(|| "https://api.anthropic.com/v1".to_string());
+            let base_url = base_url.trim().trim_matches('`').to_string();
             let endpoint = if base_url.contains("/messages") {
                 base_url
             } else {
@@ -209,6 +210,7 @@ impl BaseProviderAdapter for ClaudeAdapter {
                 .clone()
                 .or_else(|| env::var("ANTHROPIC_BASE_URL").ok())
                 .unwrap_or_else(|| "https://api.anthropic.com/v1".to_string());
+            let base_url = base_url.trim().trim_matches('`').to_string();
             let endpoint = if base_url.contains("/messages") {
                 base_url
             } else {
@@ -251,6 +253,7 @@ impl BaseProviderAdapter for ClaudeAdapter {
             let rt = get_runtime();
 
             rt.spawn(async move {
+                let mut usage = TokenUsage::default();
                 let mut es = match reqwest_eventsource::EventSource::new(req) {
                     Ok(es) => es,
                     Err(e) => {
@@ -265,12 +268,41 @@ impl BaseProviderAdapter for ClaudeAdapter {
                         Ok(reqwest_eventsource::Event::Message(message)) => {
                             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&message.data) {
                                 if let Some(type_str) = v["type"].as_str() {
-                                    if type_str == "content_block_delta" {
+                                    if type_str == "message_start" {
+                                        if let Some(u) = v
+                                            .get("message")
+                                            .and_then(|m| m.get("usage"))
+                                            .and_then(|u| u.as_object())
+                                        {
+                                            usage.input_tokens = u
+                                                .get("input_tokens")
+                                                .and_then(|v| v.as_u64())
+                                                .unwrap_or(0) as usize;
+                                            let out = u
+                                                .get("output_tokens")
+                                                .and_then(|v| v.as_u64())
+                                                .unwrap_or(0) as usize;
+                                            if out > usage.output_tokens {
+                                                usage.output_tokens = out;
+                                            }
+                                        }
+                                    } else if type_str == "message_delta" {
+                                        if let Some(u) = v.get("usage").and_then(|u| u.as_object()) {
+                                            let out = u
+                                                .get("output_tokens")
+                                                .and_then(|v| v.as_u64())
+                                                .unwrap_or(0) as usize;
+                                            if out > usage.output_tokens {
+                                                usage.output_tokens = out;
+                                            }
+                                        }
+                                    } else if type_str == "content_block_delta" {
                                         if let Some(text) = v["delta"]["text"].as_str() {
                                             let _ = tx.unbounded_send(Ok(crate::providers::StreamChunk::Text(text.to_string())));
                                         }
                                     } else if type_str == "message_stop" {
-                                        let _ = tx.unbounded_send(Ok(crate::providers::StreamChunk::Done(crate::providers::TokenUsage::default())));
+                                        usage.total_tokens = usage.input_tokens + usage.output_tokens;
+                                        let _ = tx.unbounded_send(Ok(crate::providers::StreamChunk::Done(usage)));
                                         break;
                                     }
                                 }

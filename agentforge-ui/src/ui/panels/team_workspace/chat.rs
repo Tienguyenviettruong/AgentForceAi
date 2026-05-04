@@ -32,6 +32,16 @@ fn provider_kind(p: &crate::db::Provider) -> &str {
     }
 }
 
+fn format_session_label(s: &crate::core::models::session::SessionRecord) -> String {
+    let short_id = &s.id[..std::cmp::min(6, s.id.len())];
+    let dt = chrono::DateTime::parse_from_rfc3339(&s.created_at)
+        .ok()
+        .map(|d| d.with_timezone(&chrono::Local))
+        .map(|d| d.format("%m-%d %H:%M").to_string())
+        .unwrap_or_else(|| "Session".to_string());
+    format!("{} • {}", dt, short_id)
+}
+
 impl TeamWorkspacePanel {
     pub(crate) fn render_chat_column(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
@@ -74,8 +84,6 @@ impl TeamWorkspacePanel {
                     .child(
                         TabBar::new("chat_tabs")
                             .child(Tab::new().icon(IconName::SquareTerminal).label("Chat"))
-                            .child(Tab::new().icon(IconName::ChartPie).label("Status Overview"))
-                            .child(Tab::new().icon(IconName::Inbox).label("Output"))
                             .child(Tab::new().icon(IconName::Building2).label("Office"))
                             .selected_index(self.chat_active_tab)
                             .on_click({
@@ -484,7 +492,7 @@ impl TeamWorkspacePanel {
                     )
             )
             .child(
-                if self.chat_active_tab == 3 {
+                if self.chat_active_tab == 1 {
                     #[cfg(any(target_os = "windows", target_os = "macos"))]
                     {
                         // Native Embedded Office View via WebView (macOS / Windows)
@@ -1257,7 +1265,7 @@ impl TeamWorkspacePanel {
                             for s in &self.sessions_for_instance {
                                 let session_id = s.id.clone();
                                 let is_selected = self.selected_session_id.as_deref() == Some(session_id.as_str());
-                                let label = format!("S-{}", &session_id[..std::cmp::min(6, session_id.len())]);
+                                let label = format_session_label(s);
                                 sessions_list = sessions_list.child(
                                     gpui_component::button::Button::new(gpui::SharedString::from(format!("session-{}", session_id)))
                                         .small()

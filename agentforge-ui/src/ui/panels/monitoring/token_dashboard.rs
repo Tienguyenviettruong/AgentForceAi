@@ -43,6 +43,14 @@ impl TokenDashboard {
     }
 }
 
+fn format_tokens(n: usize) -> String {
+    if n >= 1000 {
+        format!("{}K", n / 1000)
+    } else {
+        n.to_string()
+    }
+}
+
 
 
 
@@ -65,7 +73,7 @@ impl Render for TokenDashboard {
                     .border_color(theme.border)
                     .justify_between()
                     .child(div().child(agent_name.clone()))
-                    .child(div().font_bold().child(format!("{} tokens", tokens)))
+                    .child(div().font_bold().child(format!("{} tokens", format_tokens(*tokens))))
             );
         }
         if self.tokens_per_agent.is_empty() {
@@ -86,7 +94,7 @@ impl Render for TokenDashboard {
                     .border_color(theme.border)
                     .justify_between()
                     .child(div().child(format!("Instance {}", instance_id)))
-                    .child(div().font_bold().child(format!("{} tokens", tokens)))
+                    .child(div().font_bold().child(format!("{} tokens", format_tokens(*tokens))))
             );
         }
         if self.tokens_per_instance.is_empty() {
@@ -144,7 +152,7 @@ impl Render for TokenDashboard {
                             .bg(theme.secondary)
                             .flex_1()
                             .child(div().text_sm().text_color(theme.muted_foreground).child("Daily Token Usage"))
-                            .child(div().text_2xl().font_bold().child(self.daily_tokens.to_string()).mt_2())
+                            .child(div().text_2xl().font_bold().child(format_tokens(self.daily_tokens)).mt_2())
                             .child(
                                 div()
                                     .text_sm()
@@ -200,16 +208,23 @@ impl Render for TokenDashboard {
                     .mt_4()
                     .overflow_y_scrollbar()
                     .child(
-                        v_flex()
-                            .gap_2()
-                            .child(div().font_bold().text_lg().child("Tokens by Agent"))
-                            .child(agent_list)
-                    )
-                    .child(
-                        v_flex()
-                            .gap_2()
-                            .child(div().font_bold().text_lg().child("Tokens by Instance"))
-                            .child(instance_list)
+                        h_flex()
+                            .w_full()
+                            .gap_4()
+                            .child(
+                                v_flex()
+                                    .flex_1()
+                                    .gap_2()
+                                    .child(div().font_bold().text_lg().child("Tokens by Agent"))
+                                    .child(agent_list)
+                            )
+                            .child(
+                                v_flex()
+                                    .flex_1()
+                                    .gap_2()
+                                    .child(div().font_bold().text_lg().child("Tokens by Instance"))
+                                    .child(instance_list)
+                            )
                     )
                     .child(
                         v_flex()
@@ -220,5 +235,4 @@ impl Render for TokenDashboard {
             )
     }
 }
-
 
