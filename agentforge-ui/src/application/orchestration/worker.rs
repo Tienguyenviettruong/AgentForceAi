@@ -7,6 +7,19 @@ use std::collections::HashMap;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
+fn provider_kind(p: &crate::db::Provider) -> &str {
+    match p.provider_name.as_str() {
+        "openrouter" | "claude" | "gemini" | "codex" | "opencode" => p.provider_name.as_str(),
+        _ => match p.adapter_type.as_str() {
+            "AnthropicAdapter" => "claude",
+            "OpenAIAdapter" => "codex",
+            "GeminiAdapter" => "gemini",
+            "OpenCodeAdapter" => "opencode",
+            _ => p.provider_name.as_str(),
+        },
+    }
+}
+
 pub struct AgentWorker {
     pub agent_id: String,
     pub team_instance_id: String,
@@ -195,9 +208,19 @@ impl AgentWorker {
         let Ok(Some(agent)) = self.db.get_agent(&self.agent_id) else {
             return;
         };
-        let Ok(Some(provider_config)) = self.db.get_provider_by_name(&agent.provider) else {
-            return;
-        };
+        let provider_config = self
+            .db
+            .get_provider_by_name(&agent.provider)
+            .ok()
+            .flatten()
+            .or_else(|| {
+                self.db.list_providers().ok().and_then(|providers| {
+                    providers
+                        .into_iter()
+                        .find(|p| provider_kind(p) == agent.provider.as_str())
+                })
+            });
+        let Some(provider_config) = provider_config else { return; };
 
         let team_id = self
             .db
@@ -313,7 +336,7 @@ impl AgentWorker {
             },
         ];
 
-        let adapter: Option<Arc<dyn BaseProviderAdapter>> = match provider_config.provider_name.as_str() {
+        let adapter: Option<Arc<dyn BaseProviderAdapter>> = match provider_kind(&provider_config) {
             "openrouter" => {
                 let mut a = crate::providers::openrouter::OpenRouterAdapter::new();
                 if a.initialize(&provider_config).is_ok() { Some(Arc::new(a)) } else { None }
@@ -476,10 +499,19 @@ impl AgentWorker {
             _ => return,
         };
 
-        let provider_config = match self.db.get_provider_by_name(&agent.provider) {
-            Ok(Some(p)) => p,
-            _ => return,
-        };
+        let provider_config = self
+            .db
+            .get_provider_by_name(&agent.provider)
+            .ok()
+            .flatten()
+            .or_else(|| {
+                self.db.list_providers().ok().and_then(|providers| {
+                    providers
+                        .into_iter()
+                        .find(|p| provider_kind(p) == agent.provider.as_str())
+                })
+            });
+        let Some(provider_config) = provider_config else { return; };
 
         let team_id = self.db
             .list_instances()
@@ -521,7 +553,7 @@ impl AgentWorker {
             },
         ];
 
-        let adapter: Option<Arc<dyn crate::providers::BaseProviderAdapter>> = match provider_config.provider_name.as_str() {
+        let adapter: Option<Arc<dyn crate::providers::BaseProviderAdapter>> = match provider_kind(&provider_config) {
             "openrouter" => {
                 let mut a = crate::providers::openrouter::OpenRouterAdapter::new();
                 if a.initialize(&provider_config).is_ok() { Some(Arc::new(a)) } else { None }
@@ -611,10 +643,19 @@ impl AgentWorker {
             _ => return,
         };
 
-        let provider_config = match self.db.get_provider_by_name(&agent.provider) {
-            Ok(Some(p)) => p,
-            _ => return,
-        };
+        let provider_config = self
+            .db
+            .get_provider_by_name(&agent.provider)
+            .ok()
+            .flatten()
+            .or_else(|| {
+                self.db.list_providers().ok().and_then(|providers| {
+                    providers
+                        .into_iter()
+                        .find(|p| provider_kind(p) == agent.provider.as_str())
+                })
+            });
+        let Some(provider_config) = provider_config else { return; };
 
         let team_id = self
             .db
@@ -665,7 +706,7 @@ impl AgentWorker {
             },
         ];
 
-        let adapter: Option<Arc<dyn crate::providers::BaseProviderAdapter>> = match provider_config.provider_name.as_str() {
+        let adapter: Option<Arc<dyn crate::providers::BaseProviderAdapter>> = match provider_kind(&provider_config) {
             "openrouter" => {
                 let mut a = crate::providers::openrouter::OpenRouterAdapter::new();
                 if a.initialize(&provider_config).is_ok() { Some(Arc::new(a)) } else { None }
@@ -770,10 +811,19 @@ impl AgentWorker {
             _ => return,
         };
 
-        let provider_config = match self.db.get_provider_by_name(&agent.provider) {
-            Ok(Some(p)) => p,
-            _ => return,
-        };
+        let provider_config = self
+            .db
+            .get_provider_by_name(&agent.provider)
+            .ok()
+            .flatten()
+            .or_else(|| {
+                self.db.list_providers().ok().and_then(|providers| {
+                    providers
+                        .into_iter()
+                        .find(|p| provider_kind(p) == agent.provider.as_str())
+                })
+            });
+        let Some(provider_config) = provider_config else { return; };
 
         let mut history = Vec::new();
         if let Some(system_prompt) = agent.system_prompt.clone() {

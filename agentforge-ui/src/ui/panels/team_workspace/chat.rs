@@ -19,6 +19,19 @@ use chrono::Utc;
 use super::TeamWorkspacePanel;
 use crate::ui::components::markdown::render_markdown_message;
 
+fn provider_kind(p: &crate::db::Provider) -> &str {
+    match p.provider_name.as_str() {
+        "openrouter" | "claude" | "gemini" | "codex" | "opencode" => p.provider_name.as_str(),
+        _ => match p.adapter_type.as_str() {
+            "AnthropicAdapter" => "claude",
+            "OpenAIAdapter" => "codex",
+            "GeminiAdapter" => "gemini",
+            "OpenCodeAdapter" => "opencode",
+            _ => p.provider_name.as_str(),
+        },
+    }
+}
+
 impl TeamWorkspacePanel {
     pub(crate) fn render_chat_column(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
@@ -1532,7 +1545,18 @@ impl TeamWorkspacePanel {
                     cx.spawn(async move |cx| {
                         loop {
                             let Ok(Some(agent)) = db_clone_agent.get_agent(&agent_id_clone) else { break; };
-                            let Ok(Some(provider_config)) = db_clone_agent.get_provider_by_name(&agent.provider) else { break; };
+                            let provider_config = db_clone_agent
+                                .get_provider_by_name(&agent.provider)
+                                .ok()
+                                .flatten()
+                                .or_else(|| {
+                                    db_clone_agent.list_providers().ok().and_then(|providers| {
+                                        providers
+                                            .into_iter()
+                                            .find(|p| provider_kind(p) == agent.provider.as_str())
+                                    })
+                                });
+                            let Some(provider_config) = provider_config else { break; };
                             
                             let tasks = db_clone_agent.list_tasks_for_instance(&instance_id_clone_agent).unwrap_or_default();
                             
@@ -1613,7 +1637,7 @@ impl TeamWorkspacePanel {
                             
                             task_prompt.push(crate::providers::ChatMessage { role: "user".into(), content: format!("{}{}", instructions, task_text).into(), agent_name: None });
 
-                            let result = if provider_config.provider_name == "openrouter" {
+                            let result = if provider_kind(&provider_config) == "openrouter" {
                                 let mut adapter = crate::providers::openrouter::OpenRouterAdapter::new();
                                 if adapter.initialize(&provider_config).is_ok() {
                                     adapter.send_message(task_prompt).await
@@ -1661,8 +1685,7 @@ impl TeamWorkspacePanel {
                                     
                                     (final_text, true)
                                 },
-                                Err(e) => (format!("[Task Failed] {}:
-{}", task.id, e), false),
+                                Err(e) => (format!("[Task Failed] {}:\n{}", task.id, e), false),
                             };
 
                             let _ = if ok {
@@ -1763,7 +1786,7 @@ let db_clone = db.clone();
         cx.spawn(async move |_, cx| {
             use crate::providers::BaseProviderAdapter;
 
-            let mut use_mock = false;
+            let mut use_mock = true;
 
             if cancel_flag_for_ai.load(Ordering::SeqCst) {
                 let _ = cx.update(|cx| {
@@ -1804,8 +1827,21 @@ let db_clone = db.clone();
                     if !agent_id.is_empty() {
                         let agent_id = agent_id.clone();
                         if let Ok(Some(agent)) = db.get_agent(&agent_id) {
-                            if let Ok(Some(provider_config)) = db.get_provider_by_name(&agent.provider) {
-                                use_mock = false;
+                            let provider_config = db
+                                .get_provider_by_name(&agent.provider)
+                                .ok()
+                                .flatten()
+                                .or_else(|| {
+                                    db.list_providers().ok().and_then(|providers| {
+                                        providers
+                                            .into_iter()
+                                            .find(|p| provider_kind(p) == agent.provider.as_str())
+                                    })
+                                });
+                            let Some(provider_config) = provider_config else {
+                                continue;
+                            };
+                            use_mock = false;
                             
                             let chat_service = crate::application::services::chat_service::ChatService::new(db.clone(), team_bus_for_ai.clone());
                             let mut full_history = current_history.clone();
@@ -1833,7 +1869,7 @@ let db_clone = db.clone();
                             }
 
                             let mut round_result: Option<String> = None;
-                            match provider_config.provider_name.as_str() {
+                            match provider_kind(&provider_config) {
                                 "openrouter" => {
                                     let mut adapter = crate::providers::openrouter::OpenRouterAdapter::new();
                                     if adapter.initialize(&provider_config).is_ok() {
@@ -2468,7 +2504,6 @@ let db_clone = db.clone();
                                 if debate_mode && text.contains("[CONSENSUS_REACHED]") {
                                     break;
                                 }
-                            }
                             }
                         }
                     }

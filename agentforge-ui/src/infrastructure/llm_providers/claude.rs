@@ -78,11 +78,28 @@ impl BaseProviderAdapter for ClaudeAdapter {
                     .ok()
                     .ok_or_else(|| anyhow!("API key env var missing: {}", v.trim_start_matches("env:")))?,
                 Some(v) => v,
-                None => env::var("ANTHROPIC_API_KEY")
+                None => env::var("ANTHROPIC_AUTH_TOKEN")
                     .ok()
-                    .ok_or_else(|| anyhow!("API key missing (set provider api_key_ref or env ANTHROPIC_API_KEY)"))?,
+                    .or_else(|| env::var("ANTHROPIC_API_KEY").ok())
+                    .ok_or_else(|| anyhow!("API key missing (set provider api_key_ref or env ANTHROPIC_AUTH_TOKEN/ANTHROPIC_API_KEY)"))?,
             };
-            let model = config.model;
+            let model = match config.model.as_str() {
+                "opus" => env::var("ANTHROPIC_DEFAULT_OPUS_MODEL").unwrap_or_else(|_| config.model.clone()),
+                "sonnet" => env::var("ANTHROPIC_DEFAULT_SONNET_MODEL").unwrap_or_else(|_| config.model.clone()),
+                "haiku" => env::var("ANTHROPIC_DEFAULT_HAIKU_MODEL").unwrap_or_else(|_| config.model.clone()),
+                _ => config.model.clone(),
+            };
+
+            let base_url = config
+                .command
+                .clone()
+                .or_else(|| env::var("ANTHROPIC_BASE_URL").ok())
+                .unwrap_or_else(|| "https://api.anthropic.com/v1".to_string());
+            let endpoint = if base_url.contains("/messages") {
+                base_url
+            } else {
+                format!("{}/messages", base_url.trim_end_matches('/'))
+            };
 
             let mut req_messages = Vec::new();
             let mut system_prompt = String::new();
@@ -105,14 +122,16 @@ impl BaseProviderAdapter for ClaudeAdapter {
                 "max_tokens": 4096
             });
 
-            let res = client
-                .post("https://api.anthropic.com/v1/messages")
-                .header("x-api-key", api_key)
+            let mut req = client
+                .post(endpoint)
+                .header("x-api-key", api_key.clone())
                 .header("anthropic-version", "2023-06-01")
                 .header("content-type", "application/json")
-                .json(&request_body)
-                .send()
-                .await?;
+                .json(&request_body);
+            if config.command.is_some() || env::var("ANTHROPIC_AUTH_TOKEN").is_ok() {
+                req = req.header("authorization", format!("Bearer {}", api_key));
+            }
+            let res = req.send().await?;
 
             let body: serde_json::Value = res.json().await?;
             
@@ -173,11 +192,28 @@ impl BaseProviderAdapter for ClaudeAdapter {
                     .ok()
                     .ok_or_else(|| anyhow!("API key env var missing: {}", v.trim_start_matches("env:")))?,
                 Some(v) => v,
-                None => env::var("ANTHROPIC_API_KEY")
+                None => env::var("ANTHROPIC_AUTH_TOKEN")
                     .ok()
-                    .ok_or_else(|| anyhow!("API key missing (set provider api_key_ref or env ANTHROPIC_API_KEY)"))?,
+                    .or_else(|| env::var("ANTHROPIC_API_KEY").ok())
+                    .ok_or_else(|| anyhow!("API key missing (set provider api_key_ref or env ANTHROPIC_AUTH_TOKEN/ANTHROPIC_API_KEY)"))?,
             };
-            let model = config.model;
+            let model = match config.model.as_str() {
+                "opus" => env::var("ANTHROPIC_DEFAULT_OPUS_MODEL").unwrap_or_else(|_| config.model.clone()),
+                "sonnet" => env::var("ANTHROPIC_DEFAULT_SONNET_MODEL").unwrap_or_else(|_| config.model.clone()),
+                "haiku" => env::var("ANTHROPIC_DEFAULT_HAIKU_MODEL").unwrap_or_else(|_| config.model.clone()),
+                _ => config.model.clone(),
+            };
+
+            let base_url = config
+                .command
+                .clone()
+                .or_else(|| env::var("ANTHROPIC_BASE_URL").ok())
+                .unwrap_or_else(|| "https://api.anthropic.com/v1".to_string());
+            let endpoint = if base_url.contains("/messages") {
+                base_url
+            } else {
+                format!("{}/messages", base_url.trim_end_matches('/'))
+            };
 
             let mut req_messages = Vec::new();
             let mut system_prompt = String::new();
@@ -201,12 +237,15 @@ impl BaseProviderAdapter for ClaudeAdapter {
                 "max_tokens": 4096
             });
 
-            let req = client
-                .post("https://api.anthropic.com/v1/messages")
-                .header("x-api-key", api_key)
+            let mut req = client
+                .post(endpoint)
+                .header("x-api-key", api_key.clone())
                 .header("anthropic-version", "2023-06-01")
                 .header("content-type", "application/json")
                 .json(&request_body);
+            if config.command.is_some() || env::var("ANTHROPIC_AUTH_TOKEN").is_ok() {
+                req = req.header("authorization", format!("Bearer {}", api_key));
+            }
 
             let (tx, rx) = futures::channel::mpsc::unbounded();
             let rt = get_runtime();
