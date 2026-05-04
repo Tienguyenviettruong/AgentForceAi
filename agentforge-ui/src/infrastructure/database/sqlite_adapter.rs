@@ -1,7 +1,7 @@
 use crate::knowledge::core::KnowledgeItem;
 use crate::core::models::{Agent, Instance, Provider, ProviderTemplate, SessionRecord, Team, WorkflowRecord};
 use chrono::Utc;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use anyhow::Result;
 use crate::core::traits::database::DatabasePort;
 use std::sync::Mutex;
@@ -266,7 +266,7 @@ impl Database {
             );
 
             CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_entries_fts 
-            USING fts5(title, content, tags, content='knowledge_entries', content_rowid='id');
+            USING fts5(id UNINDEXED, title, content, tags);
 
             CREATE TABLE IF NOT EXISTS cross_team_cases (
                 correlation_id TEXT PRIMARY KEY,
@@ -314,7 +314,51 @@ impl Database {
             conn: Mutex::new(conn),
         };
         db.seed_provider_templates().ok();
+        db.ensure_knowledge_entries_fts().ok();
         Ok(db)
+    }
+
+    fn ensure_knowledge_entries_fts(&self) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let sql: Option<String> = conn
+            .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'knowledge_entries_fts'")?
+            .query_row([], |row| row.get(0))
+            .optional()?;
+
+        let needs_rebuild = match sql {
+            None => true,
+            Some(s) => {
+                let s = s.to_lowercase();
+                s.contains("content='knowledge_entries'")
+                    || s.contains("content_rowid")
+                    || !s.contains("id unindexed")
+            }
+        };
+
+        if needs_rebuild {
+            conn.execute("DROP TABLE IF EXISTS knowledge_entries_fts", [])?;
+            conn.execute(
+                "CREATE VIRTUAL TABLE knowledge_entries_fts USING fts5(id UNINDEXED, title, content, tags)",
+                [],
+            )?;
+            let mut stmt = conn.prepare("SELECT id, title, content, tags FROM knowledge_entries")?;
+            let rows = stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<String>>(3)?.unwrap_or_else(|| "[]".to_string()),
+                ))
+            })?;
+            for r in rows {
+                let (id, title, content, tags) = r?;
+                let _ = conn.execute(
+                    "INSERT INTO knowledge_entries_fts (id, title, content, tags) VALUES (?1, ?2, ?3, ?4)",
+                    params![id, title, content, tags],
+                )?;
+            }
+        }
+        Ok(())
     }
 }
 impl crate::core::traits::database::DatabasePort for Database {
@@ -1880,6 +1924,11 @@ impl crate::core::traits::database::DatabasePort for Database {
             rusqlite::params![
                 entry.id, entry.agent_id, entry.session_id, entry.title, entry.content, tags_json, created_at_str
             ],
+        )?;
+        conn.execute("DELETE FROM knowledge_entries_fts WHERE id = ?1", rusqlite::params![entry.id])?;
+        conn.execute(
+            "INSERT INTO knowledge_entries_fts (id, title, content, tags) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![entry.id, entry.title, entry.content, serde_json::to_string(&entry.tags).unwrap_or_else(|_| "[]".to_string())],
         )?;
         Ok(())
     }

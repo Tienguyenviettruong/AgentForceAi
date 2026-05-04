@@ -103,6 +103,10 @@ impl AppState {
         let notifications = cx.new(|_| Vec::new());
         let db: Arc<dyn DatabasePort> =
             Arc::new(Database::new().expect("Failed to initialize database"));
+        {
+            let registry = crate::mcp::registry::McpToolRegistry::new(db.clone());
+            let _ = crate::mcp::tools::register_team_tools(&registry);
+        }
         let team_bus =
             std::sync::Arc::new(crate::infrastructure::message_bus::routing::TeamBusRouter::new());
         let tokio_runtime = std::sync::Arc::new(

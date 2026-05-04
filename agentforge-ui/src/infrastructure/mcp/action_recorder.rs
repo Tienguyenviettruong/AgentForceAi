@@ -3,8 +3,8 @@ use serde::{Serialize, Deserialize};
 use chrono::{DateTime, Utc};
 use anyhow::Result;
 use crate::core::traits::database::DatabasePort;
-use crate::core::traits::llm_provider::LlmProviderPort;
 use crate::core::models::{WorkflowRecord, ChatMessage};
+use crate::providers::BaseProviderAdapter;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpActionLog {
@@ -41,7 +41,7 @@ impl ActionRecorder {
         self.logs.read().unwrap().clone()
     }
 
-    pub async fn generate_iflow_and_save(&self, llm_provider: Option<Arc<dyn LlmProviderPort>>) -> Result<String> {
+    pub async fn generate_iflow_and_save(&self, llm_provider: Option<Arc<dyn BaseProviderAdapter>>) -> Result<String> {
         let logs = self.get_logs();
         if logs.is_empty() {
             return Ok("No logs to generate iFlow from".to_string());
@@ -61,16 +61,10 @@ impl ActionRecorder {
                 agent_name: None,
             }];
             
-            match llm.send_message(messages).await {
-                Ok(response) => {
-                    // Assuming the LLM returns the JSON DAG
-                    response.content.to_string()
-                },
-                Err(_e) => {
-                    // Fallback on error
-                    self.generate_mock_dag(&workflow_id, &workflow_name, &logs)
-                }
-            }
+            llm.send_message(messages)
+                .await
+                .map(|response| response.content.to_string())
+                .unwrap_or_else(|_e| self.generate_mock_dag(&workflow_id, &workflow_name, &logs))
         } else {
             self.generate_mock_dag(&workflow_id, &workflow_name, &logs)
         };
