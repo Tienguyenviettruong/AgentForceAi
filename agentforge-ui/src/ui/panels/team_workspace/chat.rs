@@ -976,92 +976,16 @@ impl TeamWorkspacePanel {
                                 .child(gpui_component::divider::Divider::vertical().h(px(16.)))
                                 .child(
                                     div()
-                                        .relative()
-                                        .child(
-                                            div()
-                                                .id("slash-cmd")
-                                                .cursor_pointer()
-                                                .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
-                                                    this.is_slash_dropdown_open = !this.is_slash_dropdown_open;
-                                                    if this.is_slash_dropdown_open {
-                                                        this.is_workspace_dropdown_open = false;
-                                                    }
-                                                    cx.notify();
-                                                }))
-                                                .child(div().text_sm().font_weight(gpui::FontWeight::BOLD).text_color(theme.muted_foreground).child("/"))
-                                        )
-                                        .child(
-                                            if self.is_slash_dropdown_open {
-                                                div()
-                                                    .absolute()
-                                                    .bottom(px(32.))
-                                                    .left(px(-8.))
-                                                    .w(px(260.))
-                                                    .bg(theme.background)
-                                                    .border_1()
-                                                    .border_color(theme.border)
-                                                    .rounded_md()
-                                                    .shadow_lg()
-                                                    .p_2()
-                                                    .flex_col()
-                                                    .gap_1()
-                                                    .child(div().text_sm().text_color(theme.muted_foreground).child("Commands"))
-                                                    .child(
-                                                        div()
-                                                            .id("slash-item-plan")
-                                                            .px_2()
-                                                            .py_1()
-                                                            .rounded_md()
-                                                            .hover(|s| s.bg(theme.secondary))
-                                                            .cursor_pointer()
-                                                            .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, window, cx| {
-                                                                this.chat_input_state.update(cx, |state, cx| {
-                                                                    state.set_value("/plan ", window, cx);
-                                                                });
-                                                                this.is_slash_dropdown_open = false;
-                                                                cx.notify();
-                                                            }))
-                                                            .child(div().text_sm().child("/plan — tạo kế hoạch"))
-                                                    )
-                                                    .child(
-                                                        div()
-                                                            .id("slash-item-spec")
-                                                            .px_2()
-                                                            .py_1()
-                                                            .rounded_md()
-                                                            .hover(|s| s.bg(theme.secondary))
-                                                            .cursor_pointer()
-                                                            .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, window, cx| {
-                                                                this.chat_input_state.update(cx, |state, cx| {
-                                                                    state.set_value("/spec ", window, cx);
-                                                                });
-                                                                this.is_slash_dropdown_open = false;
-                                                                cx.notify();
-                                                            }))
-                                                            .child(div().text_sm().child("/spec — tạo đặc tả"))
-                                                    )
-                                                    .child(
-                                                        div()
-                                                            .id("slash-item-run")
-                                                            .px_2()
-                                                            .py_1()
-                                                            .rounded_md()
-                                                            .hover(|s| s.bg(theme.secondary))
-                                                            .cursor_pointer()
-                                                            .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, window, cx| {
-                                                                this.chat_input_state.update(cx, |state, cx| {
-                                                                    state.set_value("/run", window, cx);
-                                                                });
-                                                                this.is_slash_dropdown_open = false;
-                                                                cx.notify();
-                                                            }))
-                                                            .child(div().text_sm().child("/run — chạy task pending"))
-                                                    )
-                                                    .into_any_element()
-                                            } else {
-                                                div().into_any_element()
+                                        .id("slash-cmd")
+                                        .cursor_pointer()
+                                        .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
+                                            this.is_slash_dropdown_open = !this.is_slash_dropdown_open;
+                                            if this.is_slash_dropdown_open {
+                                                this.is_workspace_dropdown_open = false;
                                             }
-                                        )
+                                            cx.notify();
+                                        }))
+                                        .child(div().text_sm().font_weight(gpui::FontWeight::BOLD).text_color(theme.muted_foreground).child("/"))
                                 )
                                 .child(
                                     div()
@@ -1094,6 +1018,7 @@ impl TeamWorkspacePanel {
                         );
 
                     let form = div()
+                        .relative()
                         .flex()
                         .flex_col()
                         .justify_between()
@@ -1104,10 +1029,186 @@ impl TeamWorkspacePanel {
                         .h(px(220.))
                         .shadow_lg()
                         .w_full()
+                        .child({
+                            let text = self.chat_input_state.read(cx).text().to_string();
+                            let show_dropdown = self.is_slash_dropdown_open || text.starts_with("/");
+                            if show_dropdown {
+                                div()
+                                    .absolute()
+                                    .bottom(px(228.))
+                                    .left(px(0.))
+                                    .w_full()
+                                    .bg(theme.background)
+                                    .border_1()
+                                    .border_color(theme.border)
+                                    .rounded_xl()
+                                    .shadow_lg()
+                                    .p_3()
+                                    .flex_col()
+                                    .gap_1()
+                                    .child(div().text_sm().font_weight(gpui::FontWeight::MEDIUM).text_color(theme.muted_foreground).mb_2().child("Commands"))
+                                    .child(
+                                        div()
+                                            .id("slash-item-spec")
+                                            .w_full()
+                                            .px_2()
+                                            .py_2()
+                                            .rounded_md()
+                                            .hover(|s| s.bg(theme.secondary))
+                                            .cursor_pointer()
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.selected_slash_command = Some("spec".to_string());
+                                                this.chat_input_state.update(cx, |state, cx| {
+                                                    state.set_value("", window, cx);
+                                                });
+                                                this.is_slash_dropdown_open = false;
+                                                cx.notify();
+                                            }))
+                                            .flex()
+                                            .items_center()
+                                            .gap_3()
+                                            .child(
+                                                div()
+                                                    .w(px(20.))
+                                                    .h(px(20.))
+                                                    .flex()
+                                                    .items_center()
+                                                    .justify_center()
+                                                    .text_color(theme.accent)
+                                                    .child(Icon::new(IconName::SquareTerminal).size(px(14.)))
+                                            )
+                                            .child(div().text_sm().font_weight(gpui::FontWeight::MEDIUM).text_color(theme.foreground).child("Spec"))
+                                            .child(
+                                                div()
+                                                    .flex_1()
+                                                    .text_sm()
+                                                    .text_color(theme.muted_foreground)
+                                                    .overflow_hidden()
+                                                    .whitespace_nowrap()
+                                                    .text_ellipsis()
+                                                    .child("Tạo đặc tả")
+                                            )
+                                    )
+                                    .child(
+                                        div()
+                                            .id("slash-item-plan")
+                                            .w_full()
+                                            .px_2()
+                                            .py_2()
+                                            .rounded_md()
+                                            .hover(|s| s.bg(theme.secondary))
+                                            .cursor_pointer()
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.selected_slash_command = Some("plan".to_string());
+                                                this.chat_input_state.update(cx, |state, cx| {
+                                                    state.set_value("", window, cx);
+                                                });
+                                                this.is_slash_dropdown_open = false;
+                                                cx.notify();
+                                            }))
+                                            .flex()
+                                            .items_center()
+                                            .gap_3()
+                                            .child(
+                                                div()
+                                                    .w(px(20.))
+                                                    .h(px(20.))
+                                                    .flex()
+                                                    .items_center()
+                                                    .justify_center()
+                                                    .text_color(theme.accent)
+                                                    .child(Icon::new(IconName::ChartPie).size(px(14.)))
+                                            )
+                                            .child(div().text_sm().font_weight(gpui::FontWeight::MEDIUM).text_color(theme.foreground).child("Plan"))
+                                            .child(
+                                                div()
+                                                    .flex_1()
+                                                    .text_sm()
+                                                    .text_color(theme.muted_foreground)
+                                                    .overflow_hidden()
+                                                    .whitespace_nowrap()
+                                                    .text_ellipsis()
+                                                    .child("Tạo kế hoạch")
+                                            )
+                                    )
+                                    .child(
+                                        div()
+                                            .id("slash-item-run")
+                                            .w_full()
+                                            .px_2()
+                                            .py_2()
+                                            .rounded_md()
+                                            .hover(|s| s.bg(theme.secondary))
+                                            .cursor_pointer()
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.selected_slash_command = Some("run".to_string());
+                                                this.chat_input_state.update(cx, |state, cx| {
+                                                    state.set_value("", window, cx);
+                                                });
+                                                this.is_slash_dropdown_open = false;
+                                                cx.notify();
+                                            }))
+                                            .flex()
+                                            .items_center()
+                                            .gap_3()
+                                            .child(
+                                                div()
+                                                    .w(px(20.))
+                                                    .h(px(20.))
+                                                    .flex()
+                                                    .items_center()
+                                                    .justify_center()
+                                                    .text_color(theme.accent)
+                                                    .child(Icon::new(IconName::ArrowRight).size(px(14.)))
+                                            )
+                                            .child(div().text_sm().font_weight(gpui::FontWeight::MEDIUM).text_color(theme.foreground).child("Run"))
+                                            .child(
+                                                div()
+                                                    .flex_1()
+                                                    .text_sm()
+                                                    .text_color(theme.muted_foreground)
+                                                    .overflow_hidden()
+                                                    .whitespace_nowrap()
+                                                    .text_ellipsis()
+                                                    .child("Chạy task pending")
+                                            )
+                                    )
+                                    .into_any_element()
+                            } else {
+                                div().into_any_element()
+                            }
+                        })
                         .child(
-                            div().flex().flex_col().child(form_header).child(
-                                gpui_component::input::Input::new(&self.chat_input_state)
-                                    .appearance(false)
+                            div().flex().flex_col().child(form_header)
+                            .child(
+                                h_flex().w_full().items_center().px_2().py_1()
+                                    .children(self.selected_slash_command.as_ref().map(|cmd| {
+                                        let (label, bg, icon) = match cmd.as_str() {
+                                            "spec" => ("Spec", gpui::blue(), IconName::SquareTerminal),
+                                            "plan" => ("Plan", gpui::blue(), IconName::ChartPie),
+                                            "run" => ("Run", gpui::green(), IconName::ArrowRight),
+                                            _ => ("Cmd", gpui::black(), IconName::SquareTerminal),
+                                        };
+                                        div().flex().items_center().gap_1()
+                                            .id("active-slash-cmd-pill")
+                                            .bg(bg.opacity(0.2))
+                                            .text_color(bg)
+                                            .px_2().py_1().rounded_md()
+                                            .mr_2()
+                                            .cursor_pointer()
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.selected_slash_command = None;
+                                                cx.notify();
+                                            }))
+                                            .child(Icon::new(icon).size(px(14.)))
+                                            .child(div().text_sm().font_weight(gpui::FontWeight::BOLD).child(label))
+                                    }))
+                                    .child(
+                                        div().flex_1().child(
+                                            gpui_component::input::Input::new(&self.chat_input_state)
+                                                .appearance(false)
+                                        )
+                                    )
                             )
                         )
                         .child(form_footer);
