@@ -90,7 +90,27 @@ impl TeamWorkspacePanel {
                                 let view = cx.entity().clone();
                                 move |index, _window, cx| {
                                     view.update(cx, |this, cx| {
+                                        let prev_tab = this.chat_active_tab;
                                         this.chat_active_tab = *index;
+
+                                        // Hide/show the native webview window when switching tabs.
+                                        // The wry webview is a native OS child window that floats
+                                        // above the GPUI surface. If we don't explicitly hide it,
+                                        // it keeps intercepting all mouse/scroll events even when
+                                        // the GPUI layout no longer renders its container.
+                                        #[cfg(any(target_os = "windows", target_os = "macos"))]
+                                        {
+                                            if let Some(ref webview) = this.office_webview {
+                                                if prev_tab == 1 && *index != 1 {
+                                                    // Switching away from Office tab -> hide webview
+                                                    webview.update(cx, |wv, _| wv.hide());
+                                                } else if prev_tab != 1 && *index == 1 {
+                                                    // Switching to Office tab -> show webview
+                                                    webview.update(cx, |wv, _| wv.show());
+                                                }
+                                            }
+                                        }
+
                                         cx.notify();
                                     });
                                 }
@@ -468,7 +488,8 @@ impl TeamWorkspacePanel {
                                     .child(
                                         Button::new("toggle-history")
                                             .ghost()
-                                            .icon(IconName::StarOff)
+                                            .icon(Icon::empty().path("icons/history.svg").size_4())
+                                            .tooltip("Past Session")
                                             .on_click(cx.listener(|this, _, _, cx| {
                                                 this.show_history_sheet = !this.show_history_sheet;
                                                 cx.notify();
@@ -1332,6 +1353,49 @@ impl TeamWorkspacePanel {
             )
     }
 
+    /// Push a chat message into the Office webview's chat panel.
+    /// `agent_id`  – ID of the agent whose conversation thread to update.
+    /// `text`      – The message text.
+    /// `is_self`   – true = user/self message (right bubble), false = agent reply (left).
+    /// `agent_name`– Display name for the agent (shown above agent bubbles).
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    pub(crate) fn push_office_chat_message(
+        &self,
+        agent_id: &str,
+        text: &str,
+        is_self: bool,
+        agent_name: &str,
+        cx: &gpui::App,
+    ) {
+        let Some(ref webview) = self.office_webview else { return };
+        // Escape quotes/newlines so the JS string is valid
+        let safe_text = text
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('\n', "\\n")
+            .replace('\r', "");
+        let safe_agent_id = agent_id.replace('"', "\\\"");
+        let safe_agent_name = agent_name.replace('"', "\\\"");
+        let is_self_js = if is_self { "true" } else { "false" };
+        let script = format!(
+            r#"window.pushChatMessage && window.pushChatMessage("{}", "{}", {}, "{}");"#,
+            safe_agent_id, safe_text, is_self_js, safe_agent_name
+        );
+        let _ = webview.read(cx).evaluate_script(&script);
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    pub(crate) fn push_office_chat_message(
+        &self,
+        _agent_id: &str,
+        _text: &str,
+        _is_self: bool,
+        _agent_name: &str,
+        _cx: &gpui::App,
+    ) {
+        // No-op on Linux
+    }
+
     pub(crate) fn handle_send_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let db = crate::AppState::global(cx).db.clone();
         if self.is_generating {
@@ -1440,6 +1504,15 @@ impl TeamWorkspacePanel {
             .unwrap_or(0);
         self.chat_list_state = gpui::ListState::new(display_len, gpui::ListAlignment::Bottom, px(200.));
         let history_snapshot = self.chat_histories.get(&session_id).cloned().unwrap_or_default();
+
+        // Sync user message to Office view
+        {
+            let first_agent_id = db.get_instance_agents(&instance_id)
+                .ok()
+                .and_then(|ids| ids.into_iter().next())
+                .unwrap_or_default();
+            self.push_office_chat_message(&first_agent_id, &text, true, "You", cx);
+        }
 
         let user_msg = crate::teambus::routing::TeamMessage::new_broadcast(
             instance_id.clone(),
@@ -1992,7 +2065,14 @@ let db_clone = db.clone();
                                                 let _ = db_clone.append_conversation_turn(&session_id_for_ai, "assistant", round_result.as_ref().unwrap(), Some(&metadata));
                                                 let _ = db_clone.touch_session(&session_id_for_ai);
                                                 
-                                                let _ = cx.update(|cx| view.update(cx, |_, cx| cx.notify())).ok();
+                                                // Sync AI reply to Office view
+                                                let agent_name_for_office = agent.name.clone();
+                                                let agent_id_for_office = agent.id.clone();
+                                                let chosen_for_office = round_result.clone().unwrap_or_default();
+                                                let _ = cx.update(|cx| view.update(cx, |this: &mut Self, cx| {
+                                                    this.push_office_chat_message(&agent_id_for_office, &chosen_for_office, false, &agent_name_for_office, cx);
+                                                    cx.notify();
+                                                })).ok();
                                             }
                                             Err(e) => {
                                                 let _ = db_clone.update_team_message_content(&office_msg_id, &format!("Error: {}", e));
@@ -2117,12 +2197,26 @@ let db_clone = db.clone();
                                                 let _ = db_clone.append_conversation_turn(&session_id_for_ai, "assistant", round_result.as_ref().unwrap(), Some(&metadata));
                                                 let _ = db_clone.touch_session(&session_id_for_ai);
                                                 
-                                                let _ = cx.update(|cx| view.update(cx, |_, cx| cx.notify())).ok();
+                                                // Sync AI reply to Office view
+                                                let agent_name_for_office = agent.name.clone();
+                                                let agent_id_for_office = agent.id.clone();
+                                                let chosen_for_office = round_result.clone().unwrap_or_default();
+                                                let _ = cx.update(|cx| view.update(cx, |this: &mut Self, cx| {
+                                                    this.push_office_chat_message(&agent_id_for_office, &chosen_for_office, false, &agent_name_for_office, cx);
+                                                    cx.notify();
+                                                })).ok();
                                             }
                                             Err(e) => {
                                                 let _ = db_clone.update_team_message_content(&office_msg_id, &format!("Error: {}", e));
                                                 let _ = db_clone.update_team_message_delivery_status(&office_msg_id, "failed");
-                                                let _ = cx.update(|cx| view.update(cx, |_, cx| cx.notify())).ok();
+                                                // Sync AI reply to Office view
+                                                let agent_name_for_office = agent.name.clone();
+                                                let agent_id_for_office = agent.id.clone();
+                                                let chosen_for_office = round_result.clone().unwrap_or_default();
+                                                let _ = cx.update(|cx| view.update(cx, |this: &mut Self, cx| {
+                                                    this.push_office_chat_message(&agent_id_for_office, &chosen_for_office, false, &agent_name_for_office, cx);
+                                                    cx.notify();
+                                                })).ok();
                                             }
                                         }
 
@@ -2241,12 +2335,26 @@ let db_clone = db.clone();
                                                 let _ = db_clone.append_conversation_turn(&session_id_for_ai, "assistant", round_result.as_ref().unwrap(), Some(&metadata));
                                                 let _ = db_clone.touch_session(&session_id_for_ai);
                                                 
-                                                let _ = cx.update(|cx| view.update(cx, |_, cx| cx.notify())).ok();
+                                                // Sync AI reply to Office view
+                                                let agent_name_for_office = agent.name.clone();
+                                                let agent_id_for_office = agent.id.clone();
+                                                let chosen_for_office = round_result.clone().unwrap_or_default();
+                                                let _ = cx.update(|cx| view.update(cx, |this: &mut Self, cx| {
+                                                    this.push_office_chat_message(&agent_id_for_office, &chosen_for_office, false, &agent_name_for_office, cx);
+                                                    cx.notify();
+                                                })).ok();
                                             }
                                             Err(e) => {
                                                 let _ = db_clone.update_team_message_content(&office_msg_id, &format!("Error: {}", e));
                                                 let _ = db_clone.update_team_message_delivery_status(&office_msg_id, "failed");
-                                                let _ = cx.update(|cx| view.update(cx, |_, cx| cx.notify())).ok();
+                                                // Sync AI reply to Office view
+                                                let agent_name_for_office = agent.name.clone();
+                                                let agent_id_for_office = agent.id.clone();
+                                                let chosen_for_office = round_result.clone().unwrap_or_default();
+                                                let _ = cx.update(|cx| view.update(cx, |this: &mut Self, cx| {
+                                                    this.push_office_chat_message(&agent_id_for_office, &chosen_for_office, false, &agent_name_for_office, cx);
+                                                    cx.notify();
+                                                })).ok();
                                             }
                                         }
 
@@ -2365,12 +2473,26 @@ let db_clone = db.clone();
                                                 let _ = db_clone.append_conversation_turn(&session_id_for_ai, "assistant", round_result.as_ref().unwrap(), Some(&metadata));
                                                 let _ = db_clone.touch_session(&session_id_for_ai);
                                                 
-                                                let _ = cx.update(|cx| view.update(cx, |_, cx| cx.notify())).ok();
+                                                // Sync AI reply to Office view
+                                                let agent_name_for_office = agent.name.clone();
+                                                let agent_id_for_office = agent.id.clone();
+                                                let chosen_for_office = round_result.clone().unwrap_or_default();
+                                                let _ = cx.update(|cx| view.update(cx, |this: &mut Self, cx| {
+                                                    this.push_office_chat_message(&agent_id_for_office, &chosen_for_office, false, &agent_name_for_office, cx);
+                                                    cx.notify();
+                                                })).ok();
                                             }
                                             Err(e) => {
                                                 let _ = db_clone.update_team_message_content(&office_msg_id, &format!("Error: {}", e));
                                                 let _ = db_clone.update_team_message_delivery_status(&office_msg_id, "failed");
-                                                let _ = cx.update(|cx| view.update(cx, |_, cx| cx.notify())).ok();
+                                                // Sync AI reply to Office view
+                                                let agent_name_for_office = agent.name.clone();
+                                                let agent_id_for_office = agent.id.clone();
+                                                let chosen_for_office = round_result.clone().unwrap_or_default();
+                                                let _ = cx.update(|cx| view.update(cx, |this: &mut Self, cx| {
+                                                    this.push_office_chat_message(&agent_id_for_office, &chosen_for_office, false, &agent_name_for_office, cx);
+                                                    cx.notify();
+                                                })).ok();
                                             }
                                         }
 
@@ -2489,12 +2611,26 @@ let db_clone = db.clone();
                                                 let _ = db_clone.append_conversation_turn(&session_id_for_ai, "assistant", round_result.as_ref().unwrap(), Some(&metadata));
                                                 let _ = db_clone.touch_session(&session_id_for_ai);
                                                 
-                                                let _ = cx.update(|cx| view.update(cx, |_, cx| cx.notify())).ok();
+                                                // Sync AI reply to Office view
+                                                let agent_name_for_office = agent.name.clone();
+                                                let agent_id_for_office = agent.id.clone();
+                                                let chosen_for_office = round_result.clone().unwrap_or_default();
+                                                let _ = cx.update(|cx| view.update(cx, |this: &mut Self, cx| {
+                                                    this.push_office_chat_message(&agent_id_for_office, &chosen_for_office, false, &agent_name_for_office, cx);
+                                                    cx.notify();
+                                                })).ok();
                                             }
                                             Err(e) => {
                                                 let _ = db_clone.update_team_message_content(&office_msg_id, &format!("Error: {}", e));
                                                 let _ = db_clone.update_team_message_delivery_status(&office_msg_id, "failed");
-                                                let _ = cx.update(|cx| view.update(cx, |_, cx| cx.notify())).ok();
+                                                // Sync AI reply to Office view
+                                                let agent_name_for_office = agent.name.clone();
+                                                let agent_id_for_office = agent.id.clone();
+                                                let chosen_for_office = round_result.clone().unwrap_or_default();
+                                                let _ = cx.update(|cx| view.update(cx, |this: &mut Self, cx| {
+                                                    this.push_office_chat_message(&agent_id_for_office, &chosen_for_office, false, &agent_name_for_office, cx);
+                                                    cx.notify();
+                                                })).ok();
                                             }
                                         }
 

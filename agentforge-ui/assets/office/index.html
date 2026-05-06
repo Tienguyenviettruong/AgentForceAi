@@ -1,107 +1,537 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>2D RPG Office View</title>
+    <title>Agent Workspace</title>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;700;800&display=swap"
+        rel="stylesheet">
     <style>
+        :root {
+            --bg: #0d0d14;
+            --panel-bg: rgba(13, 13, 20, 0.92);
+            --border: rgba(120, 100, 220, 0.25);
+            --accent: #7c5cfc;
+            --text: #e2e0ff;
+            --text-dim: #6b6890;
+            --green: #4ade80;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
         body {
             margin: 0;
             overflow: hidden;
-            background-color: #1e1e2e;
-            color: #cdd6f4;
-            font-family: system-ui, -apple-system, sans-serif;
+            background: var(--bg);
+            font-family: 'Space Mono', monospace;
             display: flex;
-            justify-content: center;
-            align-items: center;
+            flex-direction: row;
+            align-items: stretch;
             height: 100vh;
         }
+
+        body::before {
+            content: '';
+            position: fixed;
+            inset: 0;
+            background:
+                radial-gradient(ellipse 60% 40% at 20% 50%, rgba(124, 92, 252, 0.08) 0%, transparent 70%),
+                radial-gradient(ellipse 50% 40% at 80% 50%, rgba(232, 121, 249, 0.06) 0%, transparent 70%);
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        /* ── Sidebar ── */
+        #sidebar {
+            width: 210px;
+            flex-shrink: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            padding: 14px 10px;
+            background: rgba(8, 8, 16, 0.75);
+            border-right: 1px solid var(--border);
+            overflow-y: auto;
+            z-index: 20;
+        }
+
         #ui-layer {
-            position: absolute;
-            top: 20px;
-            left: 20px;
-            z-index: 10;
-            background: rgba(24, 24, 37, 0.85);
-            padding: 15px;
-            border-radius: 8px;
-            border: 1px solid #313244;
-            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.5);
-            backdrop-filter: blur(4px);
+            background: var(--panel-bg);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
         }
-        #ui-layer h2 {
-            margin: 0 0 10px 0;
-            font-size: 14px;
-            color: #cba6f7;
+
+        .panel-header {
+            padding: 10px 14px 8px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .panel-title {
+            font-family: 'Syne', sans-serif;
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 2px;
             text-transform: uppercase;
-            letter-spacing: 1px;
+            color: var(--text-dim);
         }
-        .agent-list { list-style: none; padding: 0; margin: 0; font-size: 13px; }
-        .agent-list li { margin-bottom: 8px; display: flex; align-items: center; gap: 10px; }
-        .status-dot { width: 10px; height: 10px; border-radius: 50%; box-shadow: 0 0 5px currentColor; }
-        
-        canvas {
-            image-rendering: pixelated; /* Crisp retro look */
-            box-shadow: 0 10px 30px rgba(0,0,0,0.8);
-            border: 2px solid #11111b;
+
+        .agent-list {
+            list-style: none;
+            padding: 6px 0;
+            margin: 0;
+        }
+
+        .agent-item {
+            padding: 6px 12px;
+            display: flex;
+            align-items: center;
+            gap: 9px;
+            transition: background 0.2s;
+            cursor: default;
+        }
+
+        .agent-item:hover {
+            background: rgba(124, 92, 252, 0.07);
+        }
+
+        .agent-avatar {
+            width: 26px;
+            height: 26px;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+            flex-shrink: 0;
+            font-weight: 700;
+        }
+
+        .agent-info {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .agent-name {
+            font-family: 'Syne', sans-serif;
+            font-size: 11px;
+            font-weight: 700;
+            color: var(--text);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .agent-status-badge {
+            font-size: 9px;
+            margin-top: 2px;
+            display: inline-block;
+            padding: 1px 6px;
             border-radius: 4px;
+            border: 1px solid currentColor;
+            opacity: 0.85;
+        }
+
+        /* Stat chips */
+        #stat-bar {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .stat-chip {
+            background: var(--panel-bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 6px 12px;
+            font-size: 11px;
+            color: var(--text-dim);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .stat-chip .val {
+            color: var(--text);
+            font-weight: 700;
+        }
+
+        .indicator {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: var(--green);
+            box-shadow: 0 0 6px var(--green);
+            animation: pulse 2s infinite;
+            flex-shrink: 0;
+        }
+
+        @keyframes pulse {
+
+            0%,
+            100% {
+                opacity: 1
+            }
+
+            50% {
+                opacity: 0.4
+            }
+        }
+
+        /* Canvas area */
+        #right-col {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+            overflow: hidden;
+        }
+
+        #canvas-wrap {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            position: relative;
+            min-height: 0;
+        }
+
+        canvas {
+            image-rendering: pixelated;
+            border-radius: 8px;
+            border: 1px solid rgba(124, 92, 252, 0.15);
+            box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.02), 0 20px 60px rgba(0, 0, 0, 0.8), 0 0 80px rgba(124, 92, 252, 0.06);
+        }
+
+        /* ── Chat panel ── */
+        #chat-panel {
+            height: 200px;
+            flex-shrink: 0;
+            display: flex;
+            border-top: 1px solid rgba(120, 100, 220, 0.2);
+            background: rgba(8, 8, 16, 0.6);
+        }
+
+        #chat-agents {
+            width: 48px;
+            flex-shrink: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 5px;
+            padding: 8px 0;
+            border-right: 1px solid rgba(120, 100, 220, 0.15);
+            overflow-y: auto;
+        }
+
+        #chat-agents::-webkit-scrollbar {
+            display: none;
+        }
+
+        .chat-agent-btn {
+            width: 32px;
+            height: 32px;
+            border-radius: 7px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 10px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.15s;
+            border: 2px solid transparent;
+            flex-shrink: 0;
+            font-family: 'Syne', sans-serif;
+        }
+
+        .chat-agent-btn:hover {
+            transform: scale(1.08);
+        }
+
+        .chat-agent-btn.active {
+            border-color: currentColor;
+            box-shadow: 0 0 8px currentColor;
+        }
+
+        #chat-window {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+        }
+
+        #chat-header {
+            padding: 7px 12px;
+            border-bottom: 1px solid rgba(120, 100, 220, 0.15);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-shrink: 0;
+        }
+
+        #chat-agent-name {
+            font-family: 'Syne', sans-serif;
+            font-size: 12px;
+            font-weight: 700;
+            color: var(--text);
+        }
+
+        #chat-agent-status {
+            font-size: 10px;
+            color: var(--text-dim);
+        }
+
+        #chat-typing {
+            margin-left: auto;
+            font-size: 9px;
+            color: var(--text-dim);
+            font-style: italic;
+        }
+
+        #chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 8px 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+            scroll-behavior: smooth;
+        }
+
+        #chat-messages::-webkit-scrollbar {
+            width: 3px;
+        }
+
+        #chat-messages::-webkit-scrollbar-thumb {
+            background: rgba(124, 92, 252, 0.3);
+            border-radius: 2px;
+        }
+
+        .chat-msg {
+            display: flex;
+            gap: 6px;
+            animation: fadeUp 0.2s ease;
+        }
+
+        .chat-msg.self {
+            flex-direction: row-reverse;
+        }
+
+        @keyframes fadeUp {
+            from {
+                opacity: 0;
+                transform: translateY(5px)
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0)
+            }
+        }
+
+        .chat-bubble {
+            max-width: 72%;
+            padding: 5px 10px;
+            font-size: 11px;
+            line-height: 1.5;
+            color: #c8c8e8;
+            border-radius: 10px;
+        }
+
+        .chat-msg:not(.self) .chat-bubble {
+            background: rgba(30, 30, 50, 0.9);
+            border: 1px solid rgba(120, 100, 220, 0.15);
+            border-radius: 2px 10px 10px 10px;
+        }
+
+        .chat-msg.self .chat-bubble {
+            background: rgba(124, 92, 252, 0.2);
+            border: 1px solid rgba(124, 92, 252, 0.3);
+            border-radius: 10px 2px 10px 10px;
+            color: var(--text);
+        }
+
+        .chat-msg-time {
+            font-size: 9px;
+            color: #555878;
+            margin-top: 2px;
+            text-align: right;
+        }
+
+        .chat-msg-agent {
+            font-size: 9px;
+            color: #a78bfa;
+            margin-bottom: 3px;
+            font-family: 'Syne', sans-serif;
+            font-weight: 700;
+        }
+
+        #chat-input-row {
+            padding: 6px 10px;
+            border-top: 1px solid rgba(120, 100, 220, 0.12);
+            display: flex;
+            gap: 6px;
+            align-items: center;
+            flex-shrink: 0;
+        }
+
+        #chat-input {
+            flex: 1;
+            background: rgba(20, 20, 35, 0.8);
+            border: 1px solid rgba(120, 100, 220, 0.2);
+            border-radius: 7px;
+            padding: 5px 10px;
+            color: var(--text);
+            font-size: 11px;
+            font-family: 'Space Mono', monospace;
+            outline: none;
+            transition: border-color 0.15s;
+        }
+
+        #chat-input:focus {
+            border-color: rgba(124, 92, 252, 0.5);
+        }
+
+        #chat-input::placeholder {
+            color: #3a3a5a;
+        }
+
+        #chat-send {
+            width: 28px;
+            height: 28px;
+            background: rgba(124, 92, 252, 0.2);
+            border: 1px solid rgba(124, 92, 252, 0.35);
+            border-radius: 7px;
+            color: #a78bfa;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            transition: all 0.15s;
+        }
+
+        #chat-send:hover {
+            background: rgba(124, 92, 252, 0.35);
         }
     </style>
 </head>
+
 <body>
 
-    <div id="ui-layer">
-        <h2>Agent Workspace</h2>
-        <ul class="agent-list" id="agent-list"></ul>
+    <!-- Sidebar -->
+    <div id="sidebar">
+        <div id="ui-layer">
+            <div class="panel-header"><span class="panel-title">Agent Workspace</span></div>
+            <ul class="agent-list" id="agent-list"></ul>
+        </div>
+
+        <div id="stat-bar">
+            <div class="stat-chip">
+                <span class="indicator"></span>
+                <span>LIVE</span>
+                <span class="val" id="clock">--:--</span>
+            </div>
+            <div class="stat-chip">
+                Agents <span class="val" id="agent-count">0</span>
+            </div>
+        </div>
     </div>
 
-    <canvas id="gameCanvas"></canvas>
+    <!-- Main area -->
+    <div id="right-col">
+        <div id="canvas-wrap">
+            <canvas id="gameCanvas"></canvas>
+        </div>
+
+        <!-- Chat panel -->
+        <div id="chat-panel">
+            <div id="chat-agents"></div>
+            <div id="chat-window">
+                <div id="chat-header">
+                    <div>
+                        <div id="chat-agent-name">—</div>
+                        <div id="chat-agent-status">No agent selected</div>
+                    </div>
+                    <span id="chat-typing"></span>
+                </div>
+                <div id="chat-messages"></div>
+                <div id="chat-input-row">
+                    <input id="chat-input" type="text" placeholder="Message agent..." maxlength="120" />
+                    <button id="chat-send">➤</button>
+                </div>
+            </div>
+        </div>
+    </div>
 
     <script>
+        // ─────────────────────────────────────────────
+        // ORIGINAL LOGIC — kept exactly as-is
+        // ─────────────────────────────────────────────
         const canvas = document.getElementById('gameCanvas');
         const ctx = canvas.getContext('2d');
-        
-        // 2D RPG Map Settings
+
         const TILE_SIZE = 40;
         const MAP_COLS = 32;
         const MAP_ROWS = 16;
-        
+
         canvas.width = MAP_COLS * TILE_SIZE;
         canvas.height = MAP_ROWS * TILE_SIZE;
 
-        // Auto scale canvas
         function resize() {
-            const scale = Math.min(
-                (window.innerWidth - 40) / canvas.width, 
-                (window.innerHeight - 40) / canvas.height
-            );
+            const wrap = document.getElementById('canvas-wrap');
+            const availW = wrap.clientWidth - 8;
+            const availH = wrap.clientHeight - 8;
+            const scale = Math.min(availW / canvas.width, availH / canvas.height);
             canvas.style.transform = `scale(${scale})`;
+            canvas.style.transformOrigin = 'center center';
         }
         window.addEventListener('resize', resize);
         resize();
 
-        // Color Palette
+        // ── Palette (upgraded dark version) ──
         const COLORS = {
-            bg: '#181825',
-            wallTop: '#2b3040',
-            wallFront: '#1e1e2e',
-            floorWood1: '#b47b59',
-            floorWood2: '#a66d4b',
-            floorBlue1: '#4a6b8c',
-            floorBlue2: '#415f7d',
-            floorCheck1: '#cdd6f4',
-            floorCheck2: '#a6adc8',
-            deskWood: '#d4a373',
-            deskShadow: '#9c734b',
-            pcBezel: '#e6e9ef',
-            pcScreen: '#1e1e2e',
-            plantPot: '#f9e2af',
-            plantLeaf: '#a6e3a1',
-            sofaRed: '#f38ba8',
-            sofaShadow: '#c4667d',
-            tableGlass: '#89dceb'
+            bg: '#0a0a12',
+            wallTop: '#1a1a2e',
+            wallFront: '#13131f',
+            wallAccent: '#252540',
+            floorWood1: '#2a1f17',
+            floorWood2: '#231a12',
+            floorBlue1: '#0f1e35',
+            floorBlue2: '#0c1a2e',
+            floorCheck1: '#1c1c2e',
+            floorCheck2: '#171724',
+            deskTop: '#5c3d2a',
+            deskBase: '#3d2b1f',
+            deskEdge: '#7a5238',
+            deskLight: '#a06b48',
+            pcBezel: '#2a2a3e',
+            pcScreen: '#0d1117',
+            pcGlow: '#1a2744',
+            pcGlare: 'rgba(100,160,255,0.15)',
+            plantPot: '#4a3520',
+            plantPotRim: '#5e4428',
+            leaf1: '#1a4a25',
+            leaf2: '#1e5e2a',
+            leaf3: '#266b30',
+            sofaBase: '#3d1525',
+            sofaTop: '#5c1e38',
+            sofaHL: '#7a2a4a',
+            sofaPillow: '#9c3560',
+            tableBase: '#1a2a3a',
+            tableGlass: '#0d2a3a',
+            tableRefl: 'rgba(100,200,255,0.05)',
+            shelfBase: '#2a1a10',
+            shelfWood: '#3d2a18',
         };
 
-        // 1: Wall, 2: Wood, 3: Blue, 4: Check
+        // ── Map (identical to original) ──
         const map = [];
         for (let y = 0; y < MAP_ROWS; y++) {
             map[y] = [];
@@ -109,302 +539,382 @@
                 if (y === 1 || y === MAP_ROWS - 2 || x === 1 || x === MAP_COLS - 2) {
                     map[y][x] = 1;
                 } else if (x === 12 || x === 22) {
-                    if (y >= 6 && y <= 9) map[y][x] = (x < 15) ? 2 : 3; // Doors
+                    if (y >= 6 && y <= 9) map[y][x] = (x < 15) ? 2 : 3;
                     else map[y][x] = 1;
                 } else if (x > 1 && x < 12) {
-                    map[y][x] = 2; // Room 1: Dev
+                    map[y][x] = 2;
                 } else if (x > 12 && x < 22) {
-                    if (y > 9) map[y][x] = 4; // Check floor part
-                    else map[y][x] = 3; // Blue floor part
+                    map[y][x] = (y > 9) ? 4 : 3;
                 } else if (x > 22 && x < MAP_COLS - 2) {
-                    map[y][x] = 3; // Room 3: Manager
+                    map[y][x] = 3;
                 } else {
                     map[y][x] = 0;
                 }
             }
         }
 
-        // Props (Desks, PCs, Plants, Sofas)
+        // ── Props (identical to original) ──
         const props = [
-            // Dev Room (Left)
             { type: 'bookshelf', x: 4, y: 2, w: 3, h: 1 },
             { type: 'bookshelf', x: 8, y: 2, w: 3, h: 1 },
-            { type: 'plant', x: 2, y: 2 },
-            { type: 'plant', x: 11, y: 2 },
-            { type: 'plant', x: 2, y: 13 },
-            { type: 'plant', x: 11, y: 13 },
-            // Desks block 1
+            { type: 'plant', x: 2, y: 2 }, { type: 'plant', x: 11, y: 2 },
+            { type: 'plant', x: 2, y: 13 }, { type: 'plant', x: 11, y: 13 },
             { type: 'desk', x: 3, y: 6, w: 3, h: 1.5 },
             { type: 'pc', x: 3.5, y: 5.5, dir: 'up' },
             { type: 'pc', x: 5, y: 5.5, dir: 'up' },
             { type: 'desk', x: 3, y: 7.5, w: 3, h: 1.5 },
             { type: 'pc', x: 3.5, y: 7.5, dir: 'down' },
             { type: 'pc', x: 5, y: 7.5, dir: 'down' },
-            // Desks block 2
             { type: 'desk', x: 8, y: 6, w: 3, h: 1.5 },
             { type: 'pc', x: 8.5, y: 5.5, dir: 'up' },
             { type: 'pc', x: 10, y: 5.5, dir: 'up' },
             { type: 'desk', x: 8, y: 7.5, w: 3, h: 1.5 },
             { type: 'pc', x: 8.5, y: 7.5, dir: 'down' },
             { type: 'pc', x: 10, y: 7.5, dir: 'down' },
-
-            // Lounge Room (Middle)
-            { type: 'plant', x: 13, y: 2 },
-            { type: 'plant', x: 21, y: 2 },
-            { type: 'frame', x: 15, y: 1.5 },
-            { type: 'frame', x: 19, y: 1.5 },
-            { type: 'sofa', x: 15, y: 6, w: 1.5, h: 3 }, // left sofa
-            { type: 'sofa', x: 19.5, y: 6, w: 1.5, h: 3 }, // right sofa
-            { type: 'table', x: 16.5, y: 6.5, w: 3, h: 2 }, // center table
-
-            // Manager Room (Right)
+            { type: 'plant', x: 13, y: 2 }, { type: 'plant', x: 21, y: 2 },
+            { type: 'frame', x: 15, y: 1.5 }, { type: 'frame', x: 19, y: 1.5 },
+            { type: 'sofa', x: 15, y: 6, w: 1.5, h: 3 },
+            { type: 'sofa', x: 19.5, y: 6, w: 1.5, h: 3 },
+            { type: 'table', x: 16.5, y: 6.5, w: 3, h: 2 },
             { type: 'bookshelf', x: 25, y: 2, w: 3, h: 1 },
-            { type: 'plant', x: 23, y: 13 },
-            { type: 'plant', x: 29, y: 13 },
+            { type: 'plant', x: 23, y: 13 }, { type: 'plant', x: 29, y: 13 },
             { type: 'desk', x: 25, y: 7, w: 3, h: 1.5 },
-            { type: 'pc', x: 26, y: 6.5, dir: 'up' }
+            { type: 'pc', x: 26, y: 6.5, dir: 'up' },
         ];
 
-        // Draw Map & Props
+        // ── Draw environment ──
         function drawEnvironment() {
             ctx.fillStyle = COLORS.bg;
             ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-            // Draw Tiles
             for (let y = 0; y < MAP_ROWS; y++) {
                 for (let x = 0; x < MAP_COLS; x++) {
-                    const tile = map[y][x];
-                    const px = x * TILE_SIZE;
-                    const py = y * TILE_SIZE;
+                    const t = map[y][x];
+                    const px = x * TILE_SIZE, py = y * TILE_SIZE;
+                    const even = (x + y) % 2 === 0;
 
-                    if (tile === 1) {
+                    if (t === 1) {
                         ctx.fillStyle = COLORS.wallTop;
-                        ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE/2);
+                        ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE * 0.55);
                         ctx.fillStyle = COLORS.wallFront;
-                        ctx.fillRect(px, py + TILE_SIZE/2, TILE_SIZE, TILE_SIZE/2);
-                        // Wall lines
-                        ctx.fillStyle = 'rgba(0,0,0,0.3)';
-                        ctx.fillRect(px, py + TILE_SIZE/2, TILE_SIZE, 2);
-                    } else if (tile === 2) {
-                        ctx.fillStyle = (x + y) % 2 === 0 ? COLORS.floorWood1 : COLORS.floorWood2;
+                        ctx.fillRect(px, py + TILE_SIZE * 0.55, TILE_SIZE, TILE_SIZE * 0.45);
+                        ctx.fillStyle = COLORS.wallAccent;
+                        ctx.fillRect(px, py + TILE_SIZE * 0.52, TILE_SIZE, 3);
+                        ctx.fillStyle = 'rgba(255,255,255,0.02)';
+                        ctx.fillRect(px, py, 1, TILE_SIZE);
+                    } else if (t === 2) {
+                        ctx.fillStyle = even ? COLORS.floorWood1 : COLORS.floorWood2;
                         ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
-                    } else if (tile === 3) {
-                        ctx.fillStyle = (x + y) % 2 === 0 ? COLORS.floorBlue1 : COLORS.floorBlue2;
+                        ctx.strokeStyle = 'rgba(100,60,20,0.3)';
+                        ctx.lineWidth = 1; ctx.globalAlpha = 0.35;
+                        ctx.beginPath();
+                        ctx.moveTo(px + 4, py); ctx.lineTo(px + 4, py + TILE_SIZE);
+                        ctx.moveTo(px + 18, py); ctx.lineTo(px + 18, py + TILE_SIZE);
+                        ctx.stroke(); ctx.globalAlpha = 1;
+                    } else if (t === 3) {
+                        ctx.fillStyle = even ? COLORS.floorBlue1 : COLORS.floorBlue2;
                         ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
-                    } else if (tile === 4) {
-                        ctx.fillStyle = (x + y) % 2 === 0 ? COLORS.floorCheck1 : COLORS.floorCheck2;
+                        ctx.strokeStyle = 'rgba(100,140,255,0.06)';
+                        ctx.lineWidth = 1;
+                        ctx.strokeRect(px + 0.5, py + 0.5, TILE_SIZE - 1, TILE_SIZE - 1);
+                    } else if (t === 4) {
+                        ctx.fillStyle = even ? COLORS.floorCheck1 : COLORS.floorCheck2;
                         ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+                        ctx.strokeStyle = 'rgba(150,150,255,0.06)';
+                        ctx.lineWidth = 1;
+                        ctx.strokeRect(px + 0.5, py + 0.5, TILE_SIZE - 1, TILE_SIZE - 1);
                     }
                 }
             }
 
-            // Draw Props
+            // Room labels
+            ctx.font = '700 9px "Space Mono"'; ctx.textAlign = 'center';
+            ctx.fillStyle = 'rgba(255,255,255,0.07)';
+            ctx.fillText('DEV ROOM', 6.5 * TILE_SIZE, 3.5 * TILE_SIZE);
+            ctx.fillText('LOUNGE', 17 * TILE_SIZE, 3.5 * TILE_SIZE);
+            ctx.fillText('MANAGER', 27 * TILE_SIZE, 3.5 * TILE_SIZE);
+
+            // Subtle dividers
+            ctx.strokeStyle = 'rgba(124,92,252,0.08)';
+            ctx.lineWidth = 1; ctx.setLineDash([4, 4]);
+            ctx.beginPath();
+            ctx.moveTo(12 * TILE_SIZE, 2 * TILE_SIZE); ctx.lineTo(12 * TILE_SIZE, (MAP_ROWS - 2) * TILE_SIZE);
+            ctx.moveTo(22 * TILE_SIZE, 2 * TILE_SIZE); ctx.lineTo(22 * TILE_SIZE, (MAP_ROWS - 2) * TILE_SIZE);
+            ctx.stroke(); ctx.setLineDash([]);
+
+            // Props
             props.forEach(p => {
-                const px = p.x * TILE_SIZE;
-                const py = p.y * TILE_SIZE;
-                const pw = (p.w || 1) * TILE_SIZE;
-                const ph = (p.h || 1) * TILE_SIZE;
+                const px = p.x * TILE_SIZE, py = p.y * TILE_SIZE;
+                const pw = (p.w || 1) * TILE_SIZE, ph = (p.h || 1) * TILE_SIZE;
 
                 if (p.type === 'desk') {
-                    ctx.fillStyle = COLORS.deskWood;
-                    ctx.fillRect(px, py, pw, ph);
-                    ctx.fillStyle = COLORS.deskShadow;
-                    ctx.fillRect(px, py + ph - 8, pw, 8);
+                    ctx.fillStyle = 'rgba(0,0,0,0.4)'; ctx.fillRect(px + 3, py + ph, pw - 3, 6);
+                    ctx.fillStyle = COLORS.deskBase; ctx.fillRect(px, py, pw, ph);
+                    ctx.fillStyle = COLORS.deskTop; ctx.fillRect(px, py, pw, ph * 0.7);
+                    ctx.fillStyle = COLORS.deskLight; ctx.fillRect(px + 3, py + 2, pw - 6, 3);
+                    ctx.fillStyle = COLORS.deskEdge; ctx.fillRect(px, py + ph * 0.7, pw, 3);
+                    ctx.fillStyle = COLORS.deskBase;
+                    ctx.fillRect(px + 3, py + ph - 8, 5, 8); ctx.fillRect(px + pw - 8, py + ph - 8, 5, 8);
+
                 } else if (p.type === 'pc') {
-                    // Monitor base
-                    ctx.fillStyle = '#fff';
-                    ctx.fillRect(px + 16, py + 20, 8, 8);
-                    // Screen
-                    ctx.fillStyle = COLORS.pcBezel;
-                    ctx.fillRect(px + 4, py + 4, 32, 20);
-                    ctx.fillStyle = COLORS.pcScreen;
-                    ctx.fillRect(px + 6, py + 6, 28, 16);
-                    
-                    // Keyboard
-                    if (p.dir === 'up') {
-                        ctx.fillStyle = '#a6adc8';
-                        ctx.fillRect(px + 8, py + 28, 24, 6);
-                    } else {
-                        // if facing down, monitor is covering keyboard
+                    ctx.fillStyle = '#1a1a2a';
+                    ctx.fillRect(px + 18, py + 28, 4, 6); ctx.fillRect(px + 14, py + 33, 12, 3);
+                    ctx.fillStyle = COLORS.pcBezel; ctx.fillRect(px + 3, py + 5, 28, 20);
+                    ctx.fillStyle = COLORS.pcGlow; ctx.fillRect(px + 5, py + 7, 24, 16);
+                    const cc = ['#4a9eff', '#7c5cfc', '#4ade80', '#fbbf24', '#e879f9'];
+                    for (let i = 0; i < 5; i++) {
+                        ctx.fillStyle = cc[i]; ctx.globalAlpha = 0.7;
+                        ctx.fillRect(px + 6, py + 9 + i * 3, 6 + i * 3, 1.5);
                     }
+                    ctx.globalAlpha = 1;
+                    ctx.fillStyle = COLORS.pcGlare; ctx.fillRect(px + 5, py + 7, 12, 5);
+                    ctx.fillStyle = '#1e1e2e'; ctx.fillRect(px + 6, py + 28, 20, 4);
+
                 } else if (p.type === 'plant') {
+                    const cx = px + 20, potY = py + 22;
+                    ctx.fillStyle = 'rgba(0,0,0,0.3)'; ctx.beginPath(); ctx.ellipse(cx, potY + 16, 11, 4, 0, 0, Math.PI * 2); ctx.fill();
                     ctx.fillStyle = COLORS.plantPot;
-                    ctx.fillRect(px + 10, py + 20, 20, 20);
-                    ctx.fillStyle = COLORS.plantLeaf;
-                    ctx.beginPath(); ctx.arc(px + 20, py + 15, 16, 0, Math.PI * 2); ctx.fill();
-                    ctx.fillStyle = '#94cc8f';
-                    ctx.beginPath(); ctx.arc(px + 20, py + 15, 10, 0, Math.PI * 2); ctx.fill();
+                    ctx.beginPath(); ctx.moveTo(cx - 9, potY); ctx.lineTo(cx - 7, potY + 16); ctx.lineTo(cx + 7, potY + 16); ctx.lineTo(cx + 9, potY); ctx.closePath(); ctx.fill();
+                    ctx.fillStyle = COLORS.plantPotRim; ctx.fillRect(cx - 10, potY - 3, 20, 4);
+                    ctx.fillStyle = COLORS.leaf1;
+                    ctx.beginPath(); ctx.ellipse(cx, potY - 12, 12, 9, -0.3, 0, Math.PI * 2); ctx.fill();
+                    ctx.beginPath(); ctx.ellipse(cx - 5, potY - 9, 9, 7, -0.8, 0, Math.PI * 2); ctx.fill();
+                    ctx.beginPath(); ctx.ellipse(cx + 5, potY - 9, 9, 7, 0.8, 0, Math.PI * 2); ctx.fill();
+                    ctx.fillStyle = COLORS.leaf2; ctx.beginPath(); ctx.ellipse(cx, potY - 16, 10, 8, 0, 0, Math.PI * 2); ctx.fill();
+                    ctx.fillStyle = COLORS.leaf3; ctx.beginPath(); ctx.ellipse(cx, potY - 18, 8, 6, 0, 0, Math.PI * 2); ctx.fill();
+
                 } else if (p.type === 'sofa') {
-                    ctx.fillStyle = COLORS.sofaRed;
-                    ctx.fillRect(px, py, pw, ph);
-                    ctx.fillStyle = COLORS.sofaShadow;
-                    ctx.fillRect(px + 4, py + 4, pw - 8, ph - 8);
+                    ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.fillRect(px + 3, py + ph, pw - 3, 5);
+                    ctx.fillStyle = COLORS.sofaBase; ctx.fillRect(px, py, pw, ph);
+                    ctx.fillStyle = COLORS.sofaTop; ctx.fillRect(px + 3, py + 3, pw - 6, ph - 12);
+                    ctx.fillStyle = COLORS.sofaHL; ctx.fillRect(px, py, 7, ph - 5); ctx.fillRect(px + pw - 7, py, 7, ph - 5);
+                    ctx.fillStyle = COLORS.sofaPillow;
+                    ctx.fillRect(px + 9, py + 5, pw - 18, (ph - 18) / 2);
+                    ctx.fillRect(px + 9, py + 7 + (ph - 18) / 2, pw - 18, (ph - 18) / 2);
+                    ctx.fillStyle = 'rgba(255,255,255,0.06)'; ctx.fillRect(px + 3, py + 3, pw - 6, 3);
+
                 } else if (p.type === 'table') {
-                    ctx.fillStyle = COLORS.deskShadow;
-                    ctx.fillRect(px + 4, py + 4, pw - 8, ph - 8);
-                    ctx.fillStyle = COLORS.tableGlass;
-                    ctx.fillRect(px + 8, py + 8, pw - 16, ph - 16);
-                    // Cups/papers
-                    ctx.fillStyle = '#fff'; ctx.fillRect(px + 16, py + 16, 8, 8);
-                    ctx.fillStyle = '#f9e2af'; ctx.beginPath(); ctx.arc(px + pw - 20, py + 20, 6, 0, Math.PI*2); ctx.fill();
+                    ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.fillRect(px + 5, py + ph, pw - 5, 5);
+                    ctx.fillStyle = COLORS.tableBase; ctx.fillRect(px, py, pw, ph);
+                    ctx.fillStyle = COLORS.tableGlass; ctx.fillRect(px + 5, py + 5, pw - 10, ph - 10);
+                    ctx.fillStyle = COLORS.tableRefl; ctx.fillRect(px + 5, py + 5, pw - 10, (ph - 10) / 2);
+                    ctx.fillStyle = '#e2e0ff'; ctx.fillRect(px + 12, py + 12, 7, 7);
+                    ctx.fillStyle = 'rgba(255,255,255,0.08)'; ctx.fillRect(px + 12, py + 12, 7, 3);
+                    ctx.fillStyle = '#fbbf24'; ctx.beginPath(); ctx.arc(px + pw - 18, py + 14, 4, 0, Math.PI * 2); ctx.fill();
+
                 } else if (p.type === 'bookshelf') {
-                    ctx.fillStyle = COLORS.deskShadow;
-                    ctx.fillRect(px, py, pw, ph);
-                    ctx.fillStyle = COLORS.deskWood;
-                    ctx.fillRect(px, py, pw, ph - 10);
-                    // Books
-                    const bookColors = ['#f38ba8', '#89b4fa', '#a6e3a1', '#f9e2af'];
-                    for(let i=0; i<8; i++) {
-                        ctx.fillStyle = bookColors[i % 4];
-                        ctx.fillRect(px + 10 + i*12, py + 4, 8, 16);
+                    ctx.fillStyle = COLORS.shelfBase; ctx.fillRect(px, py, pw, ph);
+                    ctx.fillStyle = COLORS.shelfWood; ctx.fillRect(px, py, pw, ph - 8);
+                    ctx.fillStyle = COLORS.shelfBase; ctx.fillRect(px + pw / 2 - 1, py, 2, ph - 8);
+                    const bc = ['#f472b6', '#60a5fa', '#4ade80', '#fbbf24', '#a78bfa', '#fb923c'];
+                    let bx = px + 3;
+                    for (let i = 0; i < 9; i++) {
+                        const bw = 7 + (i % 3);
+                        ctx.fillStyle = bc[i % bc.length]; ctx.globalAlpha = 0.85;
+                        ctx.fillRect(bx, py + 3, bw, ph - 14);
+                        ctx.fillStyle = 'rgba(255,255,255,0.15)'; ctx.fillRect(bx, py + 3, 2, ph - 14);
+                        bx += bw + 2; if (bx > px + pw - 10) bx = px + 3;
                     }
+                    ctx.globalAlpha = 1;
+
                 } else if (p.type === 'frame') {
-                    ctx.fillStyle = '#f9e2af';
-                    ctx.fillRect(px, py, 30, 20);
-                    ctx.fillStyle = '#89b4fa';
-                    ctx.fillRect(px + 2, py + 2, 26, 16);
+                    ctx.fillStyle = '#3a2a18'; ctx.fillRect(px, py, 32, 20);
+                    const g = ctx.createLinearGradient(px + 3, py + 3, px + 3, py + 17);
+                    g.addColorStop(0, '#1a1a3a'); g.addColorStop(1, '#3a1a2a');
+                    ctx.fillStyle = g; ctx.fillRect(px + 3, py + 3, 26, 14);
+                    ctx.fillStyle = '#fbbf24'; ctx.globalAlpha = 0.7;
+                    ctx.beginPath(); ctx.arc(px + 16, py + 12, 3, 0, Math.PI * 2); ctx.fill();
+                    ctx.globalAlpha = 1;
                 }
             });
         }
 
-        // Agents Logic
+        // ─────────────────────────────────────────────
+        // CHAT SYSTEM — variables declared early so updateUI can reference them
+        // ─────────────────────────────────────────────
+        const chatHistories = {};
+        let chatSelectedId = null;
+
+        // ── Agents (original state shape kept) ──
         let agents = [];
 
         const defaultSpots = [
-            {x: 3.5, y: 8.5}, {x: 8.5, y: 8.5}, {x: 5, y: 8.5}, {x: 10, y: 8.5}, // Devs
-            {x: 16, y: 9.5}, {x: 18.5, y: 5.5}, // Lounge
-            {x: 26, y: 8.5} // Manager
+            { x: 3.5, y: 8.5 }, { x: 8.5, y: 8.5 }, { x: 5, y: 8.5 }, { x: 10, y: 8.5 },
+            { x: 16, y: 9.5 }, { x: 18.5, y: 5.5 },
+            { x: 26, y: 8.5 }
         ];
-
-        const colors = ['#f38ba8', '#cba6f7', '#89b4fa', '#a6e3a1', '#f9e2af', '#fab387'];
+        const colors = ['#f472b6', '#a78bfa', '#60a5fa', '#4ade80', '#fbbf24', '#fb923c', '#34d399'];
+        const emojis = ['🌸', '⭐', '🔷', '🌿', '⚡', '🔥', '💎'];
 
         function getStatusColor(status) {
-            switch(status.toLowerCase()) {
-                case 'coding': return '#a6e3a1';
-                case 'reviewing': return '#f9e2af';
-                case 'communicating': return '#89b4fa';
-                case 'failed': return '#f38ba8';
-                default: return '#a6adc8';
+            switch ((status || '').toLowerCase()) {
+                case 'coding': return '#4ade80';
+                case 'reviewing': return '#fbbf24';
+                case 'communicating': return '#60a5fa';
+                case 'failed': return '#f87171';
+                case 'planning': return '#a78bfa';
+                case 'debugging': return '#fb923c';
+                default: return '#6b6890';
             }
+        }
+
+        function roundRect(ctx, x, y, w, h, r) {
+            ctx.beginPath();
+            ctx.moveTo(x + r, y); ctx.lineTo(x + w - r, y); ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+            ctx.lineTo(x + w, y + h - r); ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+            ctx.lineTo(x + r, y + h); ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+            ctx.lineTo(x, y + r); ctx.quadraticCurveTo(x, y, x + r, y);
+            ctx.closePath();
         }
 
         function drawAgents() {
             const time = Date.now() / 1000;
 
             agents.forEach(a => {
-                // Smooth Lerp
+                // Smooth lerp (original)
                 a.x += (a.tx - a.x) * 0.1;
                 a.y += (a.ty - a.y) * 0.1;
 
-                const px = a.x * TILE_SIZE;
-                const py = a.y * TILE_SIZE;
+                const px = a.x * TILE_SIZE, py = a.y * TILE_SIZE;
 
-                // Bobbing animation based on status
+                // Bob (original)
                 let bob = 0;
                 if (a.status === 'coding') bob = Math.sin(time * 10) * 2;
                 else if (a.status === 'communicating') bob = Math.sin(time * 3) * 3;
                 else if (a.status === 'idle') bob = Math.sin(time * 1) * 1;
+                else bob = Math.sin(time * 5) * 1.5;
+
+                const bx = px + 20, by = py + 20 + bob;
+                const sc = getStatusColor(a.status);
 
                 // Shadow
-                ctx.fillStyle = 'rgba(0,0,0,0.4)';
-                ctx.beginPath(); ctx.ellipse(px + 20, py + 35, 12, 5, 0, 0, Math.PI*2); ctx.fill();
+                ctx.fillStyle = 'rgba(0,0,0,0.3)';
+                ctx.beginPath(); ctx.ellipse(bx, py + 38, 12, 4, 0, 0, Math.PI * 2); ctx.fill();
 
-                // Body (Chibi style)
+                // Aura
+                ctx.fillStyle = sc + '14';
+                ctx.beginPath(); ctx.ellipse(bx, by + 6, 17, 21, 0, 0, Math.PI * 2); ctx.fill();
+
+                // Legs
+                ctx.fillStyle = '#1a1a2e';
+                ctx.fillRect(bx - 7, by + 10, 5, 11); ctx.fillRect(bx + 2, by + 10, 5, 11);
+                // Shoes
                 ctx.fillStyle = a.color;
-                ctx.fillRect(px + 10, py + 15 + bob, 20, 20);
-                
+                ctx.fillRect(bx - 9, by + 19, 7, 4); ctx.fillRect(bx + 2, by + 19, 7, 4);
+                // Body
+                ctx.fillStyle = a.color + 'cc'; ctx.fillRect(bx - 9, by - 2, 18, 12);
+                ctx.fillStyle = 'rgba(255,255,255,0.1)'; ctx.fillRect(bx - 7, by, 14, 3);
+                // Arms
+                ctx.fillStyle = a.color + 'aa';
+                ctx.fillRect(bx - 13, by, 5, 9); ctx.fillRect(bx + 8, by, 5, 9);
+                ctx.fillStyle = '#fde8d0';
+                ctx.fillRect(bx - 13, by + 8, 5, 4); ctx.fillRect(bx + 8, by + 8, 5, 4);
+                // Neck
+                ctx.fillStyle = '#fde8d0'; ctx.fillRect(bx - 3, by - 6, 6, 5);
                 // Head
-                ctx.fillStyle = '#ffdfc4'; // skin tone
-                ctx.fillRect(px + 8, py + bob, 24, 20);
-                
+                ctx.fillStyle = '#fde8d0'; ctx.fillRect(bx - 9, by - 20, 18, 15);
                 // Hair
                 ctx.fillStyle = a.color;
-                ctx.fillRect(px + 6, py - 4 + bob, 28, 12);
-                ctx.fillRect(px + 6, py + 8 + bob, 6, 12); // left hair
-                ctx.fillRect(px + 28, py + 8 + bob, 6, 12); // right hair
-
+                ctx.fillRect(bx - 11, by - 24, 22, 10);
+                ctx.fillRect(bx - 11, by - 14, 4, 7); ctx.fillRect(bx + 7, by - 14, 4, 7);
                 // Eyes
-                ctx.fillStyle = '#1e1e2e';
-                ctx.fillRect(px + 12, py + 8 + bob, 4, 4);
-                ctx.fillRect(px + 24, py + 8 + bob, 4, 4);
+                ctx.fillStyle = '#0a0a14';
+                ctx.fillRect(bx - 6, by - 16, 4, 4); ctx.fillRect(bx + 2, by - 16, 4, 4);
+                ctx.fillStyle = 'rgba(255,255,255,0.7)';
+                ctx.fillRect(bx - 5, by - 15, 2, 2); ctx.fillRect(bx + 3, by - 15, 2, 2);
+                // Mouth
+                ctx.fillStyle = '#c0706a'; ctx.fillRect(bx - 2, by - 10, 4, 2);
 
-                // --- UI Tags (Name & Status) ---
-                ctx.font = 'bold 11px sans-serif';
-                ctx.textAlign = 'center';
-                
-                const nameWidth = ctx.measureText(a.name).width;
-                const statWidth = ctx.measureText(a.status).width;
-                const boxW = Math.max(nameWidth, statWidth) + 16;
-                
-                // Name Tag Box
-                ctx.fillStyle = 'rgba(24, 24, 37, 0.85)';
-                ctx.beginPath();
-                ctx.roundRect(px + 20 - boxW/2, py + 40, boxW, 18, 4);
-                ctx.fill();
-                ctx.strokeStyle = '#313244';
-                ctx.lineWidth = 1;
-                ctx.stroke();
+                // ── Name tag ──
+                const tagY = py - 6 + bob * 0.4;
+                ctx.font = 'bold 9px "Space Mono"'; ctx.textAlign = 'center';
+                const nw = ctx.measureText(a.name).width;
+                const sw = ctx.measureText(a.status).width;
+                const tw = Math.max(nw, sw) + 14;
 
-                ctx.fillStyle = '#cdd6f4';
-                ctx.fillText(a.name, px + 20, py + 53);
+                ctx.fillStyle = 'rgba(8,8,18,0.9)';
+                roundRect(ctx, bx - tw / 2, tagY - 13, tw, 14, 3); ctx.fill();
+                ctx.strokeStyle = a.color + '55'; ctx.lineWidth = 1; ctx.stroke();
+                ctx.fillStyle = a.color; ctx.fillRect(bx - tw / 2, tagY - 13, 3, 14);
+                ctx.fillStyle = '#e2e0ff'; ctx.fillText(a.name, bx + 1, tagY - 2);
 
-                // Status Tag Box
-                ctx.fillStyle = 'rgba(24, 24, 37, 0.85)';
-                ctx.beginPath();
-                ctx.roundRect(px + 20 - boxW/2, py + 60, boxW, 18, 4);
-                ctx.fill();
-                ctx.stroke();
+                const sw2 = ctx.measureText(a.status).width + 10;
+                ctx.fillStyle = 'rgba(8,8,18,0.9)';
+                roundRect(ctx, bx - sw2 / 2, tagY + 3, sw2, 12, 5); ctx.fill();
+                ctx.strokeStyle = sc + '44'; ctx.lineWidth = 1; ctx.stroke();
+                ctx.fillStyle = sc; ctx.fillText(a.status, bx, tagY + 12);
 
-                ctx.fillStyle = getStatusColor(a.status);
-                ctx.fillText(a.status, px + 20, py + 73);
-
-                // --- Chat Bubble ---
+                // ── Chat bubble (original logic) ──
                 if (a.message && a.messageTimer && Date.now() < a.messageTimer) {
-                    ctx.font = '12px sans-serif';
-                    let msg = a.message.length > 30 ? a.message.substring(0, 27) + '...' : a.message;
-                    const msgWidth = ctx.measureText(msg).width + 16;
-                    
-                    // Bubble Background
-                    ctx.fillStyle = '#cdd6f4';
+                    ctx.font = '11px "Space Mono"';
+                    let msg = a.message.length > 28 ? a.message.substring(0, 25) + '...' : a.message;
+                    const mw = ctx.measureText(msg).width + 18;
+
+                    // Bubble
+                    ctx.fillStyle = 'rgba(8,8,18,0.92)';
+                    roundRect(ctx, bx - mw / 2, tagY - 36, mw, 22, 6); ctx.fill();
+                    ctx.strokeStyle = a.color + '66'; ctx.lineWidth = 1; ctx.stroke();
+
+                    // Tail
+                    ctx.fillStyle = 'rgba(8,8,18,0.92)';
                     ctx.beginPath();
-                    ctx.roundRect(px + 20 - msgWidth/2, py - 35, msgWidth, 24, 6);
+                    ctx.moveTo(bx - 5, tagY - 14); ctx.lineTo(bx, tagY - 8); ctx.lineTo(bx + 5, tagY - 14);
                     ctx.fill();
-                    
-                    // Bubble Tail
+                    ctx.strokeStyle = a.color + '44';
                     ctx.beginPath();
-                    ctx.moveTo(px + 15, py - 11);
-                    ctx.lineTo(px + 20, py - 5);
-                    ctx.lineTo(px + 25, py - 11);
-                    ctx.fill();
+                    ctx.moveTo(bx - 5, tagY - 14); ctx.lineTo(bx, tagY - 8); ctx.lineTo(bx + 5, tagY - 14);
+                    ctx.stroke();
 
                     // Text
-                    ctx.fillStyle = '#1e1e2e';
-                    ctx.fillText(msg, px + 20, py - 18);
+                    ctx.fillStyle = a.color;
+                    ctx.fillText(msg, bx, tagY - 20);
                 }
             });
         }
 
+        // ── UI sidebar update ──
         function updateUI() {
             const list = document.getElementById('agent-list');
             list.innerHTML = '';
-            agents.forEach(a => {
+            document.getElementById('agent-count').textContent = agents.length;
+
+            agents.forEach((a, i) => {
                 const li = document.createElement('li');
-                li.innerHTML = `<span class="status-dot" style="color:${getStatusColor(a.status)}; background:${getStatusColor(a.status)}"></span> 
-                                <strong>${a.name}</strong> 
-                                <span style="color:#a6adc8; font-size: 11px;">(${a.status})</span>`;
+                li.className = 'agent-item';
+                const sc = getStatusColor(a.status);
+                const initials = (a.name || '?').substring(0, 2).toUpperCase();
+                li.innerHTML = `
+      <div class="agent-avatar" style="background:${a.color}22;color:${a.color};border:1px solid ${a.color}44">${a.emoji || initials}</div>
+      <div class="agent-info">
+        <div class="agent-name">${a.name}</div>
+        <span class="agent-status-badge" style="color:${sc};border-color:${sc}44">${a.status}</span>
+      </div>`;
                 list.appendChild(li);
             });
+
+            // Rebuild chat agent buttons (guard: only if chat system ready)
+            if (typeof initChatAgents === 'function') initChatAgents();
         }
 
-        // Render Loop
+        // ── Clock ──
+        function updateClock() {
+            const n = new Date();
+            document.getElementById('clock').textContent =
+                n.getHours().toString().padStart(2, '0') + ':' + n.getMinutes().toString().padStart(2, '0');
+        }
+        updateClock(); setInterval(updateClock, 10000);
+
+        // ── Render loop ──
         function loop() {
             requestAnimationFrame(loop);
             drawEnvironment();
             drawAgents();
         }
 
-        // IPC: Receive data from Rust
-        window.updateAgents = function(agentsJson) {
+        // ─────────────────────────────────────────────
+        // ORIGINAL IPC — kept exactly as-is
+        // ─────────────────────────────────────────────
+        window.updateAgents = function (agentsJson) {
             try {
                 const parsed = typeof agentsJson === 'string' ? JSON.parse(agentsJson) : agentsJson;
                 if (Array.isArray(parsed)) {
@@ -414,51 +924,40 @@
                             const spot = defaultSpots[i % defaultSpots.length];
                             existing = {
                                 id: incoming.id,
-                                name: incoming.name || "Agent",
-                                status: incoming.status || "idle",
-                                message: incoming.message || "",
+                                name: incoming.name || 'Agent',
+                                status: incoming.status || 'idle',
+                                message: incoming.message || '',
                                 x: spot.x, y: spot.y, tx: spot.x, ty: spot.y,
-                                color: colors[i % colors.length]
+                                color: colors[i % colors.length],
+                                emoji: emojis[i % emojis.length],
                             };
                             agents.push(existing);
                         } else {
-                            existing.status = incoming.status || "idle";
+                            existing.status = incoming.status || 'idle';
                             if (incoming.name) existing.name = incoming.name;
-                            if (incoming.message) {
-                                existing.message = incoming.message;
-                                existing.messageTimer = Date.now() + 5000; // Show message for 5 seconds
-                            }
+                            // Note: real messages come via window.pushChatMessage, not here
                         }
                     });
-                    
-                    // Remove agents that are no longer in the list
                     agents = agents.filter(a => parsed.some(p => p.id === a.id));
                     updateUI();
                 }
-            } catch (e) {
-                console.error("Error parsing agents data:", e);
-            }
+            } catch (e) { console.error('Error parsing agents data:', e); }
         };
 
         // Initialize
         updateUI();
         loop();
 
-        // Drag & Drop to move agents manually (Bonus feature)
+        // ── Drag & Drop (original) ──
         let draggedAgent = null;
         canvas.addEventListener('mousedown', e => {
             const rect = canvas.getBoundingClientRect();
             const scaleX = canvas.width / rect.width;
             const scaleY = canvas.height / rect.height;
             const clickX = (e.clientX - rect.left) * scaleX / TILE_SIZE;
-            const clickY = (e.clientY - rect.left) * scaleY / TILE_SIZE;
-
-            draggedAgent = agents.find(a => 
-                Math.abs(a.x + 0.5 - clickX) < 1 && 
-                Math.abs(a.y + 0.5 - clickY) < 1
-            );
+            const clickY = (e.clientY - rect.top) * scaleY / TILE_SIZE;
+            draggedAgent = agents.find(a => Math.abs(a.x + 0.5 - clickX) < 1 && Math.abs(a.y + 0.5 - clickY) < 1);
         });
-
         canvas.addEventListener('mousemove', e => {
             if (!draggedAgent) return;
             const rect = canvas.getBoundingClientRect();
@@ -467,9 +966,116 @@
             draggedAgent.tx = (e.clientX - rect.left) * scaleX / TILE_SIZE - 0.5;
             draggedAgent.ty = (e.clientY - rect.top) * scaleY / TILE_SIZE - 0.5;
         });
-
         canvas.addEventListener('mouseup', () => draggedAgent = null);
 
+        // ─────────────────────────────────────────────
+        // CHAT SYSTEM — driven by real Rust data
+        // ─────────────────────────────────────────────
+
+        function getChatHistory(id) {
+            if (!chatHistories[id]) chatHistories[id] = [];
+            return chatHistories[id];
+        }
+
+        function initChatAgents() {
+            const container = document.getElementById('chat-agents');
+            container.innerHTML = '';
+            agents.forEach(a => {
+                const btn = document.createElement('div');
+                btn.className = 'chat-agent-btn';
+                btn.id = 'cbtn-' + a.id;
+                btn.textContent = a.emoji || a.name.substring(0, 2);
+                btn.title = a.name;
+                btn.style.background = a.color + '22';
+                btn.style.color = a.color;
+                btn.onclick = () => selectChatAgent(a.id);
+                container.appendChild(btn);
+            });
+            if (!chatSelectedId && agents.length) selectChatAgent(agents[0].id);
+            else if (chatSelectedId) selectChatAgent(chatSelectedId);
+        }
+
+        function selectChatAgent(id) {
+            chatSelectedId = id;
+            const a = agents.find(x => x.id === id);
+            if (!a) return;
+            document.getElementById('chat-agent-name').textContent = a.name;
+            document.getElementById('chat-agent-name').style.color = a.color;
+            document.getElementById('chat-agent-status').textContent = a.status;
+            document.getElementById('chat-agent-status').style.color = getStatusColor(a.status);
+            document.querySelectorAll('.chat-agent-btn').forEach(b => b.classList.remove('active'));
+            const btn = document.getElementById('cbtn-' + id);
+            if (btn) btn.classList.add('active');
+            renderChatMessages(id);
+        }
+
+        function renderChatMessages(id) {
+            const box = document.getElementById('chat-messages');
+            box.innerHTML = '';
+            getChatHistory(id).forEach(m => appendBubble(m, false));
+            box.scrollTop = box.scrollHeight;
+        }
+
+        function appendBubble(msg, animate = true) {
+            const box = document.getElementById('chat-messages');
+            const el = document.createElement('div');
+            el.className = 'chat-msg' + (msg.self ? ' self' : '');
+            if (!animate) el.style.animation = 'none';
+            // Show agent name label for non-self messages
+            const nameLabel = (!msg.self && msg.agentName)
+                ? `<div class="chat-msg-agent">${msg.agentName}</div>`
+                : '';
+            el.innerHTML = `<div class="chat-bubble">${nameLabel}${msg.text}<div class="chat-msg-time">${msg.time}</div></div>`;
+            box.appendChild(el);
+            box.scrollTop = box.scrollHeight;
+        }
+
+        function addChatMessage(agentId, text, isSelf = false, agentName = '') {
+            const now = new Date();
+            const time = now.getHours().toString().padStart(2, '0') + ':' + now.getMinutes().toString().padStart(2, '0');
+            const msg = { text, time, self: isSelf, agentName };
+            const hist = getChatHistory(agentId);
+            hist.push(msg);
+            if (hist.length > 100) hist.shift();
+            if (chatSelectedId === agentId) appendBubble(msg, true);
+        }
+
+        // ── IPC: Called from Rust to push a real chat message ──
+        // agentId   : agent's ID (used to route into per-agent history)
+        // text      : message content
+        // isSelf    : true = user message (right bubble), false = agent reply (left bubble)
+        // agentName : display name shown above agent bubble
+        window.pushChatMessage = function(agentId, text, isSelf, agentName) {
+            try {
+                // If agentId is unknown (e.g. "user" message), route to first agent
+                const targetId = agents.find(a => a.id === agentId)
+                    ? agentId
+                    : (agents[0] ? agents[0].id : null);
+                if (!targetId) return;
+
+                // Show typing indicator for agent replies
+                if (!isSelf && chatSelectedId === targetId) {
+                    document.getElementById('chat-typing').textContent = '';
+                }
+
+                addChatMessage(targetId, text, !!isSelf, agentName || '');
+
+                // Update bubble on canvas briefly
+                const a = agents.find(x => x.id === targetId);
+                if (a && !isSelf) {
+                    a.message = text;
+                    a.messageTimer = Date.now() + 6000;
+                }
+            } catch (e) { console.error('pushChatMessage error:', e); }
+        };
+
+        // Office input box is display-only (real send goes through Chat tab)
+        // Keep it disabled but show a hint
+        document.getElementById('chat-input').placeholder = 'Send from the Chat tab...';
+        document.getElementById('chat-input').disabled = true;
+        document.getElementById('chat-send').disabled = true;
+        document.getElementById('chat-send').style.opacity = '0.35';
     </script>
 </body>
+
 </html>

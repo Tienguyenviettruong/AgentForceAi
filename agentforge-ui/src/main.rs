@@ -38,6 +38,12 @@ impl AssetSource for CombinedAssets {
     }
 }
 fn main() {
+    // Required this for Windows to render the WebView.
+    #[cfg(target_os = "windows")]
+    unsafe {
+        std::env::set_var("GPUI_DISABLE_DIRECT_COMPOSITION", "true");
+    }
+
     // Create the application
     let app = gpui::Application::new().with_assets(CombinedAssets);
 
