@@ -10,6 +10,7 @@ use gpui_component::{ActiveTheme as _, Icon, IconName, Placement, WindowExt as _
 use gpui_component::text::TextView;
 use std::sync::Arc;
 use urlencoding::encode;
+use std::collections::HashSet;
 
 pub struct KnowledgePanel {
     focus_handle: gpui::FocusHandle,
@@ -30,6 +31,7 @@ pub struct KnowledgePanel {
     last_mouse_pos: Option<gpui::Point<f32>>,
     node_positions: Vec<gpui::Point<f32>>,
     node_velocities: Vec<gpui::Point<f32>>,
+    expanded_dirs: HashSet<String>,
 }
 
 use std::collections::BTreeMap;
@@ -43,7 +45,7 @@ struct TreeNode {
 }
 
 impl TreeNode {
-    fn render(&self, panel: &KnowledgePanel, depth: usize, cx: &Context<KnowledgePanel>) -> gpui::AnyElement {
+    fn render(&self, panel: &KnowledgePanel, depth: usize, parent_path: &str, cx: &Context<KnowledgePanel>) -> gpui::AnyElement {
         use gpui::IntoElement;
         
         
@@ -58,14 +60,32 @@ impl TreeNode {
             // Don't render the root node itself as a folder item because we do it manually,
             // or we just render it here. If depth > 0, it's a real subfolder.
             if depth > 0 {
-                container = container.child(panel.render_tree_item(IconName::Folder, self.name.clone(), true, depth, cx));
+                let path = if parent_path.is_empty() {
+                    self.name.clone()
+                } else {
+                    format!("{}/{}", parent_path, self.name)
+                };
+                let is_expanded = panel.is_dir_expanded(&path);
+                container = container.child(panel.render_tree_item(IconName::Folder, self.name.clone(), is_expanded, depth, path, cx));
+                if !is_expanded {
+                    return container.into_any_element();
+                }
             }
         }
         
         // Render children
         let next_depth = if self.is_file { depth } else { depth + 1 };
         for child in self.children.values() {
-            container = container.child(child.render(panel, next_depth, cx));
+            let next_parent = if depth > 0 {
+                if parent_path.is_empty() {
+                    self.name.clone()
+                } else {
+                    format!("{}/{}", parent_path, self.name)
+                }
+            } else {
+                parent_path.to_string()
+            };
+            container = container.child(child.render(panel, next_depth, &next_parent, cx));
         }
         
         container.into_any_element()
@@ -312,6 +332,7 @@ impl KnowledgePanel {
             last_mouse_pos: None,
             node_positions: Vec::new(),
             node_velocities: Vec::new(),
+            expanded_dirs: HashSet::from_iter([String::new()]),
         }
     }
     
@@ -328,6 +349,7 @@ impl KnowledgePanel {
         label: String,
         is_expanded: bool,
         depth: usize,
+        dir_key: String,
         cx: &Context<Self>,
     ) -> impl IntoElement {
         let theme = cx.theme();
@@ -341,6 +363,14 @@ impl KnowledgePanel {
             .rounded_md()
             .hover(|s| s.bg(theme.secondary))
             .cursor_pointer()
+            .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, _event, _window, cx| {
+                if this.expanded_dirs.contains(&dir_key) {
+                    this.expanded_dirs.remove(&dir_key);
+                } else {
+                    this.expanded_dirs.insert(dir_key.clone());
+                }
+                cx.notify();
+            }))
             .child(
                 div()
                     .flex()
@@ -357,6 +387,10 @@ impl KnowledgePanel {
             )
             .child(Icon::new(icon).size(px(16.)).text_color(theme.accent))
             .child(div().text_sm().text_color(theme.foreground).child(label))
+    }
+
+    fn is_dir_expanded(&self, dir_key: &str) -> bool {
+        dir_key.is_empty() || self.expanded_dirs.contains(dir_key)
     }
 
     fn render_tree_file(&self, label: String, item_id: uuid::Uuid, depth: usize, cx: &Context<Self>) -> impl IntoElement {
@@ -447,7 +481,7 @@ impl KnowledgePanel {
                     .id("scroll-sheet").overflow_y_scroll()
                     .flex_col()
                     .gap_1()
-                    .child(self.render_tree_item(IconName::Folder, "Vault Root".to_string(), true, 0, cx));
+                    .child(self.render_tree_item(IconName::Folder, "Vault Root".to_string(), self.is_dir_expanded(""), 0, "".to_string(), cx));
                     
                 if self.items.is_empty() {
                     file_list = file_list.child(
@@ -488,7 +522,9 @@ impl KnowledgePanel {
                     }
                     
                     for child in root.children.values() {
-                        file_list = file_list.child(child.render(self, 1, cx));
+                        if self.is_dir_expanded("") {
+                            file_list = file_list.child(child.render(self, 1, "", cx));
+                        }
                     }
                 }
                 

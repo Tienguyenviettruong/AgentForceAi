@@ -182,6 +182,13 @@ pub fn init(cx: &mut App) {
     if let Err(e) = AppState::global(cx).db.seed_sdg_team() {
         eprintln!("Failed to seed SDG team: {}", e);
     }
+    let _ = AppState::global(cx).db.create_role(&crate::teams::role::Role {
+        id: "admin-role-123".to_string(),
+        team_id: "sdg-team-123".to_string(),
+        name: "Admin".to_string(),
+        permissions: Some("[\"all\"]".to_string()),
+        capabilities: Some("[\"all\"]".to_string()),
+    });
 
     let vault_path = std::env::var("AGENTFORGE_OBSIDIAN_VAULT").ok().or_else(|| {
         AppState::global(cx)
