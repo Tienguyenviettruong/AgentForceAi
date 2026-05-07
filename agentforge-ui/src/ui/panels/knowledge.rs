@@ -6,7 +6,7 @@ use gpui::{StatefulInteractiveElement, Entity,
 };
 use gpui_component::dock::PanelEvent;
 use gpui_component::dock::{Panel, TitleStyle};
-use gpui_component::{ActiveTheme as _, Icon, IconName, Placement, WindowExt as _, scroll::ScrollableElement, h_flex, v_flex};
+use gpui_component::{ActiveTheme as _, Icon, IconName, Placement, WindowExt as _, scroll::ScrollableElement, v_flex};
 use gpui_component::text::TextView;
 use std::sync::Arc;
 use urlencoding::encode;
@@ -45,7 +45,7 @@ struct TreeNode {
 }
 
 impl TreeNode {
-    fn render(&self, panel: &KnowledgePanel, depth: usize, parent_path: &str, cx: &Context<KnowledgePanel>) -> gpui::AnyElement {
+    fn render(&self, panel: &KnowledgePanel, depth: usize, current_path: &str, cx: &Context<KnowledgePanel>) -> gpui::AnyElement {
         use gpui::IntoElement;
         
         
@@ -57,16 +57,16 @@ impl TreeNode {
                 container = container.child(panel.render_tree_file(self.name.clone(), id, depth, cx));
             }
         } else {
-            // Don't render the root node itself as a folder item because we do it manually,
-            // or we just render it here. If depth > 0, it's a real subfolder.
             if depth > 0 {
-                let path = if parent_path.is_empty() {
-                    self.name.clone()
-                } else {
-                    format!("{}/{}", parent_path, self.name)
-                };
-                let is_expanded = panel.is_dir_expanded(&path);
-                container = container.child(panel.render_tree_item(IconName::Folder, self.name.clone(), is_expanded, depth, path, cx));
+                let is_expanded = panel.is_dir_expanded(current_path);
+                container = container.child(panel.render_tree_item(
+                    IconName::Folder,
+                    self.name.clone(),
+                    is_expanded,
+                    depth,
+                    current_path.to_string(),
+                    cx,
+                ));
                 if !is_expanded {
                     return container.into_any_element();
                 }
@@ -76,16 +76,12 @@ impl TreeNode {
         // Render children
         let next_depth = if self.is_file { depth } else { depth + 1 };
         for child in self.children.values() {
-            let next_parent = if depth > 0 {
-                if parent_path.is_empty() {
-                    self.name.clone()
-                } else {
-                    format!("{}/{}", parent_path, self.name)
-                }
+            let child_path = if current_path.is_empty() {
+                child.name.clone()
             } else {
-                parent_path.to_string()
+                format!("{}/{}", current_path, child.name)
             };
-            container = container.child(child.render(panel, next_depth, &next_parent, cx));
+            container = container.child(child.render(panel, next_depth, &child_path, cx));
         }
         
         container.into_any_element()
@@ -332,7 +328,11 @@ impl KnowledgePanel {
             last_mouse_pos: None,
             node_positions: Vec::new(),
             node_velocities: Vec::new(),
-            expanded_dirs: HashSet::from_iter([String::new()]),
+            expanded_dirs: {
+                let mut s = HashSet::new();
+                s.insert(String::new());
+                s
+            },
         }
     }
     
@@ -390,7 +390,7 @@ impl KnowledgePanel {
     }
 
     fn is_dir_expanded(&self, dir_key: &str) -> bool {
-        dir_key.is_empty() || self.expanded_dirs.contains(dir_key)
+        self.expanded_dirs.contains(dir_key)
     }
 
     fn render_tree_file(&self, label: String, item_id: uuid::Uuid, depth: usize, cx: &Context<Self>) -> impl IntoElement {
@@ -491,14 +491,30 @@ impl KnowledgePanel {
                     let mut root = TreeNode::default();
                     root.name = "Vault Root".to_string();
                     let vault_path_value = self.vault_path.read(cx).clone();
-                    let vault_root_path = std::path::Path::new(&vault_path_value);
+                    let mut vault_root_path = std::path::PathBuf::from(&vault_path_value);
+                    if let Ok(p) = vault_root_path.canonicalize() {
+                        vault_root_path = p;
+                    }
                     
                     for item in &self.items {
                         let rel_path = if let Some(abs_path_str) = &item.vault_path {
-                            let abs_path = std::path::Path::new(abs_path_str);
-                            match abs_path.strip_prefix(vault_root_path) {
-                                Ok(p) => p.to_path_buf(),
-                                Err(_) => std::path::PathBuf::from(abs_path.file_name().unwrap_or_default())
+                            let mut abs_path = std::path::PathBuf::from(abs_path_str);
+                            if let Ok(p) = abs_path.canonicalize() {
+                                abs_path = p;
+                            }
+                            if vault_path_value.is_empty() {
+                                abs_path
+                                    .file_name()
+                                    .map(std::path::PathBuf::from)
+                                    .unwrap_or_default()
+                            } else {
+                                match abs_path.strip_prefix(&vault_root_path) {
+                                    Ok(p) => p.to_path_buf(),
+                                    Err(_) => abs_path
+                                        .file_name()
+                                        .map(std::path::PathBuf::from)
+                                        .unwrap_or_default(),
+                                }
                             }
                         } else {
                             std::path::PathBuf::from(format!("{}.md", item.title))
@@ -523,7 +539,8 @@ impl KnowledgePanel {
                     
                     for child in root.children.values() {
                         if self.is_dir_expanded("") {
-                            file_list = file_list.child(child.render(self, 1, "", cx));
+                            let child_path = child.name.clone();
+                            file_list = file_list.child(child.render(self, 1, &child_path, cx));
                         }
                     }
                 }

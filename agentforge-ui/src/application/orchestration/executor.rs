@@ -223,7 +223,7 @@ impl AgentExecutor {
                     Ok(crate::core::models::chat::StreamChunk::Text(t)) => {
                         response_text.push_str(&t);
                         if let Some(cb) = &self.stream_callback {
-                            cb(response_text.clone());
+                            cb(Self::sanitize_for_display(&response_text));
                         }
                     }
                     Ok(crate::core::models::chat::StreamChunk::Done(u)) => {
@@ -268,7 +268,7 @@ impl AgentExecutor {
             }
 
             if tool_calls.is_empty() {
-                return Ok(response_text);
+                return Ok(Self::sanitize_for_display(&response_text));
             }
 
             // Execute tools
@@ -290,6 +290,31 @@ impl AgentExecutor {
             iteration += 1;
         }
         Ok("Max tool iterations reached".to_string())
+    }
+
+    fn sanitize_for_display(raw: &str) -> String {
+        let mut out = String::new();
+        let mut i = 0usize;
+        loop {
+            let Some(start_rel) = raw[i..].find("<tool_call") else {
+                out.push_str(&raw[i..]);
+                break;
+            };
+            let start = i + start_rel;
+            out.push_str(&raw[i..start]);
+            let after = start + "<tool_call>".len();
+            if raw[start..].starts_with("<tool_call>") {
+                if let Some(end_rel) = raw[after..].find("</tool_call>") {
+                    i = after + end_rel + "</tool_call>".len();
+                    continue;
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+        out
     }
 
     fn prune_history(&self, history: &[ChatMessage], max_messages: usize) -> Vec<ChatMessage> {
@@ -385,6 +410,8 @@ impl AgentExecutor {
                     .db
                     .get_instance_agent_name_mapping(&self.team_instance_id)
                     .unwrap_or_default();
+                let mut workflow_node_ids = Vec::new();
+                let mut workflow_nodes = Vec::<(String, String, String, String)>::new();
                 for t in tasks {
                     let desc = t.get("description").and_then(|v| v.as_str()).unwrap_or("");
                     let role = t.get("role").and_then(|v| v.as_str()).unwrap_or("");
@@ -392,7 +419,7 @@ impl AgentExecutor {
                     let dag_id = uuid::Uuid::new_v4().to_string();
                     let task_id = format!("{}:{}", self.team_instance_id, dag_id);
                     let payload = serde_json::to_string(&crate::application::orchestration::core::DagTask {
-                        id: dag_id,
+                        id: dag_id.clone(),
                         name: role.to_string(),
                         description: desc.to_string(),
                         dependencies: Vec::new(),
@@ -419,6 +446,75 @@ impl AgentExecutor {
                         format!("[NEW_TASK] {}", desc)
                     );
                     let _ = self.team_bus.route_message(msg).await;
+                    workflow_node_ids.push(dag_id.clone());
+                    workflow_nodes.push((
+                        dag_id,
+                        role.to_string(),
+                        desc.to_string(),
+                        assignee_id.unwrap_or("auto").to_string(),
+                    ));
+                }
+                if !workflow_node_ids.is_empty() {
+                    let mut nodes = std::collections::HashMap::new();
+                    nodes.insert(
+                        "start".to_string(),
+                        crate::application::iflow_engine::nodes::Node {
+                            id: "start".to_string(),
+                            name: "Start".to_string(),
+                            node_type: crate::application::iflow_engine::nodes::NodeType::Start,
+                            next_nodes: workflow_node_ids.clone(),
+                        },
+                    );
+                    for (id, role, desc, agent_id) in workflow_nodes {
+                        nodes.insert(
+                            id.clone(),
+                            crate::application::iflow_engine::nodes::Node {
+                                id: id.clone(),
+                                name: role,
+                                node_type: crate::application::iflow_engine::nodes::NodeType::AgentTask {
+                                    agent_id,
+                                    instruction: desc,
+                                    input_vars: Vec::new(),
+                                    output_var: None,
+                                },
+                                next_nodes: vec!["end".to_string()],
+                            },
+                        );
+                    }
+                    nodes.insert(
+                        "end".to_string(),
+                        crate::application::iflow_engine::nodes::Node {
+                            id: "end".to_string(),
+                            name: "End".to_string(),
+                            node_type: crate::application::iflow_engine::nodes::NodeType::End,
+                            next_nodes: Vec::new(),
+                        },
+                    );
+
+                    let workflow_id = uuid::Uuid::new_v4().to_string();
+                    let workflow = crate::application::iflow_engine::engine::Workflow {
+                        id: workflow_id.clone(),
+                        name: format!("Chat Flow {}", chrono::Utc::now().format("%Y-%m-%d %H:%M:%S")),
+                        version: "1.0".to_string(),
+                        nodes,
+                        start_node_id: "start".to_string(),
+                        team_id: if team_id.is_empty() { None } else { Some(team_id.clone()) },
+                        instance_id: Some(self.team_instance_id.clone()),
+                    };
+                    let record = crate::core::models::workflow::WorkflowRecord {
+                        id: workflow.id.clone(),
+                        name: workflow.name.clone(),
+                        definition: serde_json::to_string(&workflow).unwrap_or_default(),
+                        version: workflow.version.clone(),
+                        created_at: chrono::Utc::now().to_rfc3339(),
+                        updated_at: chrono::Utc::now().to_rfc3339(),
+                    };
+                    let _ = self.db.upsert_workflow(&record);
+                    return format!(
+                        "Created {} subtasks and generated workflow {}.",
+                        tasks.len(),
+                        workflow_id
+                    );
                 }
                 return format!("Created {} subtasks and dispatched.", tasks.len());
             }

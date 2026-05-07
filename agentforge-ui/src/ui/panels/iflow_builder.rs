@@ -5,6 +5,10 @@ use crate::application::iflow_engine::nodes::{Node, NodeType, WorkflowData};
 use crate::core::traits::database::DatabasePort;
 use crate::core::models::workflow::WorkflowRecord;
 use gpui::*;
+use gpui_component::button::Button;
+use gpui_component::WindowExt;
+use gpui_component::{h_flex, v_flex};
+use gpui_component::Sizable;
 use gpui_component::dock::{Panel, PanelEvent, TitleStyle};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -134,6 +138,20 @@ impl IFlowBuilderPanel {
             workflow_to_canvas,
             canvas_to_workflow,
             db,
+        }
+    }
+
+    fn load_workflow_record(&mut self, record: &WorkflowRecord) {
+        if let Ok(wf) = WorkflowEngine::parse_workflow(&record.definition) {
+            self.workflow_engine.register_workflow(wf.clone());
+            self.workflow_id = Some(wf.id.clone());
+            let (state, workflow_to_canvas, canvas_to_workflow) =
+                Self::build_canvas_from_workflow(&wf);
+            self.state = state;
+            self.workflow_to_canvas = workflow_to_canvas;
+            self.canvas_to_workflow = canvas_to_workflow;
+            self.execution_id = None;
+            self.last_execution_state = None;
         }
     }
 
@@ -913,6 +931,7 @@ impl Render for IFlowBuilderPanel {
         let pan = self.pan;
 
         let nodes = self.state.nodes.clone();
+        let view = cx.entity().clone();
 
         let mut lines = vec![];
         for conn in &self.state.connections {
@@ -942,6 +961,74 @@ impl Render for IFlowBuilderPanel {
             .bg(rgb(0x1e1e1e))
             .overflow_hidden()
             .relative()
+            .child(
+                h_flex()
+                    .absolute()
+                    .top(px(12.))
+                    .left(px(12.))
+                    .gap(px(8.))
+                    .child(
+                        Button::new("iflow-load-latest")
+                            .small()
+                            .label("Load Latest")
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                let workflows = this.db.list_workflows().unwrap_or_default();
+                                if let Some(wf) = workflows.first() {
+                                    this.load_workflow_record(wf);
+                                    cx.notify();
+                                } else {
+                                    window.push_notification(
+                                        (gpui_component::notification::NotificationType::Info, "No workflows in DB."),
+                                        cx,
+                                    );
+                                }
+                            })),
+                    )
+                    .child(
+                        Button::new("iflow-pick")
+                            .small()
+                            .label("Pick Workflow")
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                let workflows = this.db.list_workflows().unwrap_or_default();
+                                let workflows = std::sync::Arc::new(workflows);
+                                let view = view.clone();
+                                window.open_dialog(cx, move |dialog, _window, _cx| {
+                                    let mut list = v_flex().gap(px(6.)).p(px(12.)).w_full();
+                                    for wf in workflows.iter().take(30) {
+                                        let wf_id = wf.id.clone();
+                                        let wf_name = wf.name.clone();
+                                        let wf_clone = wf.clone();
+                                        list = list.child(
+                                            Button::new(gpui::SharedString::from(format!("pick-{}", wf_id)))
+                                                .label(wf_name)
+                                                .on_click({
+                                                    let view = view.clone();
+                                                    move |_, window, cx| {
+                                                        view.update(cx, |this: &mut IFlowBuilderPanel, cx| {
+                                                            this.load_workflow_record(&wf_clone);
+                                                            cx.notify();
+                                                        });
+                                                        window.close_dialog(cx);
+                                                    }
+                                                }),
+                                        );
+                                    }
+                                    dialog
+                                        .title("Select Workflow")
+                                        .w(px(640.))
+                                        .child(list)
+                                        .footer(|_, _, _, _| {
+                                            vec![
+                                                Button::new("close-iflow-pick")
+                                                    .label("Close")
+                                                    .on_click(|_, window, cx| window.close_dialog(cx))
+                                                    .into_any_element(),
+                                            ]
+                                        })
+                                });
+                            })),
+                    ),
+            )
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, e: &MouseDownEvent, _window, _cx| {
