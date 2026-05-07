@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 500" width="600" height="500">
+  <defs>
+    <!-- Tạo Gradients (Màu dốc) cho các viên pha lê -->
+    <linearGradient id="crystalGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fff0e6" />
+      <stop offset="50%" stop-color="#ff7e5f" />
+      <stop offset="100%" stop-color="#c23b22" />
+    </linearGradient>
+   
+    <linearGradient id="crystalGradDark" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#c23b22" />
+      <stop offset="100%" stop-color="#ff7e5f" />
+    </linearGradient>
+
+    <linearGradient id="vineGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ff9370" />
+      <stop offset="100%" stop-color="#c23b22" />
+    </linearGradient>
+  </defs>
+
+  <!-- (Đã Xóa Nền Đen) -->
+
+  <!-- Sử dụng Group và Transform (flip) để vẽ đối xứng hoàn hảo -->
+  <g id="left-half">
+    <!-- Viên pha lê trung tâm chính (trên cùng) -->
+    <polygon points="300,50 270,130 300,210 330,130" fill="url(#crystalGrad)" opacity="0.95" />
+   
+    <!-- Viên phía bên trái 1 -->
+    <polygon points="300,130 215,160 200,220 270,215" fill="url(#crystalGradDark)" opacity="0.9" />
+   
+    <!-- Viên phía bên trái 2 -->
+    <polygon points="270,215 190,240 165,290 230,280" fill="url(#crystalGrad)" opacity="0.85" />
+   
+    <!-- Mảnh vụn bay lơ lửng bên trên -->
+    <polygon points="195,80 175,115 165,95" fill="url(#crystalGrad)" opacity="0.7" />
+    <polygon points="115,130 95,165 105,145" fill="url(#crystalGrad)" opacity="0.6" />
+    <polygon points="210,40 195,90 185,55" fill="url(#crystalGradDark)" opacity="0.75" />
+
+    <!-- Viên dưới cùng -->
+    <polygon points="300,310 285,360 300,400 315,360" fill="url(#crystalGrad)" opacity="0.9" />
+
+    <!-- Nhánh cây bên trái -->
+    <!-- Thân cây chính -->
+    <path d="M 300,310 Q 240,320 200,310 Q 160,300 120,310" stroke="url(#vineGrad)" stroke-width="5" fill="none" stroke-linecap="round" />
+    <path d="M 300,305 Q 250,300 210,280 Q 180,270 160,255" stroke="url(#vineGrad)" stroke-width="3" fill="none" stroke-linecap="round" />
+    <path d="M 300,315 Q 260,330 230,335 Q 200,340 175,350" stroke="url(#vineGrad)" stroke-width="3" fill="none" stroke-linecap="round" />
+
+    <!-- Các chiếc lá nhỏ trên nhánh -->
+    <polygon points="240,310 235,295 255,308" fill="#ff8c69" />
+    <polygon points="200,305 190,290 210,300" fill="#ff8c69" />
+    <polygon points="160,300 150,285 170,298" fill="#ff8c69" />
+    <polygon points="230,325 220,335 235,330" fill="#ff8c69" />
+    <polygon points="195,335 185,345 200,340" fill="#ff8c69" />
+   
+    <!-- Đầu nhánh (hình kim cương nhỏ) -->
+    <polygon points="120,303 115,313 120,318 125,313" fill="#ff6347" />
+    <polygon points="160,250 153,258 160,263 167,258" fill="#ff6347" />
+    <polygon points="175,350 168,358 175,363 182,358" fill="#ff6347" />
+  </g>
+
+  <!-- Nhân đôi nửa bên trái sang bên phải bằng phép đối xứng -->
+  <use href="#left-half" transform="scale(-1, 1) translate(-600, 0)" />
+</svg>
