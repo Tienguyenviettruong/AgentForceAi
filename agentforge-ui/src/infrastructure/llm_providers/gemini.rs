@@ -91,8 +91,8 @@ impl BaseProviderAdapter for GeminiAdapter {
                 .join("\n");
 
             let url = format!(
-                "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
-                model, api_key
+                "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent",
+                model
             );
 
             let body = serde_json::json!({
@@ -104,6 +104,7 @@ impl BaseProviderAdapter for GeminiAdapter {
             let request_future = async move {
                 let res = client
                     .post(url)
+                    .header("x-goog-api-key", api_key)
                     .header("content-type", "application/json")
                     .json(&body)
                     .send()
@@ -190,8 +191,8 @@ impl BaseProviderAdapter for GeminiAdapter {
                 .join("\n");
 
             let url = format!(
-                "https://generativelanguage.googleapis.com/v1beta/models/{}:streamGenerateContent?alt=sse&key={}",
-                model, api_key
+                "https://generativelanguage.googleapis.com/v1beta/models/{}:streamGenerateContent",
+                model
             );
 
             let body = serde_json::json!({
@@ -202,6 +203,8 @@ impl BaseProviderAdapter for GeminiAdapter {
 
             let req = client
                 .post(url)
+                .query(&[("alt", "sse")])
+                .header("x-goog-api-key", api_key)
                 .header("content-type", "application/json")
                 .json(&body);
 

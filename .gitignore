@@ -1,1 +1,8 @@
 agentforge-ui/target/
+agentforge-ui/.fastembed_cache/
+
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
