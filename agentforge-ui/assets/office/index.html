@@ -1045,7 +1045,7 @@
         // text      : message content
         // isSelf    : true = user message (right bubble), false = agent reply (left bubble)
         // agentName : display name shown above agent bubble
-        window.pushChatMessage = function(agentId, text, isSelf, agentName) {
+        window.pushChatMessage = function (agentId, text, isSelf, agentName) {
             try {
                 // If agentId is unknown (e.g. "user" message), route to first agent
                 const targetId = agents.find(a => a.id === agentId)
@@ -1072,8 +1072,8 @@
         // Office input box is display-only (real send goes through Chat tab)
         // Keep it disabled but show a hint
         document.getElementById('chat-input').placeholder = 'Send from the Chat tab...';
-        document.getElementById('chat-input').disabled = true;
-        document.getElementById('chat-send').disabled = true;
+        document.getElementById('chat-input').disabled = false;
+        document.getElementById('chat-send').disabled = false;
         document.getElementById('chat-send').style.opacity = '0.35';
     </script>
 </body>

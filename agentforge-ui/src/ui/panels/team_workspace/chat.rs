@@ -590,6 +590,14 @@ impl TeamWorkspacePanel {
                                         }
                                     }
                                 }
+                                let show_webview = !self.is_workspace_dropdown_open;
+                                webview.update(cx, |w, _| {
+                                    if show_webview {
+                                        w.show();
+                                    } else {
+                                        w.hide();
+                                    }
+                                });
 
                                 div()
                                     .flex_1()
@@ -1234,7 +1242,7 @@ impl TeamWorkspacePanel {
                                         div().flex().items_center().gap_1()
                                             .id("active-slash-cmd-pill")
                                             .bg(bg.opacity(0.2))
-                                            .text_color(bg)
+                                            // .text_color(bg)
                                             .px_2().py_1().rounded_md()
                                             .mr_2()
                                             .cursor_pointer()
@@ -1243,7 +1251,7 @@ impl TeamWorkspacePanel {
                                                 cx.notify();
                                             }))
                                             .child(Icon::new(icon).size(px(14.)))
-                                            .child(div().text_sm().font_weight(gpui::FontWeight::BOLD).child(label))
+                                            .child(div().text_sm().font_weight(gpui::FontWeight::MEDIUM).child(label))
                                     }))
                                     .child(
                                         div().flex_1().child(
@@ -2899,7 +2907,15 @@ let db_clone = db.clone();
             .justify_center()
             .child(IconName::Bot);
 
-        let text_element = Self::render_message_text(&display_content, &theme, window);
+        let text_element = if is_user {
+            let mut user_theme = theme.clone();
+            user_theme.foreground = gpui::Hsla::from(gpui::rgb(0x111827));
+            user_theme.muted_foreground = gpui::Hsla::from(gpui::rgb(0x374151));
+            user_theme.border = gpui::Hsla::from(gpui::rgba(0x11182733));
+            Self::render_message_text(&display_content, &user_theme, window)
+        } else {
+            Self::render_message_text(&display_content, &theme, window)
+        };
 
         let elem = if is_user {
             h_flex()
@@ -2950,9 +2966,9 @@ let db_clone = db.clone();
                     .max_w(px(640.0))
             // .ml_auto()
                     .p_2()
-                    .bg(theme.list_even)
+                    .bg(gpui::Hsla::from(gpui::rgb(0xadecf9)))
                     .border_1()
-                    .border_color(theme.border)
+                    .border_color(gpui::Hsla::from(gpui::rgba(0x11182722)))
                     .rounded_lg()
                     .overflow_hidden()
                     .flex()

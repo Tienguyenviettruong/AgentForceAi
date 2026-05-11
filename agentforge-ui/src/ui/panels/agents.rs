@@ -125,8 +125,9 @@ impl Render for AgentsPanel {
                         .overflow_y_scroll()
                         .p(px(24.))
                         .flex()
-                        .flex_col()
-                        .gap(px(12.))
+                        .flex_row()
+                        .flex_wrap()
+                        .gap(px(16.))
                         .children(self.agents.iter().map(|agent| {
                             
                             // Parse config for role and details
@@ -140,7 +141,8 @@ impl Render for AgentsPanel {
                             }
 
                             h_flex()
-                                .w_full()
+                                .w(px(360.))
+                                .h(px(128.))
                                 .p(px(16.))
                                 .border(px(1.))
                                 .border_color(theme.border)

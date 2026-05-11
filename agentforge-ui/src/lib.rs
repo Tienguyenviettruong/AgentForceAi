@@ -614,8 +614,17 @@ impl MainWindow {
 
     fn switch_panel(&mut self, id: SharedString, _window: &mut Window, cx: &mut Context<Self>) {
         if self.dock_areas.contains_key(&id) || id == "teams" {
+            let was_teams = self.active_page == "teams";
+            let is_teams = id == "teams";
+
             self.active_page = id;
             cx.notify();
+
+            if was_teams != is_teams {
+                self.team_workspace.update(cx, |workspace, cx| {
+                    workspace.set_active(is_teams, cx);
+                });
+            }
         }
     }
 }

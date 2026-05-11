@@ -160,6 +160,21 @@ impl TeamWorkspacePanel {
         serde_json::from_str::<serde_json::Value>(payload_str).ok()
     }
 
+    pub fn set_active(&mut self, active: bool, cx: &mut Context<Self>) {
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
+        {
+            if let Some(ref webview) = self.office_webview {
+                if active {
+                    if self.chat_active_tab == 1 {
+                        webview.update(cx, |wv, _| wv.show());
+                    }
+                } else {
+                    webview.update(cx, |wv, _| wv.hide());
+                }
+            }
+        }
+    }
+
     pub(crate) fn rebuild_chat_display(&mut self, session_id: &str) {
         let history = match self.chat_histories.get(session_id) {
             Some(h) => h,
