@@ -65,6 +65,8 @@ pub struct TeamWorkspacePanel {
     pub(crate) office_webview_init_attempted: bool,
     #[cfg(any(target_os = "windows", target_os = "macos"))]
     pub(crate) office_webview_disabled: bool,
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    pub(crate) office_ipc_rx: Option<std::sync::mpsc::Receiver<String>>,
 }
 
 impl TeamWorkspacePanel {
@@ -132,6 +134,8 @@ impl TeamWorkspacePanel {
                     v == "1" || v == "true" || v == "yes"
                 })
                 .unwrap_or(false),
+            #[cfg(any(target_os = "windows", target_os = "macos"))]
+            office_ipc_rx: None,
         };
 
         panel.reload(cx);

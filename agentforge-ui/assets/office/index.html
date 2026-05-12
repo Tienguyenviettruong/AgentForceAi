@@ -1069,12 +1069,31 @@
             } catch (e) { console.error('pushChatMessage error:', e); }
         };
 
-        // Office input box is display-only (real send goes through Chat tab)
-        // Keep it disabled but show a hint
-        document.getElementById('chat-input').placeholder = 'Send from the Chat tab...';
-        document.getElementById('chat-input').disabled = false;
-        document.getElementById('chat-send').disabled = false;
-        document.getElementById('chat-send').style.opacity = '0.35';
+        function sendOfficeChat() {
+            try {
+                const input = document.getElementById('chat-input');
+                const text = (input.value || '').trim();
+                if (!text) return;
+                input.value = '';
+                if (window.ipc && typeof window.ipc.postMessage === 'function') {
+                    window.ipc.postMessage(JSON.stringify({
+                        type: 'office_chat_send',
+                        text,
+                        agentId: chatSelectedId || null,
+                    }));
+                }
+            } catch (e) { console.error('sendOfficeChat error:', e); }
+        }
+
+        document.getElementById('chat-input').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                sendOfficeChat();
+            }
+        });
+        document.getElementById('chat-send').addEventListener('click', () => sendOfficeChat());
+        document.getElementById('chat-input').placeholder = 'Message agent...';
+        document.getElementById('chat-send').style.opacity = '1';
     </script>
 </body>
 

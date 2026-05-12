@@ -43,6 +43,30 @@ fn format_session_label(s: &crate::core::models::session::SessionRecord) -> Stri
 }
 
 impl TeamWorkspacePanel {
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    fn drain_office_ipc(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(rx) = self.office_ipc_rx.as_ref() else { return };
+        while let Ok(raw) = rx.try_recv() {
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) else { continue };
+            let typ = v.get("type").and_then(|v| v.as_str()).unwrap_or("");
+            if typ != "office_chat_send" {
+                continue;
+            }
+            let text = v.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            if text.trim().is_empty() {
+                continue;
+            }
+            let prev = self.chat_input_state.read(cx).text().to_string();
+            self.chat_input_state.update(cx, |st, cx| {
+                st.replace(text.clone(), window, cx);
+            });
+            self.handle_send_chat(window, cx);
+            self.chat_input_state.update(cx, |st, cx| {
+                st.replace(prev, window, cx);
+            });
+        }
+    }
+
     pub(crate) fn render_chat_column(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let view = cx.entity().clone();
@@ -516,6 +540,7 @@ impl TeamWorkspacePanel {
                 if self.chat_active_tab == 1 {
                     #[cfg(any(target_os = "windows", target_os = "macos"))]
                     {
+                        self.drain_office_ipc(window, cx);
                         // Native Embedded Office View via WebView (macOS / Windows)
                         if self.office_webview_disabled {
                             div()
@@ -539,9 +564,15 @@ impl TeamWorkspacePanel {
                                 }
                                 let _guard = OfficeWebviewInitGuard;
 
+                                let (ipc_tx, ipc_rx) = std::sync::mpsc::channel::<String>();
+                                self.office_ipc_rx = Some(ipc_rx);
                                 let build_result =
                                     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                        let builder = wry::WebViewBuilder::new();
+                                        let builder = wry::WebViewBuilder::new().with_ipc_handler(
+                                            move |_window, msg| {
+                                                let _ = ipc_tx.send(msg);
+                                            },
+                                        );
                                         let html_content =
                                             include_str!("../../../../assets/office/index.html");
                                         builder.with_html(html_content).build_as_child(window)
