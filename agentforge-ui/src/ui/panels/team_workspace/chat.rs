@@ -43,29 +43,7 @@ fn format_session_label(s: &crate::core::models::session::SessionRecord) -> Stri
 }
 
 impl TeamWorkspacePanel {
-    #[cfg(any(target_os = "windows", target_os = "macos"))]
-    fn drain_office_ipc(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(rx) = self.office_ipc_rx.as_ref() else { return };
-        while let Ok(raw) = rx.try_recv() {
-            let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) else { continue };
-            let typ = v.get("type").and_then(|v| v.as_str()).unwrap_or("");
-            if typ != "office_chat_send" {
-                continue;
-            }
-            let text = v.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            if text.trim().is_empty() {
-                continue;
-            }
-            let prev = self.chat_input_state.read(cx).text().to_string();
-            self.chat_input_state.update(cx, |st, cx| {
-                st.replace(text.clone(), window, cx);
-            });
-            self.handle_send_chat(window, cx);
-            self.chat_input_state.update(cx, |st, cx| {
-                st.replace(prev, window, cx);
-            });
-        }
-    }
+
 
     pub(crate) fn render_chat_column(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
@@ -540,7 +518,6 @@ impl TeamWorkspacePanel {
                 if self.chat_active_tab == 1 {
                     #[cfg(any(target_os = "windows", target_os = "macos"))]
                     {
-                        self.drain_office_ipc(window, cx);
                         // Native Embedded Office View via WebView (macOS / Windows)
                         if self.office_webview_disabled {
                             div()
@@ -566,11 +543,57 @@ impl TeamWorkspacePanel {
 
                                 let (ipc_tx, ipc_rx) = std::sync::mpsc::channel::<String>();
                                 self.office_ipc_rx = Some(ipc_rx);
+                                let mut async_cx = cx.to_async();
+                                let view_clone = cx.entity().clone();
                                 let build_result =
                                     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                                         let builder = wry::WebViewBuilder::new().with_ipc_handler(
-                                            move |_window, msg| {
-                                                let _ = ipc_tx.send(msg);
+                                            move |req: wry::http::Request<String>| {
+                                                let msg = req.into_body();
+                                                let _ = async_cx.update(|cx| {
+                                                    view_clone.update(cx, |this: &mut TeamWorkspacePanel, cx| {
+                                                        let Ok(v) = serde_json::from_str::<serde_json::Value>(&msg) else { return };
+                                                        let typ = v.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                                                        if typ != "office_chat_send" { return; }
+                                                        let text = v.get("text").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+                                                        if text.is_empty() { return; }
+                                                        
+                                                        let instance_id = if let Some(id) = &this.selected_instance_id { id.clone() } else { return };
+                                                        let session_id = if let Some(sid) = &this.selected_session_id { sid.clone() } else { return };
+                                                        let db = crate::AppState::global(cx).db.clone();
+
+                                                        {
+                                                            let history = this.chat_histories.entry(session_id.clone()).or_default();
+                                                            history.push(crate::providers::ChatMessage { role: "user".into(), content: text.clone().into(), agent_name: None });
+                                                        }
+                                                        this.rebuild_chat_display(&session_id);
+                                                        let display_len = this.chat_display_rows.get(&session_id).map(|v| v.len()).unwrap_or(0);
+                                                        this.chat_list_state = gpui::ListState::new(display_len, gpui::ListAlignment::Bottom, gpui::px(200.));
+
+                                                        let first_agent_id = db.get_instance_agents(&instance_id).ok().and_then(|ids| ids.into_iter().next()).unwrap_or_default();
+                                                        this.push_office_chat_message(&first_agent_id, &text, true, "You", cx);
+
+                                                        let user_msg = crate::teambus::routing::TeamMessage::new_broadcast(
+                                                            instance_id.clone(),
+                                                            "user".to_string(),
+                                                            text.clone(),
+                                                        );
+                                                        let _ = db.insert_team_message(&user_msg);
+                                                        let team_bus = this.team_bus.clone();
+                                                        cx.spawn(async move |_, _| {
+                                                            let _ = team_bus.route_message(user_msg).await;
+                                                        }).detach();
+
+                                                        if let Ok(agent_ids) = db.get_instance_agents(&instance_id) {
+                                                            if let Some(agent_id) = agent_ids.first() {
+                                                                let _ = db.ensure_session(&session_id, agent_id, Some(&instance_id));
+                                                                let _ = db.append_conversation_turn(&session_id, "user", &text, None);
+                                                                let _ = db.touch_session(&session_id);
+                                                            }
+                                                        }
+                                                        cx.notify();
+                                                    });
+                                                });
                                             },
                                         );
                                         let html_content =

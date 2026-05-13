@@ -367,10 +367,13 @@ impl TeamWorkspacePanel {
                                             .or_default();
                                         history.push(crate::providers::ChatMessage {
                                             role: "assistant".into(),
-                                            content: msg.content.into(),
-                                            agent_name: Some(agent_name.into()),
+                                            content: msg.content.clone().into(),
+                                            agent_name: Some(agent_name.clone().into()),
                                         });
                                     }
+                                    #[cfg(any(target_os = "windows", target_os = "macos"))]
+                                    this.push_office_chat_message(&msg.sender_member_id, &msg.content, false, &agent_name, cx);
+                                    
                                     this.rebuild_chat_display(&session_id);
                                     if this.selected_session_id.as_deref()
                                         == Some(session_id.as_str())

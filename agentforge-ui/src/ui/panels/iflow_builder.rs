@@ -10,6 +10,8 @@ use gpui_component::WindowExt;
 use gpui_component::{h_flex, v_flex};
 use gpui_component::Sizable;
 use gpui_component::dock::{Panel, PanelEvent, TitleStyle};
+use gpui_component::{ActiveTheme as _, StyledExt as _, Icon, IconName};
+use gpui_component::scroll::ScrollableElement as _;
 use std::collections::HashMap;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -339,6 +341,7 @@ impl IFlowBuilderPanel {
     }
 
     fn render_node(&self, node: &FlowNode, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme().clone();
         let zoom = self.zoom;
         let pan = self.pan;
 
@@ -354,16 +357,29 @@ impl IFlowBuilderPanel {
             .and_then(|wid| self.last_execution_state.as_ref().map(|s| (wid, s)))
             .map(|(wid, s)| {
                 if s.completed_nodes.contains(wid) {
-                    rgb(0x1f3b2d)
+                    theme.success.opacity(0.15)
                 } else if s.current_nodes.iter().any(|n| n == wid) {
-                    rgb(0x3b321f)
+                    theme.primary.opacity(0.15)
                 } else if s.pending_review.as_deref() == Some(wid.as_str()) {
-                    rgb(0x3b1f1f)
+                    theme.warning.opacity(0.15)
                 } else {
-                    rgb(0x2d2d2d)
+                    theme.background
                 }
             })
-            .unwrap_or(rgb(0x2d2d2d));
+            .unwrap_or(theme.background);
+
+        let border_col = self
+            .canvas_to_workflow
+            .get(&node_id)
+            .and_then(|wid| self.last_execution_state.as_ref().map(|s| (wid, s)))
+            .map(|(wid, s)| {
+                if s.current_nodes.iter().any(|n| n == wid) {
+                    theme.primary
+                } else {
+                    theme.border
+                }
+            })
+            .unwrap_or(theme.border);
 
         div()
             .absolute()
@@ -371,15 +387,18 @@ impl IFlowBuilderPanel {
             .top(top)
             .w(width)
             .bg(node_bg)
-            .border_1()
-            .border_color(rgb(0x404040))
-            .rounded_md()
-            .shadow_sm()
+            .border_2()
+            .border_color(border_col)
+            .rounded_xl()
+            .shadow_md()
             .child(
                 div()
-                    .bg(rgb(0x3a3a3a))
+                    .bg(theme.background)
                     .h(px(HEADER_HEIGHT * zoom))
                     .p(px(PADDING * zoom))
+                    .rounded_t_xl()
+                    .border_b_1()
+                    .border_color(theme.border)
                     .text_size(px(14.0 * zoom))
                     .font_weight(FontWeight::BOLD)
                     .child(node.title.clone())
@@ -407,10 +426,12 @@ impl IFlowBuilderPanel {
                             .items_center()
                             .child(
                                 div()
-                                    .w(px(10.0 * zoom))
-                                    .h(px(10.0 * zoom))
+                                    .w(px(12.0 * zoom))
+                                    .h(px(12.0 * zoom))
                                     .rounded_full()
-                                    .bg(rgb(0x4caf50))
+                                    .bg(theme.success)
+                                    .border_1()
+                                    .border_color(theme.background)
                                     .mr(px(8.0 * zoom))
                                     .on_mouse_up(
                                         MouseButton::Left,
@@ -432,7 +453,7 @@ impl IFlowBuilderPanel {
                                         }),
                                     ),
                             )
-                            .child(div().text_size(px(12.0 * zoom)).child(port.name.clone()))
+                            .child(div().text_size(px(12.0 * zoom)).text_color(theme.muted_foreground).child(port.name.clone()))
                     }))
                     .children(node.outputs.iter().map(|port| {
                         let port_id = port.id.clone();
@@ -441,13 +462,15 @@ impl IFlowBuilderPanel {
                             .flex()
                             .items_center()
                             .justify_between()
-                            .child(div().text_size(px(12.0 * zoom)).child(port.name.clone()))
+                            .child(div().text_size(px(12.0 * zoom)).text_color(theme.muted_foreground).child(port.name.clone()))
                             .child(
                                 div()
-                                    .w(px(10.0 * zoom))
-                                    .h(px(10.0 * zoom))
+                                    .w(px(12.0 * zoom))
+                                    .h(px(12.0 * zoom))
                                     .rounded_full()
-                                    .bg(rgb(0xf44336))
+                                    .bg(theme.primary)
+                                    .border_1()
+                                    .border_color(theme.background)
                                     .ml(px(8.0 * zoom))
                                     .on_mouse_down(
                                         MouseButton::Left,
@@ -466,6 +489,7 @@ impl IFlowBuilderPanel {
     }
 
     fn render_dashboard(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme().clone();
         let status_text = self
             .last_execution_state
             .as_ref()
@@ -483,39 +507,38 @@ impl IFlowBuilderPanel {
             .and_then(|s| s.pending_review.clone());
 
         div()
-            .absolute()
-            .top(px(16.))
-            .left(px(16.))
-            .p(px(16.))
-            .bg(rgb(0x2d2d2d))
+            .w_full()
+            .bg(theme.background)
             .border_1()
-            .border_color(rgb(0x404040))
+            .border_color(theme.border)
             .rounded_md()
             .shadow_sm()
+            .p_4()
+            .flex()
+            .flex_col()
+            .gap_4()
             .child(
                 div()
                     .text_size(px(16.))
                     .font_weight(FontWeight::BOLD)
-                    .child("Dashboard"),
+                    .text_color(theme.foreground).child("Dashboard"),
             )
             .child(
                 div()
                     .flex()
                     .gap_2()
-                    .mt_2()
-                    .child(div().child(format!("Nodes: {}", self.state.nodes.len())))
-                    .child(div().child(format!("Connections: {}", self.state.connections.len()))),
+                    .child(div().text_color(theme.foreground).child(format!("Nodes: {}", self.state.nodes.len())))
+                    .child(div().text_color(theme.foreground).child(format!("Connections: {}", self.state.connections.len()))),
             )
-            .child(div().mt_2().child(format!("Execution: {}", status_text)))
+            .child(div().text_color(theme.foreground).child(format!("Execution: {}", status_text)))
             .child(
                 div()
-                    .mt_2()
                     .flex()
                     .flex_col()
                     .gap_2()
                     .child(
                         div()
-                            .bg(rgb(0x3a3a3a))
+                            .bg(theme.muted)
                             .p_2()
                             .rounded_md()
                             .child("Run Serial")
@@ -529,7 +552,7 @@ impl IFlowBuilderPanel {
                     )
                     .child(
                         div()
-                            .bg(rgb(0x3a3a3a))
+                            .bg(theme.muted)
                             .p_2()
                             .rounded_md()
                             .child("Run Parallel")
@@ -543,7 +566,7 @@ impl IFlowBuilderPanel {
                     )
                     .child(
                         div()
-                            .bg(rgb(0x3a3a3a))
+                            .bg(theme.muted)
                             .p_2()
                             .rounded_md()
                             .child("Step")
@@ -569,7 +592,7 @@ impl IFlowBuilderPanel {
                     )
                     .child(
                         div()
-                            .bg(rgb(0x3a3a3a))
+                            .bg(theme.muted)
                             .p_2()
                             .rounded_md()
                             .child(format!(
@@ -596,7 +619,7 @@ impl IFlowBuilderPanel {
                     )
                     .child(
                         div()
-                            .bg(rgb(0x3a3a3a))
+                            .bg(theme.muted)
                             .p_2()
                             .rounded_md()
                             .child("Reject")
@@ -618,18 +641,84 @@ impl IFlowBuilderPanel {
             )
     }
 
-    fn render_palette(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_logs(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme().clone();
+        
+        let mut log_items = vec![];
+        log_items.push(div().text_color(theme.muted_foreground).child("• Initialize Environment..."));
+        log_items.push(div().text_color(theme.muted_foreground).child("• Ready for execution..."));
+        
+        if let Some(state) = &self.last_execution_state {
+            for node_id in &state.completed_nodes {
+                let name = self.canvas_to_workflow.iter()
+                    .find(|(_, wid)| *wid == node_id)
+                    .and_then(|(cid, _)| self.state.nodes.iter().find(|n| n.id == *cid))
+                    .map(|n| n.title.clone())
+                    .unwrap_or_else(|| node_id.clone());
+                log_items.push(div().text_color(theme.success).child(format!("✓ Completed: {}", name)));
+            }
+            for node_id in &state.current_nodes {
+                let name = self.canvas_to_workflow.iter()
+                    .find(|(_, wid)| *wid == node_id)
+                    .and_then(|(cid, _)| self.state.nodes.iter().find(|n| n.id == *cid))
+                    .map(|n| n.title.clone())
+                    .unwrap_or_else(|| node_id.clone());
+                log_items.push(div().text_color(theme.primary).child(format!("> Running: {}", name)));
+            }
+        }
+        
+        log_items.push(
+            h_flex().gap_2().mt_4().items_center()
+                
+                .child(div().text_color(theme.primary).child("Waiting for AI response..."))
+        );
+
         div()
-            .absolute()
-            .top(px(16.))
-            .right(px(16.))
-            .w(px(200.))
-            .p(px(16.))
-            .bg(rgb(0x2d2d2d))
+            .w_full()
+            .h_full()
+            .bg(theme.background)
             .border_1()
-            .border_color(rgb(0x404040))
+            .border_color(theme.border)
+            .rounded_md()
+            .p_4()
+            .flex()
+            .flex_col()
+            .gap_4()
+            .child(
+                div()
+                    .text_size(px(18.))
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(theme.foreground)
+                    .child("Execution Logs")
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .bg(theme.background)
+                    .border_1()
+                    .border_color(theme.border)
+                    .rounded_md()
+                    .p_4()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .children(log_items)
+            )
+    }
+
+    fn render_palette(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme().clone();
+        div()
+            .w_full()
+            .bg(theme.background)
+            .border_1()
+            .border_color(theme.border)
             .rounded_md()
             .shadow_sm()
+            .p_4()
+            .flex()
+            .flex_col()
+            .gap_4()
             .child(
                 div()
                     .text_size(px(16.))
@@ -638,13 +727,12 @@ impl IFlowBuilderPanel {
             )
             .child(
                 div()
-                    .mt_2()
                     .flex()
                     .flex_col()
                     .gap_2()
                     .child(
                         div()
-                            .bg(rgb(0x3a3a3a))
+                            .bg(theme.muted)
                             .p_2()
                             .rounded_md()
                             .child("Add Start")
@@ -657,7 +745,7 @@ impl IFlowBuilderPanel {
                     )
                     .child(
                         div()
-                            .bg(rgb(0x3a3a3a))
+                            .bg(theme.muted)
                             .p_2()
                             .rounded_md()
                             .child("Add Agent Task")
@@ -670,7 +758,7 @@ impl IFlowBuilderPanel {
                     )
                     .child(
                         div()
-                            .bg(rgb(0x3a3a3a))
+                            .bg(theme.muted)
                             .p_2()
                             .rounded_md()
                             .child("Add Decision")
@@ -683,7 +771,7 @@ impl IFlowBuilderPanel {
                     )
                     .child(
                         div()
-                            .bg(rgb(0x3a3a3a))
+                            .bg(theme.muted)
                             .p_2()
                             .rounded_md()
                             .child("Add Human Review")
@@ -696,7 +784,7 @@ impl IFlowBuilderPanel {
                     )
                     .child(
                         div()
-                            .bg(rgb(0x3a3a3a))
+                            .bg(theme.muted)
                             .p_2()
                             .rounded_md()
                             .child("Add Transform")
@@ -709,7 +797,7 @@ impl IFlowBuilderPanel {
                     )
                     .child(
                         div()
-                            .bg(rgb(0x3a3a3a))
+                            .bg(theme.muted)
                             .p_2()
                             .rounded_md()
                             .child("Add Merge")
@@ -722,7 +810,7 @@ impl IFlowBuilderPanel {
                     )
                     .child(
                         div()
-                            .bg(rgb(0x3a3a3a))
+                            .bg(theme.muted)
                             .p_2()
                             .rounded_md()
                             .child("Add Delay")
@@ -735,7 +823,7 @@ impl IFlowBuilderPanel {
                     )
                     .child(
                         div()
-                            .bg(rgb(0x3a3a3a))
+                            .bg(theme.muted)
                             .p_2()
                             .rounded_md()
                             .child("Add End")
@@ -748,7 +836,7 @@ impl IFlowBuilderPanel {
                     )
                     .child(
                         div()
-                            .bg(rgb(0x3a3a3a))
+                            .bg(theme.muted)
                             .p_2()
                             .rounded_md()
                             .child("Undo")
@@ -761,7 +849,7 @@ impl IFlowBuilderPanel {
                     )
                     .child(
                         div()
-                            .bg(rgb(0x3a3a3a))
+                            .bg(theme.muted)
                             .p_2()
                             .rounded_md()
                             .child("Redo")
@@ -774,7 +862,7 @@ impl IFlowBuilderPanel {
                     )
                     .child(
                         div()
-                            .bg(rgb(0x1a73e8)) // blue for action
+                            .bg(theme.primary) // blue for action
                             .p_2()
                             .rounded_md()
                             .child("Save Workflow")
@@ -873,16 +961,17 @@ impl IFlowBuilderPanel {
         }
     }
 
-    fn render_minimap(&self, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_minimap(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme().clone();
         div()
             .absolute()
             .bottom(px(16.))
             .right(px(16.))
             .w(px(200.))
             .h(px(150.))
-            .bg(rgb(0x2d2d2d))
+            .bg(theme.background)
             .border_1()
-            .border_color(rgb(0x404040))
+            .border_color(theme.border)
             .rounded_md()
             .shadow_sm()
             .child(
@@ -900,7 +989,7 @@ impl IFlowBuilderPanel {
                     .top(px(n.position.y * 0.1 + 75.))
                     .w(px(NODE_WIDTH * 0.1))
                     .h(px(HEADER_HEIGHT * 0.1))
-                    .bg(rgb(0x888888))
+                    .bg(theme.muted_foreground)
             }))
     }
 }
@@ -927,6 +1016,7 @@ impl Focusable for IFlowBuilderPanel {
 
 impl Render for IFlowBuilderPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme().clone();
         let zoom = self.zoom;
         let pan = self.pan;
 
@@ -956,79 +1046,12 @@ impl Render for IFlowBuilderPanel {
             }
         }
 
-        div()
-            .size_full()
-            .bg(rgb(0x1e1e1e))
+        let canvas_panel = div()
+            .flex_1()
+            .h_full()
+            .bg(theme.background)
             .overflow_hidden()
             .relative()
-            .child(
-                h_flex()
-                    .absolute()
-                    .top(px(12.))
-                    .left(px(12.))
-                    .gap(px(8.))
-                    .child(
-                        Button::new("iflow-load-latest")
-                            .small()
-                            .label("Load Latest")
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                let workflows = this.db.list_workflows().unwrap_or_default();
-                                if let Some(wf) = workflows.first() {
-                                    this.load_workflow_record(wf);
-                                    cx.notify();
-                                } else {
-                                    window.push_notification(
-                                        (gpui_component::notification::NotificationType::Info, "No workflows in DB."),
-                                        cx,
-                                    );
-                                }
-                            })),
-                    )
-                    .child(
-                        Button::new("iflow-pick")
-                            .small()
-                            .label("Pick Workflow")
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                let workflows = this.db.list_workflows().unwrap_or_default();
-                                let workflows = std::sync::Arc::new(workflows);
-                                let view = view.clone();
-                                window.open_dialog(cx, move |dialog, _window, _cx| {
-                                    let mut list = v_flex().gap(px(6.)).p(px(12.)).w_full();
-                                    for wf in workflows.iter().take(30) {
-                                        let wf_id = wf.id.clone();
-                                        let wf_name = wf.name.clone();
-                                        let wf_clone = wf.clone();
-                                        list = list.child(
-                                            Button::new(gpui::SharedString::from(format!("pick-{}", wf_id)))
-                                                .label(wf_name)
-                                                .on_click({
-                                                    let view = view.clone();
-                                                    move |_, window, cx| {
-                                                        view.update(cx, |this: &mut IFlowBuilderPanel, cx| {
-                                                            this.load_workflow_record(&wf_clone);
-                                                            cx.notify();
-                                                        });
-                                                        window.close_dialog(cx);
-                                                    }
-                                                }),
-                                        );
-                                    }
-                                    dialog
-                                        .title("Select Workflow")
-                                        .w(px(640.))
-                                        .child(list)
-                                        .footer(|_, _, _, _| {
-                                            vec![
-                                                Button::new("close-iflow-pick")
-                                                    .label("Close")
-                                                    .on_click(|_, window, cx| window.close_dialog(cx))
-                                                    .into_any_element(),
-                                            ]
-                                        })
-                                });
-                            })),
-                    ),
-            )
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, e: &MouseDownEvent, _window, _cx| {
@@ -1097,7 +1120,9 @@ impl Render for IFlowBuilderPanel {
 
                 cx.notify();
             }))
-            .child(
+            .child({
+                let active_color = theme.foreground.opacity(0.8);
+                let inactive_color = theme.foreground.opacity(0.3);
                 canvas(
                     move |_bounds, _window, _cx| {},
                     move |bounds, _, window, _cx| {
@@ -1111,9 +1136,9 @@ impl Render for IFlowBuilderPanel {
                             let sx: f32 = start_x.into();
                             let d_width = px((dx - sx).abs() * 0.5);
                             let color = if is_active {
-                                rgba(0xffffffff)
+                                active_color
                             } else {
-                                rgba(0xffffff88)
+                                inactive_color
                             };
 
                             let mut builder = gpui::PathBuilder::stroke(px(2.0)).with_style(
@@ -1132,12 +1157,113 @@ impl Render for IFlowBuilderPanel {
                     },
                 )
                 .absolute()
-                .size_full(),
-            )
+                .size_full()
+            })
             .children(nodes.iter().map(|n| self.render_node(n, cx)))
-            .child(self.render_dashboard(cx))
-            .child(self.render_palette(cx))
-            .child(self.render_minimap(cx))
+            .child(self.render_minimap(cx));
+
+        let left_panel = v_flex()
+            .w(px(280.))
+            .h_full()
+            .bg(theme.background)
+            .border_r_1()
+            .border_color(theme.border)
+            .p_4()
+            .gap_4()
+            .child(
+                div()
+                    .text_size(px(18.))
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(theme.foreground).child("Workflow Pipeline")
+            )
+            .child(self.render_dashboard(cx)).child(self.render_palette(cx))
+            .child(
+                h_flex().gap_2()
+                    .child(
+                        Button::new("iflow-load-latest")
+                            .small()
+                            .label("Load Latest")
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                let workflows = this.db.list_workflows().unwrap_or_default();
+                                if let Some(wf) = workflows.first() {
+                                    this.load_workflow_record(wf);
+                                    cx.notify();
+                                } else {
+                                    window.push_notification(
+                                        (gpui_component::notification::NotificationType::Info, "No workflows in DB."),
+                                        cx,
+                                    );
+                                }
+                            })),
+                    )
+                    .child(
+                        Button::new("iflow-pick")
+                            .small()
+                            .label("Pick Workflow")
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                let workflows = this.db.list_workflows().unwrap_or_default();
+                                let workflows = std::sync::Arc::new(workflows);
+                                let view = view.clone();
+                                window.open_dialog(cx, move |dialog, _window, _cx| {
+                                    let mut list = v_flex().gap(px(6.)).p(px(12.)).w_full();
+                                    for wf in workflows.iter().take(30) {
+                                        let wf_id = wf.id.clone();
+                                        let wf_name = wf.name.clone();
+                                        let wf_clone = wf.clone();
+                                        list = list.child(
+                                            Button::new(gpui::SharedString::from(format!("pick-{}", wf_id)))
+                                                .label(wf_name)
+                                                .on_click({
+                                                    let view = view.clone();
+                                                    move |_, window, cx| {
+                                                        view.update(cx, |this: &mut IFlowBuilderPanel, cx| {
+                                                            this.load_workflow_record(&wf_clone);
+                                                            cx.notify();
+                                                        });
+                                                        window.close_dialog(cx);
+                                                    }
+                                                }),
+                                        );
+                                    }
+                                    dialog
+                                        .title("Select Workflow")
+                                        .w(px(640.))
+                                        .child(list)
+                                        .footer(|_, _, _, _| {
+                                            vec![
+                                                Button::new("close-iflow-pick")
+                                                    .label("Close")
+                                                    .on_click(|_, window, cx| window.close_dialog(cx))
+                                                    .into_any_element(),
+                                            ]
+                                        })
+                                });
+                            })),
+                    )
+            );
+
+        let right_panel = v_flex()
+            .w(px(280.))
+            .h_full()
+            .bg(theme.background)
+            .border_l_1()
+            .border_color(theme.border)
+            .p_4()
+            .gap_4()
+            .child(
+                div()
+                    .text_size(px(18.))
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(theme.foreground).child("Node Library")
+            )
+            .child(self.render_logs(cx));
+
+        h_flex()
+            .size_full()
+            .bg(theme.background)
+            .child(left_panel)
+            .child(canvas_panel)
+            .child(right_panel)
     }
 }
 
