@@ -1599,6 +1599,16 @@ impl TeamWorkspacePanel {
             }
         }
 
+        // Audit log: record user chat message
+        let audit_event = crate::infrastructure::security::audit::AuditEvent {
+            timestamp: chrono::Utc::now(),
+            action: "chat_message".to_string(),
+            user_id: Some("user".to_string()),
+            resource: instance_id.clone(),
+            details: format!("User message ({} chars) in session {}", text.len(), session_id),
+        };
+        let _ = db.insert_audit_log(&audit_event);
+
         if let Some(target_instance_id) = self.cross_team_target_instance_id.clone() {
             if target_instance_id != instance_id {
                 let correlation_id = uuid::Uuid::new_v4().to_string();

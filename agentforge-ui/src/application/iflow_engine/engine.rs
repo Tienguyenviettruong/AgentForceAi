@@ -146,12 +146,28 @@ impl WorkflowEngine {
     pub fn persist_state(&self, state: &WorkflowState) -> Result<(), String> {
         let mut store = self.state_store.write().unwrap();
         store.insert(state.execution_id.clone(), state.clone());
+        // Also persist to database for durability
+        if let Some(ctx) = &self.execution_context {
+            let _ = ctx.db.save_workflow_state(state);
+        }
         Ok(())
     }
 
     pub fn get_state(&self, execution_id: &str) -> Option<WorkflowState> {
         let store = self.state_store.read().unwrap();
-        store.get(execution_id).cloned()
+        if let Some(state) = store.get(execution_id).cloned() {
+            return Some(state);
+        }
+        // Fallback: try to restore from database
+        drop(store);
+        if let Some(ctx) = &self.execution_context {
+            if let Ok(Some(state)) = ctx.db.load_workflow_state(execution_id) {
+                let mut store = self.state_store.write().unwrap();
+                store.insert(execution_id.to_string(), state.clone());
+                return Some(state);
+            }
+        }
+        None
     }
 
     pub async fn step_execution(&self, execution_id: &str) -> Result<WorkflowState, String> {

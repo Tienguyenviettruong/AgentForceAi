@@ -247,7 +247,9 @@ impl TeamWorkspacePanel {
                     }
                 };
                 let has_request = handoff_type == "review_request";
-                let has_response = handoff_type == "review_response";
+                let has_response = handoff_type == "review_response"
+                    || handoff_type == "message_response"
+                    || handoff_type == "COMPLETED";
                 thread_meta
                     .entry(correlation_id)
                     .and_modify(|e| {

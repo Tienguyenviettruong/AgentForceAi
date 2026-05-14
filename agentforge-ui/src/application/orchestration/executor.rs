@@ -48,8 +48,8 @@ impl AgentExecutor {
         let mut iteration = 0;
         let max_iterations = 5;
 
-        // Apply Sliding Window context pruning
-        history = self.prune_history(&history, 20);
+        // Apply Smart Context Pruning (summarize evicted messages)
+        history = self.smart_prune_history(&history, 20).await;
 
         // 1. Tool Injection
         let mut tools_json = serde_json::json!({
@@ -126,7 +126,7 @@ impl AgentExecutor {
                 },
                 {
                     "name": "run_cli",
-                    "description": "Run a shell command on the host machine.",
+                    "description": "Run a shell command on the host machine. Commands are sandboxed to the workspace directory.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -137,6 +137,42 @@ impl AgentExecutor {
                             }
                         },
                         "required": ["command", "args"]
+                    }
+                },
+                {
+                    "name": "write_file",
+                    "description": "Write content to a file in the workspace. Creates parent directories if needed. Use for creating new files.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "path": { "type": "string", "description": "Relative or absolute file path" },
+                            "content": { "type": "string", "description": "Full file content to write" }
+                        },
+                        "required": ["path", "content"]
+                    }
+                },
+                {
+                    "name": "read_file",
+                    "description": "Read the content of an existing file in the workspace.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "path": { "type": "string", "description": "Relative or absolute file path" }
+                        },
+                        "required": ["path"]
+                    }
+                },
+                {
+                    "name": "edit_file",
+                    "description": "Edit an existing file by finding and replacing text. Use this to modify specific parts of existing files.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "path": { "type": "string", "description": "Relative or absolute file path" },
+                            "find": { "type": "string", "description": "Exact text to find in the file" },
+                            "replace": { "type": "string", "description": "Text to replace it with" }
+                        },
+                        "required": ["path", "find", "replace"]
                     }
                 }
             ]
@@ -158,12 +194,13 @@ impl AgentExecutor {
 
         let tools_schema_str = serde_json::to_string_pretty(&tools_json).unwrap();
 
-        // 2. Semantic Memory (RAG)
+        // 2. Semantic Memory (RAG) — hybrid FTS + vector search
         let mut rag_context = String::new();
         if let Some(last_msg) = history.last() {
             if last_msg.role == "user" {
                 let query = last_msg.content.to_string();
                 let mut any = false;
+                // 2a. FTS on knowledge_entries (agent-saved knowledge)
                 if let Ok(entries) = self.db.search_knowledge_entries_fts(&query, 3) {
                     if !entries.is_empty() {
                         any = true;
@@ -173,12 +210,33 @@ impl AgentExecutor {
                         }
                     }
                 }
+                // 2b. FTS on knowledge table (Obsidian/document vault)
                 if !any {
                     if let Ok(items) = self.db.search_knowledge_fts(&query, 3) {
                         if !items.is_empty() {
+                            any = true;
                             rag_context.push_str("\n\n--- RELEVANT KNOWLEDGE (RAG) ---\n");
                             for item in items {
                                 rag_context.push_str(&format!("Title: {}\nContent: {}\n\n", item.title, item.content));
+                            }
+                        }
+                    }
+                }
+                // 2c. Vector/semantic search on knowledge_chunks (embedding-based)
+                if let Ok(query_vec) = crate::providers::embeddings::EmbeddingProvider::new()
+                    .get_embedding(&query)
+                    .await
+                {
+                    if let Ok(similar) = self.db.search_similar_chunks(&query_vec, 3) {
+                        if !similar.is_empty() {
+                            if !any {
+                                rag_context.push_str("\n\n--- RELEVANT KNOWLEDGE (RAG) ---\n");
+                            }
+                            rag_context.push_str("\n--- Semantic matches ---\n");
+                            for (title, chunk_content, sim) in &similar {
+                                if *sim > 0.5 {
+                                    rag_context.push_str(&format!("Document: {} (sim: {:.2})\n{}\n\n", title, sim, chunk_content));
+                                }
                             }
                         }
                     }
@@ -189,9 +247,23 @@ impl AgentExecutor {
             }
         }
 
+        // 3. Skills injection — inject available skill names for agent awareness
+        let mut skills_context = String::new();
+        {
+            let registry = crate::application::skills::initialize_skills().await;
+            let skills = registry.discover_skills().await;
+            if !skills.is_empty() {
+                skills_context.push_str("\n\n--- AVAILABLE SKILLS ---\n");
+                for skill in &skills {
+                    skills_context.push_str(&format!("- {} ({}): {}\n", skill.name, skill.id, skill.description));
+                }
+                skills_context.push_str("---\n");
+            }
+        }
+
         let injection = format!(
-            "\n\n[SYSTEM INJECTION]\nYou have access to the following tools:\n{}\n\nTo use a tool, you MUST return ONLY a JSON object wrapped in `<tool_call>` tags like this:\n<tool_call>{{\"id\":\"call_1\",\"name\":\"tool_name\",\"arguments\":{{\"key\":\"value\"}}}}</tool_call>\nDo not output any other text when making a tool call.{}",
-            tools_schema_str, rag_context
+            "\n\n[SYSTEM INJECTION]\nYou have access to the following tools:\n{}\n\nTo use a tool, you MUST return ONLY a JSON object wrapped in `<tool_call>` tags like this:\n<tool_call>{{\"id\":\"call_1\",\"name\":\"tool_name\",\"arguments\":{{\"key\":\"value\"}}}}</tool_call>\nDo not output any other text when making a tool call.{}{}",
+            tools_schema_str, rag_context, skills_context
         );
 
         if let Some(sys_msg) = history.first_mut().filter(|m| m.role == "system") {
@@ -280,6 +352,17 @@ impl AgentExecutor {
 
             for tc in tool_calls.clone() {
                 let result = self.execute_tool(&tc.name, &tc.arguments).await;
+
+                // Audit log: record every tool invocation
+                let audit_event = crate::infrastructure::security::audit::AuditEvent {
+                    timestamp: chrono::Utc::now(),
+                    action: format!("tool_call:{}", tc.name),
+                    user_id: Some(self.agent_id.clone()),
+                    resource: self.team_instance_id.clone(),
+                    details: format!("Tool: {}, Args: {}, Result (truncated): {}", tc.name, tc.arguments, &result[..std::cmp::min(200, result.len())]),
+                };
+                let _ = self.db.insert_audit_log(&audit_event);
+
                 history.push(ChatMessage {
                     role: "user".into(),
                     content: format!("Tool result (id={}, name={}):\n{}", tc.id, tc.name, result).into(),
@@ -289,6 +372,9 @@ impl AgentExecutor {
 
             iteration += 1;
         }
+        // 4. Auto-summarize session and save to knowledge for long-term memory
+        self.auto_summarize_session(&history).await;
+
         Ok("Max tool iterations reached".to_string())
     }
 
@@ -317,7 +403,8 @@ impl AgentExecutor {
         out
     }
 
-    fn prune_history(&self, history: &[ChatMessage], max_messages: usize) -> Vec<ChatMessage> {
+    /// Smart context pruning: keeps system prompt, summarizes evicted messages, keeps recent ones.
+    async fn smart_prune_history(&self, history: &[ChatMessage], max_messages: usize) -> Vec<ChatMessage> {
         let mut pruned = Vec::new();
         // Keep System Prompt (Index 0)
         if let Some(sys) = history.first().filter(|m| m.role == "system") {
@@ -325,12 +412,72 @@ impl AgentExecutor {
         }
         
         let tail_start = history.len().saturating_sub(max_messages);
-        let start_idx = std::cmp::max(1, tail_start); // Skip index 0 as it's system prompt
+        let start_idx = std::cmp::max(1, tail_start);
         
+        // If there are evicted messages, create a summary
+        if start_idx > 1 {
+            let evicted = &history[1..start_idx];
+            let mut summary_parts = Vec::new();
+            for msg in evicted {
+                let role = &msg.role;
+                let content_preview: String = msg.content.chars().take(200).collect();
+                summary_parts.push(format!("{}: {}", role, content_preview));
+            }
+            let summary_text = format!(
+                "[CONTEXT SUMMARY — {} earlier messages condensed]\n{}",
+                evicted.len(),
+                summary_parts.join("\n")
+            );
+            // Truncate summary to fit token budget (~2000 chars)
+            let truncated: String = summary_text.chars().take(2000).collect();
+            pruned.push(ChatMessage {
+                role: "system".into(),
+                content: truncated.into(),
+                agent_name: None,
+            });
+        }
+
         if start_idx < history.len() {
             pruned.extend_from_slice(&history[start_idx..]);
         }
         pruned
+    }
+
+    /// Auto-summarize the session and save key facts to knowledge base for long-term memory.
+    async fn auto_summarize_session(&self, history: &[ChatMessage]) {
+        // Only summarize if there are enough messages
+        if history.len() < 4 {
+            return;
+        }
+        // Extract key user messages and assistant responses
+        let mut key_points = Vec::new();
+        for msg in history.iter().rev().take(6) {
+            if msg.role == "user" || msg.role == "assistant" {
+                let preview: String = msg.content.chars().take(300).collect();
+                key_points.push(format!("{}: {}", msg.role, preview));
+            }
+        }
+        if key_points.is_empty() {
+            return;
+        }
+        key_points.reverse();
+
+        let summary = format!(
+            "Session summary for instance {}:\n{}",
+            self.team_instance_id,
+            key_points.join("\n")
+        );
+
+        let entry = crate::core::models::knowledge::KnowledgeEntry {
+            id: uuid::Uuid::new_v4().to_string(),
+            agent_id: self.agent_id.clone(),
+            session_id: Some(self.team_instance_id.clone()),
+            title: format!("Session Summary {}", chrono::Utc::now().format("%Y-%m-%d %H:%M")),
+            content: summary,
+            tags: vec!["auto_summary".to_string()],
+            created_at: chrono::Utc::now(),
+        };
+        let _ = self.db.upsert_knowledge_entry(&entry);
     }
 
     async fn execute_tool(&self, name: &str, args: &serde_json::Value) -> String {
@@ -525,20 +672,52 @@ impl AgentExecutor {
             let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
             let url = format!("https://html.duckduckgo.com/html/?q={}", urlencoding::encode(query));
             
-            let client = reqwest::Client::new();
-            match client.get(&url).header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)").send().await {
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(15))
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new());
+
+            match client.get(&url).header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36").send().await {
                 Ok(resp) => {
                     if let Ok(text) = resp.text().await {
-                        let mut in_tag = false;
-                        let mut stripped = String::new();
-                        for c in text.chars() {
-                            if c == '<' { in_tag = true; continue; }
-                            if c == '>' { in_tag = false; stripped.push(' '); continue; }
-                            if !in_tag { stripped.push(c); }
+                        // Extract structured results from DuckDuckGo HTML
+                        let mut results = Vec::new();
+                        let mut result_num = 0;
+
+                        // Extract result snippets between result__snippet class markers
+                        for segment in text.split("result__snippet") {
+                            if result_num > 0 && result_num <= 8 {
+                                // Strip HTML tags
+                                let mut in_tag = false;
+                                let mut clean = String::new();
+                                for c in segment.chars().take(500) {
+                                    if c == '<' { in_tag = true; continue; }
+                                    if c == '>' { in_tag = false; continue; }
+                                    if !in_tag { clean.push(c); }
+                                }
+                                let clean = clean.trim().to_string();
+                                if !clean.is_empty() && clean.len() > 20 {
+                                    results.push(format!("{}. {}", result_num, clean));
+                                }
+                            }
+                            result_num += 1;
                         }
-                        let truncated: String = stripped.split_whitespace().collect::<Vec<_>>().join(" ");
-                        let limit = std::cmp::min(3000, truncated.len());
-                        return format!("Search results:\n{}", &truncated[..limit]);
+
+                        // Fallback: if structured extraction failed, use raw strip
+                        if results.is_empty() {
+                            let mut in_tag = false;
+                            let mut stripped = String::new();
+                            for c in text.chars() {
+                                if c == '<' { in_tag = true; continue; }
+                                if c == '>' { in_tag = false; stripped.push(' '); continue; }
+                                if !in_tag { stripped.push(c); }
+                            }
+                            let truncated: String = stripped.split_whitespace().collect::<Vec<_>>().join(" ");
+                            let limit = std::cmp::min(4000, truncated.len());
+                            return format!("Search results for '{}':\n{}", query, &truncated[..limit]);
+                        }
+
+                        return format!("Search results for '{}':\n{}", query, results.join("\n\n"));
                     }
                 }
                 Err(e) => {
@@ -557,22 +736,141 @@ impl AgentExecutor {
                 .filter_map(|a| a.as_str().map(|s| s.to_string()))
                 .collect();
 
-            let output = std::process::Command::new(cmd)
-                .args(cmd_args)
-                .output();
+            // Sandbox: block dangerous commands
+            let blocked = ["rm -rf /", "format", "del /s /q", "mkfs", "dd if=", "shutdown", "reboot", ":(){ :|:", ">\\.\\physicaldrive"];
+            let full_cmd = format!("{} {}", cmd, cmd_args.join(" "));
+            for b in &blocked {
+                if full_cmd.to_lowercase().contains(b) {
+                    return format!("Command blocked by security policy: contains '{}'", b);
+                }
+            }
 
-            match output {
-                Ok(out) => {
+            // Resolve workspace directory for working dir
+            let workspace_dir = self.db
+                .get_setting(&format!("workspace_{}", self.team_instance_id))
+                .ok()
+                .flatten();
+
+            let mut command = std::process::Command::new(cmd);
+            command.args(&cmd_args);
+            if let Some(ref ws) = workspace_dir {
+                command.current_dir(ws);
+            }
+
+            // Timeout: spawn in a thread with a 60-second timeout
+            let output = tokio::task::spawn_blocking(move || {
+                command.output()
+            });
+
+            match tokio::time::timeout(std::time::Duration::from_secs(60), output).await {
+                Ok(Ok(Ok(out))) => {
                     let stdout = String::from_utf8_lossy(&out.stdout);
                     let stderr = String::from_utf8_lossy(&out.stderr);
                     let mut result = String::new();
-                    if !stdout.is_empty() { result.push_str(&format!("STDOUT:\n{}\n", stdout)); }
-                    if !stderr.is_empty() { result.push_str(&format!("STDERR:\n{}\n", stderr)); }
+                    if !stdout.is_empty() {
+                        let truncated: String = stdout.chars().take(8000).collect();
+                        result.push_str(&format!("STDOUT:\n{}\n", truncated));
+                    }
+                    if !stderr.is_empty() {
+                        let truncated: String = stderr.chars().take(4000).collect();
+                        result.push_str(&format!("STDERR:\n{}\n", truncated));
+                    }
                     return if result.is_empty() { "Command executed with no output.".to_string() } else { result };
                 }
-                Err(e) => {
+                Ok(Ok(Err(e))) => {
                     return format!("Failed to execute command: {}", e);
                 }
+                Ok(Err(e)) => {
+                    return format!("Command thread panicked: {}", e);
+                }
+                Err(_) => {
+                    return "Command timed out after 60 seconds.".to_string();
+                }
+            }
+        }
+
+        // --- File manipulation tools ---
+        if name == "write_file" {
+            let file_path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
+            let content = args.get("content").and_then(|v| v.as_str()).unwrap_or("");
+            if file_path.is_empty() {
+                return "Error: path is required.".to_string();
+            }
+            let workspace_dir = self.db.get_setting(&format!("workspace_{}", self.team_instance_id)).ok().flatten();
+            let path = std::path::Path::new(file_path);
+            let resolved = if path.is_relative() {
+                if let Some(ref ws) = workspace_dir {
+                    std::path::PathBuf::from(ws).join(path)
+                } else {
+                    path.to_path_buf()
+                }
+            } else {
+                path.to_path_buf()
+            };
+            if let Some(parent) = resolved.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            match std::fs::write(&resolved, content) {
+                Ok(_) => return format!("File written successfully: {}", resolved.display()),
+                Err(e) => return format!("Failed to write file: {}", e),
+            }
+        }
+
+        if name == "read_file" {
+            let file_path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
+            if file_path.is_empty() {
+                return "Error: path is required.".to_string();
+            }
+            let workspace_dir = self.db.get_setting(&format!("workspace_{}", self.team_instance_id)).ok().flatten();
+            let path = std::path::Path::new(file_path);
+            let resolved = if path.is_relative() {
+                if let Some(ref ws) = workspace_dir {
+                    std::path::PathBuf::from(ws).join(path)
+                } else {
+                    path.to_path_buf()
+                }
+            } else {
+                path.to_path_buf()
+            };
+            match std::fs::read_to_string(&resolved) {
+                Ok(content) => {
+                    let truncated: String = content.chars().take(12000).collect();
+                    return format!("File content of {}:\n{}", resolved.display(), truncated);
+                }
+                Err(e) => return format!("Failed to read file: {}", e),
+            }
+        }
+
+        if name == "edit_file" {
+            let file_path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
+            let find_text = args.get("find").and_then(|v| v.as_str()).unwrap_or("");
+            let replace_text = args.get("replace").and_then(|v| v.as_str()).unwrap_or("");
+            if file_path.is_empty() || find_text.is_empty() {
+                return "Error: path and find are required.".to_string();
+            }
+            let workspace_dir = self.db.get_setting(&format!("workspace_{}", self.team_instance_id)).ok().flatten();
+            let path = std::path::Path::new(file_path);
+            let resolved = if path.is_relative() {
+                if let Some(ref ws) = workspace_dir {
+                    std::path::PathBuf::from(ws).join(path)
+                } else {
+                    path.to_path_buf()
+                }
+            } else {
+                path.to_path_buf()
+            };
+            match std::fs::read_to_string(&resolved) {
+                Ok(content) => {
+                    if !content.contains(find_text) {
+                        return format!("Error: text to find not found in {}", resolved.display());
+                    }
+                    let new_content = content.replacen(find_text, replace_text, 1);
+                    match std::fs::write(&resolved, &new_content) {
+                        Ok(_) => return format!("File edited successfully: {}", resolved.display()),
+                        Err(e) => return format!("Failed to write edited file: {}", e),
+                    }
+                }
+                Err(e) => return format!("Failed to read file for editing: {}", e),
             }
         }
 

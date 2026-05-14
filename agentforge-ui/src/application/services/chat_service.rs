@@ -83,36 +83,61 @@ impl ChatService {
         let mut current_text = text.to_string();
         
         loop {
+            // Handle ```file:<path> — write entire file
             if let Some(start_idx) = current_text.find("```file:") {
                 let rest = &current_text[start_idx + 8..];
                 if let Some(newline_idx) = rest.find('\n') {
-                    let mut filepath = rest[..newline_idx].trim().to_string();
+                    let filepath = rest[..newline_idx].trim().to_string();
                     let file_content_start = &rest[newline_idx + 1..];
                     if let Some(end_idx) = file_content_start.find("```") {
                         let file_content = &file_content_start[..end_idx];
 
-                        let path = std::path::Path::new(&filepath);
-                        let resolved_path = if path.is_relative() {
-                            if let Some(ws) = workspace_dir {
-                                let mut full_path = std::path::PathBuf::from(ws);
-                                full_path.push(path);
-                                full_path
-                            } else {
-                                path.to_path_buf()
-                            }
-                        } else {
-                            path.to_path_buf()
-                        };
-                        filepath = resolved_path.to_string_lossy().to_string();
+                        let resolved_path = self.resolve_path(&filepath, workspace_dir);
 
                         if let Some(parent) = resolved_path.parent() {
                             let _ = std::fs::create_dir_all(parent);
                         }
 
                         if std::fs::write(&resolved_path, file_content).is_ok() {
-                            files_written.push(filepath);
+                            files_written.push(resolved_path.to_string_lossy().to_string());
                         }
                         
+                        let block_end = start_idx + 8 + newline_idx + 1 + end_idx + 3;
+                        current_text = current_text[block_end..].to_string();
+                        continue;
+                    }
+                }
+            }
+            // Handle ```edit:<path> — find-replace in existing file
+            // Format: ```edit:<path>\n<<<FIND>>>\nold text\n<<<REPLACE>>>\nnew text\n```
+            else if let Some(start_idx) = current_text.find("```edit:") {
+                let rest = &current_text[start_idx + 8..];
+                if let Some(newline_idx) = rest.find('\n') {
+                    let filepath = rest[..newline_idx].trim().to_string();
+                    let edit_content_start = &rest[newline_idx + 1..];
+                    if let Some(end_idx) = edit_content_start.find("```") {
+                        let edit_block = &edit_content_start[..end_idx];
+
+                        let resolved_path = self.resolve_path(&filepath, workspace_dir);
+
+                        // Parse <<<FIND>>> and <<<REPLACE>>> markers
+                        if let (Some(find_start), Some(replace_marker)) = (
+                            edit_block.find("<<<FIND>>>"),
+                            edit_block.find("<<<REPLACE>>>"),
+                        ) {
+                            let find_text = edit_block[find_start + 10..replace_marker].trim();
+                            let replace_text = edit_block[replace_marker + 13..].trim();
+
+                            if let Ok(existing_content) = std::fs::read_to_string(&resolved_path) {
+                                if existing_content.contains(find_text) {
+                                    let new_content = existing_content.replacen(find_text, replace_text, 1);
+                                    if std::fs::write(&resolved_path, &new_content).is_ok() {
+                                        files_written.push(format!("(edited) {}", resolved_path.display()));
+                                    }
+                                }
+                            }
+                        }
+
                         let block_end = start_idx + 8 + newline_idx + 1 + end_idx + 3;
                         current_text = current_text[block_end..].to_string();
                         continue;
@@ -123,5 +148,20 @@ impl ChatService {
         }
         
         (files_written, current_text)
+    }
+
+    fn resolve_path(&self, filepath: &str, workspace_dir: Option<&String>) -> std::path::PathBuf {
+        let path = std::path::Path::new(filepath);
+        if path.is_relative() {
+            if let Some(ws) = workspace_dir {
+                let mut full_path = std::path::PathBuf::from(ws);
+                full_path.push(path);
+                full_path
+            } else {
+                path.to_path_buf()
+            }
+        } else {
+            path.to_path_buf()
+        }
     }
 }

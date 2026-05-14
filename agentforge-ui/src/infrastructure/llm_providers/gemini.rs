@@ -40,15 +40,104 @@ impl GeminiAdapter {
     }
 
     /// (Task 1.22) Handle multi-modal input (text, image, video)
+    /// Sends text + media files to Gemini's multimodal API using base64 inline_data
     pub fn send_multimodal_message(
         &self,
-        _text: &str,
-        _media_paths: Vec<&str>,
+        text: &str,
+        media_paths: Vec<&str>,
     ) -> Pin<Box<dyn Future<Output = Result<ChatResponse>> + Send>> {
+        let config = self.config.clone();
+        let client = self.client.clone();
+        let text = text.to_string();
+        let media_paths: Vec<String> = media_paths.iter().map(|s| s.to_string()).collect();
+
         Box::pin(async move {
+            let config = config.ok_or_else(|| anyhow!("Adapter not initialized"))?;
+            let api_key = match config.api_key_ref.clone() {
+                Some(v) if v.starts_with("env:") => std::env::var(v.trim_start_matches("env:"))
+                    .ok()
+                    .ok_or_else(|| anyhow!("API key env var missing"))?,
+                Some(v) => v,
+                None => std::env::var("GEMINI_API_KEY")
+                    .ok()
+                    .or_else(|| std::env::var("GOOGLE_API_KEY").ok())
+                    .ok_or_else(|| anyhow!("API key missing"))?,
+            };
+            let model = config.model;
+
+            // Build parts array: text + media files
+            let mut parts = vec![serde_json::json!({"text": text})];
+
+            for path in &media_paths {
+                let file_path = std::path::Path::new(path);
+                if !file_path.exists() {
+                    continue;
+                }
+                if let Ok(data) = std::fs::read(file_path) {
+                    use base64::Engine;
+                    let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
+                    let mime = match file_path.extension().and_then(|e| e.to_str()) {
+                        Some("png") => "image/png",
+                        Some("jpg") | Some("jpeg") => "image/jpeg",
+                        Some("gif") => "image/gif",
+                        Some("webp") => "image/webp",
+                        Some("pdf") => "application/pdf",
+                        Some("mp4") => "video/mp4",
+                        Some("mov") => "video/quicktime",
+                        _ => "application/octet-stream",
+                    };
+                    parts.push(serde_json::json!({
+                        "inline_data": {
+                            "mime_type": mime,
+                            "data": b64
+                        }
+                    }));
+                }
+            }
+
+            let url = format!(
+                "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
+                model, api_key
+            );
+
+            let body = serde_json::json!({
+                "contents": [
+                    { "role": "user", "parts": parts }
+                ]
+            });
+
+            let res = client
+                .post(url)
+                .header("content-type", "application/json")
+                .json(&body)
+                .send()
+                .await?;
+
+            if !res.status().is_success() {
+                let status = res.status();
+                let text = res.text().await.unwrap_or_default();
+                return Err(anyhow!("Gemini multimodal API error: {} - {}", status, text));
+            }
+
+            let json: serde_json::Value = res.json().await?;
+            let resp_text = json["candidates"][0]["content"]["parts"][0]["text"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string();
+
+            let token_usage = json
+                .get("usageMetadata")
+                .and_then(|u| u.as_object())
+                .map(|u| TokenUsage {
+                    input_tokens: u.get("promptTokenCount").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
+                    output_tokens: u.get("candidatesTokenCount").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
+                    total_tokens: u.get("totalTokenCount").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
+                })
+                .unwrap_or_default();
+
             Ok(ChatResponse {
-                content: SharedString::from("Gemini multi-modal response"),
-                token_usage: TokenUsage::default(),
+                content: SharedString::from(resp_text),
+                token_usage,
             })
         })
     }

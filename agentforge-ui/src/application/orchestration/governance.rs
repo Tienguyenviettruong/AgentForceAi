@@ -95,6 +95,8 @@ pub struct GovernanceManager {
     orchestration_states: Arc<RwLock<HashMap<Uuid, OrchestrationState>>>,
     // For 3.36 concurrent execution limit
     active_orchestrations: Arc<Mutex<usize>>,
+    // Database port for persisting audit events to SQLite
+    db: Option<Arc<dyn crate::core::traits::database::DatabasePort>>,
 }
 
 impl GovernanceManager {
@@ -108,7 +110,14 @@ impl GovernanceManager {
             metrics: Arc::new(RwLock::new(OrchestrationMetrics::default())),
             orchestration_states: Arc::new(RwLock::new(HashMap::new())),
             active_orchestrations: Arc::new(Mutex::new(0)),
+            db: None,
         }
+    }
+
+    /// Set the database port for persisting governance audit events to SQLite
+    pub fn with_db(mut self, db: Arc<dyn crate::core::traits::database::DatabasePort>) -> Self {
+        self.db = Some(db);
+        self
     }
 
     // 3.29 Check policy constraints
@@ -157,15 +166,27 @@ impl GovernanceManager {
         }
     }
 
-    // 3.32 Governance audit trail
+    // 3.32 Governance audit trail — now persists to both in-memory and SQLite
     pub async fn log_audit_event(&self, event_type: String, description: String) {
         let event = AuditEvent {
             id: Uuid::new_v4(),
-            event_type,
-            description,
+            event_type: event_type.clone(),
+            description: description.clone(),
             timestamp: Utc::now(),
         };
         self.audit_trail.write().await.push(event);
+
+        // Also persist to database if available
+        if let Some(ref db) = self.db {
+            let db_event = crate::infrastructure::security::audit::AuditEvent {
+                timestamp: Utc::now(),
+                action: format!("governance:{}", event_type),
+                user_id: None,
+                resource: "governance".to_string(),
+                details: description,
+            };
+            let _ = db.insert_audit_log(&db_event);
+        }
     }
 
     pub async fn get_audit_trail(&self) -> Vec<AuditEvent> {

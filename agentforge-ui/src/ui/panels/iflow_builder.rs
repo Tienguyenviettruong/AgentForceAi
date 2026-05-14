@@ -992,6 +992,104 @@ impl IFlowBuilderPanel {
                     .bg(theme.muted_foreground)
             }))
     }
+    fn render_workflow_list(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme().clone();
+        let workflows = self.db.list_workflows().unwrap_or_default();
+        let view = cx.entity().clone();
+
+        let mut items = Vec::new();
+        for wf in workflows.iter().take(10) {
+            let wf_clone = wf.clone();
+            let wf_id = wf.id.clone();
+            let is_active = self.workflow_id.as_deref() == Some(wf.id.as_str());
+
+            let bg = if is_active {
+                theme.primary.opacity(0.15)
+            } else {
+                theme.muted
+            };
+
+            let date_str = chrono::DateTime::parse_from_rfc3339(&wf.updated_at)
+                .ok()
+                .map(|d| d.format("%m-%d %H:%M").to_string())
+                .unwrap_or_else(|| "—".to_string());
+
+            let view_load = view.clone();
+            let db_for_delete = self.db.clone();
+            let view_delete = view.clone();
+
+            items.push(
+                div()
+                    .bg(bg)
+                    .p_2()
+                    .rounded_md()
+                    .mb_1()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(theme.foreground)
+                                    .child(wf.name.clone()),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(10.))
+                                    .text_color(theme.muted_foreground)
+                                    .child(format!("{} • v{}", date_str, wf.version)),
+                            )
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                {
+                                    move |_, _, cx| {
+                                        view_load.update(cx, |this: &mut IFlowBuilderPanel, cx| {
+                                            this.load_workflow_record(&wf_clone);
+                                            cx.notify();
+                                        });
+                                    }
+                                },
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(theme.danger)
+                            .child("✕")
+                            .on_mouse_down(MouseButton::Left, {
+                                move |_, _, cx| {
+                                    let _ = db_for_delete.delete_workflow(&wf_id);
+                                    view_delete.update(cx, |_, cx| cx.notify());
+                                }
+                            }),
+                    ),
+            );
+        }
+
+        div()
+            .w_full()
+            .bg(theme.background)
+            .border_1()
+            .border_color(theme.border)
+            .rounded_md()
+            .p_4()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .text_size(px(14.))
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(theme.foreground)
+                    .child(format!("Saved Workflows ({})", workflows.len())),
+            )
+            .children(items)
+    }
 }
 
 impl Panel for IFlowBuilderPanel {
@@ -1256,7 +1354,8 @@ impl Render for IFlowBuilderPanel {
                     .font_weight(FontWeight::BOLD)
                     .text_color(theme.foreground).child("Node Library")
             )
-            .child(self.render_logs(cx));
+            .child(self.render_logs(cx))
+            .child(self.render_workflow_list(cx));
 
         h_flex()
             .size_full()

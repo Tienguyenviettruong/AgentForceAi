@@ -84,6 +84,7 @@ pub trait DatabasePort: Send + Sync {
     fn upsert_workflow(&self, wf: &crate::core::models::WorkflowRecord) -> anyhow::Result<()>;
     fn list_workflows(&self) -> anyhow::Result<Vec<crate::core::models::WorkflowRecord>>;
     fn get_workflow(&self, workflow_id: &str) -> anyhow::Result<Option<crate::core::models::WorkflowRecord>>;
+    fn delete_workflow(&self, workflow_id: &str) -> anyhow::Result<()>;
 
     fn save_workflow_state(&self, state: &crate::application::iflow_engine::engine::WorkflowState) -> anyhow::Result<()>;
     fn load_workflow_state(&self, execution_id: &str) -> anyhow::Result<Option<crate::application::iflow_engine::engine::WorkflowState>>;

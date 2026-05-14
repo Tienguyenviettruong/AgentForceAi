@@ -1759,6 +1759,20 @@ impl crate::core::traits::database::DatabasePort for Database {
         }
     }
 
+    fn delete_workflow(&self, workflow_id: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM workflows WHERE id = ?1",
+            params![workflow_id],
+        )?;
+        // Also clean up workflow states
+        conn.execute(
+            "DELETE FROM workflow_states WHERE workflow_id = ?1",
+            params![workflow_id],
+        )?;
+        Ok(())
+    }
+
     fn save_workflow_state(&self, state: &crate::application::iflow_engine::engine::WorkflowState) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         let now = chrono::Utc::now().to_rfc3339();

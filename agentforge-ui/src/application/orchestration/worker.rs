@@ -298,9 +298,9 @@ impl AgentWorker {
 
         let task_text = task.payload.clone().unwrap_or_else(|| task.id.clone());
         let mut instructions = if let Some(ref ws) = workspace_dir {
-            format!("Execute the following task. You are working in the directory: {}. If you generate or modify any files, use a markdown code block starting with ```file:<filepath> and ending with ```. Please output absolute file paths within this directory. For example:\n```file:{}/example.txt\nFile contents here\n```\nTask:\n", ws, ws)
+            format!("Execute the following task. You are working in the directory: {}. If you need to create a new file, use the write_file tool with a relative path. If you need to modify an existing file, use the edit_file tool (find/replace). You can also use a markdown code block starting with ```file:<filepath> and ending with ``` for new files, or ```edit:<filepath> with <<<FIND>>> and <<<REPLACE>>> markers for edits. Task:\n", ws)
         } else {
-            "Execute the following task. If you generate or modify any files, use a markdown code block starting with ```file:<filepath> and ending with ```. For example:\n```file:/workspace/example.txt\nFile contents here\n```\nTask:\n".to_string()
+            "Execute the following task. If you generate or modify any files, use the write_file or edit_file tools. You can also use a markdown code block starting with ```file:<filepath> and ending with ```. For example:\n```file:/workspace/example.txt\nFile contents here\n```\nTask:\n".to_string()
         };
 
         if let Ok(query_vec) = crate::providers::embeddings::EmbeddingProvider::new()
@@ -606,6 +606,8 @@ impl AgentWorker {
             })
             .to_string();
 
+            let reply_to_team = handoff.reply_to_team.clone();
+
             let mut msg = TeamMessage::new_broadcast(
                 handoff.reply_to_team,
                 self.agent_id.clone(),
@@ -614,6 +616,15 @@ impl AgentWorker {
             msg.metadata = Some(payload);
             let _ = self.db.insert_team_message(&msg);
             let _ = self.team_bus.route_message(msg).await;
+
+            // Emit COMPLETED status so UI shows "Responded" instead of "Pending"
+            self.emit_status_event(
+                &correlation_id,
+                &reply_to_team,
+                "COMPLETED",
+                "Cross-team review completed and response sent.",
+            )
+            .await;
         }
     }
 
@@ -767,6 +778,15 @@ impl AgentWorker {
         msg.metadata = Some(payload);
         let _ = self.db.insert_team_message(&msg);
         let _ = self.team_bus.route_message(msg).await;
+
+        // Emit COMPLETED status so UI shows "Responded" instead of "Pending"
+        self.emit_status_event(
+            &correlation_id,
+            &handoff.reply_to_team,
+            "COMPLETED",
+            "Cross-team message processed and response sent.",
+        )
+        .await;
 
         let origin_agent_id = self
             .db
