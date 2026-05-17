@@ -179,6 +179,51 @@ impl TeamWorkspacePanel {
         }
     }
 
+    pub(crate) fn sync_office_webview(&mut self, cx: &mut Context<Self>) {
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
+        {
+            if let Some(webview) = &self.office_webview {
+                // 1. Sync Visibility
+                let should_be_visible = self.chat_active_tab == 1 && !self.is_workspace_dropdown_open;
+                webview.update(cx, |w, _| {
+                    if should_be_visible {
+                        w.show();
+                    } else {
+                        w.hide();
+                    }
+                });
+
+                // 2. Sync Agents if visible
+                if should_be_visible {
+                    if let Some(instance_id) = &self.selected_instance_id {
+                        let db = crate::AppState::global(cx).db.clone();
+                        if let Ok(agent_ids) = db.get_instance_agents(instance_id) {
+                            let mut active_agents = Vec::new();
+                            for agent in &self.agents {
+                                if agent_ids.contains(&agent.id) {
+                                    active_agents.push(serde_json::json!({
+                                        "id": agent.id.clone(),
+                                        "name": agent.name.clone(),
+                                        "provider": agent.provider.clone(),
+                                        "status": agent.status.clone(),
+                                        "message": None::<String>
+                                    }));
+                                }
+                            }
+                            if let Ok(json) = serde_json::to_string(&active_agents) {
+                                let script = format!(
+                                    "window.updateAgents && window.updateAgents({});",
+                                    json
+                                );
+                                let _ = webview.read(cx).evaluate_script(&script);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     pub(crate) fn rebuild_chat_display(&mut self, session_id: &str) {
         let history = match self.chat_histories.get(session_id) {
             Some(h) => h,
@@ -509,6 +554,7 @@ impl TeamWorkspacePanel {
             self.selected_cross_team_case_id = None;
         }
 
+        self.sync_office_webview(cx);
         cx.notify();
     }
 }

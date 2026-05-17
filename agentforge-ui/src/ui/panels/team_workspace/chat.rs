@@ -92,26 +92,10 @@ impl TeamWorkspacePanel {
                                 let view = cx.entity().clone();
                                 move |index, _window, cx| {
                                     view.update(cx, |this, cx| {
-                                        let prev_tab = this.chat_active_tab;
                                         this.chat_active_tab = *index;
 
                                         // Hide/show the native webview window when switching tabs.
-                                        // The wry webview is a native OS child window that floats
-                                        // above the GPUI surface. If we don't explicitly hide it,
-                                        // it keeps intercepting all mouse/scroll events even when
-                                        // the GPUI layout no longer renders its container.
-                                        #[cfg(any(target_os = "windows", target_os = "macos"))]
-                                        {
-                                            if let Some(ref webview) = this.office_webview {
-                                                if prev_tab == 1 && *index != 1 {
-                                                    // Switching away from Office tab -> hide webview
-                                                    webview.update(cx, |wv, _| wv.hide());
-                                                } else if prev_tab != 1 && *index == 1 {
-                                                    // Switching to Office tab -> show webview
-                                                    webview.update(cx, |wv, _| wv.show());
-                                                }
-                                            }
-                                        }
+                                        this.sync_office_webview(cx);
 
                                         cx.notify();
                                     });
@@ -618,41 +602,6 @@ impl TeamWorkspacePanel {
                             }
 
                             if let Some(webview) = &self.office_webview {
-                                if let Some(instance_id) = &self.selected_instance_id {
-                                    if let Ok(agent_ids) = crate::AppState::global(cx)
-                                        .db
-                                        .get_instance_agents(instance_id)
-                                    {
-                                        let mut active_agents = Vec::new();
-                                        for agent in &self.agents {
-                                            if agent_ids.contains(&agent.id) {
-                                                active_agents.push(serde_json::json!({
-                                                    "id": agent.id.clone(),
-                                                    "name": agent.name.clone(),
-                                                    "provider": agent.provider.clone(),
-                                                    "status": agent.status.clone(),
-                                                    "message": None::<String>
-                                                }));
-                                            }
-                                        }
-                                        if let Ok(json) = serde_json::to_string(&active_agents) {
-                                            let script = format!(
-                                                "window.updateAgents && window.updateAgents({});",
-                                                json
-                                            );
-                                            let _ = webview.read(cx).evaluate_script(&script);
-                                        }
-                                    }
-                                }
-                                let show_webview = !self.is_workspace_dropdown_open;
-                                webview.update(cx, |w, _| {
-                                    if show_webview {
-                                        w.show();
-                                    } else {
-                                        w.hide();
-                                    }
-                                });
-
                                 div()
                                     .flex_1()
                                     .w_full()
@@ -951,6 +900,10 @@ impl TeamWorkspacePanel {
                                                             this.recent_workspaces = recents;
                                                         }
                                                     }
+                                                    
+                                                    // Hide/show webview if it's overlaid
+                                                    this.sync_office_webview(cx);
+                                                    
                                                     cx.notify();
                                                 }))
                                                 .child(Icon::new(IconName::FolderOpen).size(px(14.)).text_color(theme.muted_foreground))
@@ -992,6 +945,10 @@ impl TeamWorkspacePanel {
                                                                         let _ = crate::AppState::global(cx).db.set_setting(&key, &path);
                                                                         this.workspace_path = Some(path);
                                                                         this.is_workspace_dropdown_open = false;
+                                                                        
+                                                                        // Show webview again
+                                                                        this.sync_office_webview(cx);
+                                                                        
                                                                         cx.notify();
                                                                     }
                                                                 })
