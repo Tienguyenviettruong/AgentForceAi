@@ -31,8 +31,12 @@ impl TeamWorkspacePanel {
                 if t.assignee_id.as_deref() == Some(&agent.id) {
                     return true;
                 }
-                let Some(payload) = &t.payload else { return false; };
-                let Ok(v) = serde_json::from_str::<serde_json::Value>(payload) else { return false; };
+                let Some(payload) = &t.payload else {
+                    return false;
+                };
+                let Ok(v) = serde_json::from_str::<serde_json::Value>(payload) else {
+                    return false;
+                };
                 let role = v.get("role").and_then(|x| x.as_str()).unwrap_or("");
                 !role.is_empty() && role == agent.name
             })
@@ -161,7 +165,12 @@ impl TeamWorkspacePanel {
                     let (task_title, task_desc) = t
                         .payload
                         .as_deref()
-                        .and_then(|p| serde_json::from_str::<crate::application::orchestration::core::DagTask>(p).ok())
+                        .and_then(|p| {
+                            serde_json::from_str::<
+                                    crate::application::orchestration::core::DagTask,
+                                >(p)
+                                .ok()
+                        })
                         .map(|dt| (dt.name, dt.description))
                         .unwrap_or_else(|| {
                             let short_id = t.id.split(':').next_back().unwrap_or(&t.id);
@@ -312,9 +321,7 @@ impl TeamWorkspacePanel {
         };
 
         let tasks = if let Some(instance_id) = &self.selected_instance_id {
-            db
-                .list_tasks_for_instance(instance_id)
-                .unwrap_or_default()
+            db.list_tasks_for_instance(instance_id).unwrap_or_default()
         } else {
             vec![]
         };

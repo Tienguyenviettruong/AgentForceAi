@@ -1,7 +1,9 @@
 use crate::app_menus;
+use gpui::prelude::FluentBuilder;
 use gpui::{
-    div, AnyElement, App, AppContext, Context, Entity, InteractiveElement, IntoElement,
-    MouseButton, ParentElement, Render, SharedString, Styled, Subscription, Window,
+    anchored, deferred, div, AnyElement, App, AppContext, ClickEvent, Context, DismissEvent,
+    Entity, Focusable, InteractiveElement, IntoElement, MouseButton, ParentElement, Render,
+    SharedString, StatefulInteractiveElement, Styled, Subscription, Window,
 };
 use gpui::{img, px, ObjectFit, StyledImage};
 
@@ -9,9 +11,9 @@ use crate::orchestration::modes::{ModeManager, OperatingMode};
 use gpui_component::{
     badge::Badge,
     button::{Button, ButtonVariants},
-    menu::AppMenuBar,
+    menu::{AppMenuBar, PopupMenu},
     select::{Select, SelectEvent, SelectState},
-    IconName, IndexPath, Sizable, TitleBar,
+    ActiveTheme as _, IconName, IndexPath, Sizable, TitleBar,
 };
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
@@ -21,6 +23,7 @@ pub struct AgentForgeTitleBar {
     child: Rc<dyn Fn(&mut Window, &mut App) -> AnyElement>,
     _subscriptions: Vec<Subscription>,
     mode_select_state: Entity<SelectState<Vec<SharedString>>>,
+    logo_menu: Option<Entity<PopupMenu>>,
 }
 
 impl AgentForgeTitleBar {
@@ -79,6 +82,7 @@ impl AgentForgeTitleBar {
             child: Rc::new(|_, _| div().into_any_element()),
             _subscriptions: vec![],
             mode_select_state,
+            logo_menu: None,
         }
     }
 
@@ -89,6 +93,77 @@ impl AgentForgeTitleBar {
     {
         self.child = Rc::new(move |window, cx| f(window, cx).into_any_element());
         self
+    }
+
+    fn build_logo_menu(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<PopupMenu> {
+        let items = app_menus::build_app_menu_items(cx);
+        let popup_menu = PopupMenu::build(window, cx, move |mut menu, window, cx| {
+            if let Some(handle) = window.focused(cx) {
+                menu = menu.action_context(handle);
+            }
+
+            for item in items {
+                match item.owned() {
+                    gpui::OwnedMenuItem::Action { name, action, .. } => {
+                        menu = menu.menu(name, action);
+                    }
+                    gpui::OwnedMenuItem::Separator => {
+                        menu = menu.separator();
+                    }
+                    gpui::OwnedMenuItem::Submenu(submenu) => {
+                        menu = menu.submenu(submenu.name, window, cx, move |submenu_menu, _, _| {
+                            submenu
+                                .items
+                                .clone()
+                                .into_iter()
+                                .fold(submenu_menu, |menu, item| match item {
+                                    gpui::OwnedMenuItem::Action { name, action, .. } => {
+                                        menu.menu(name, action)
+                                    }
+                                    gpui::OwnedMenuItem::Separator => menu.separator(),
+                                    _ => menu,
+                                })
+                        });
+                    }
+                    gpui::OwnedMenuItem::SystemMenu(_) => {}
+                }
+            }
+
+            menu
+        });
+        popup_menu.read(cx).focus_handle(cx).focus(window);
+        self._subscriptions.push(cx.subscribe_in(
+            &popup_menu,
+            window,
+            Self::handle_logo_menu_dismiss,
+        ));
+        self.logo_menu = Some(popup_menu.clone());
+        popup_menu
+    }
+
+    fn handle_logo_menu_dismiss(
+        &mut self,
+        _: &Entity<PopupMenu>,
+        _: &DismissEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.logo_menu.take();
+        self._subscriptions.clear();
+        cx.notify();
+    }
+
+    fn toggle_logo_menu(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.logo_menu.take().is_some() {
+            self._subscriptions.clear();
+        } else {
+            self.build_logo_menu(window, cx);
+        }
+        cx.notify();
     }
 }
 
@@ -101,11 +176,35 @@ impl Render for AgentForgeTitleBar {
                     .flex()
                     .items_center()
                     .gap_2()
-                    // .pl(px(12.))
                     .child(
-                        img("icons/logo.svg")
-                            .size(px(32.))
-                            .object_fit(ObjectFit::Contain),
+                        div()
+                            .id("agentforge-logo-menu")
+                            .relative()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .w(px(38.))
+                            .h(px(28.))
+                            .rounded(px(4.))
+                            .hover(|style| style.bg(cx.theme().secondary))
+                            .on_mouse_down(MouseButton::Left, |_, window, cx| {
+                                window.prevent_default();
+                                cx.stop_propagation();
+                            })
+                            .on_click(cx.listener(Self::toggle_logo_menu))
+                            .child(
+                                img("icons/logo.svg")
+                                    .size(px(24.))
+                                    .object_fit(ObjectFit::Contain),
+                            )
+                            .when_some(self.logo_menu.clone(), |this, menu| {
+                                this.child(deferred(
+                                    anchored()
+                                        .anchor(gpui::Corner::TopLeft)
+                                        .snap_to_window_with_margin(px(8.))
+                                        .child(div().size_full().occlude().top_1().child(menu)),
+                                ))
+                            }),
                     )
                     .child(self.app_menu_bar.clone()),
             )

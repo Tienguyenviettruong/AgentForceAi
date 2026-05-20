@@ -1,17 +1,14 @@
-use gpui::*;
-use gpui_component::{ActiveTheme as _, 
-    button::*,
-    input::*,
-    select::*,
-    form::*,
-    notification::NotificationType, WindowExt,
-};
-use std::sync::Arc;
-use chrono::Utc;
-use std::collections::HashSet;
-use gpui_component::{v_flex, h_flex};
 use crate::core::traits::database::DatabasePort;
-use crate::db::{Team, Agent};
+use crate::db::{Agent, Team};
+use chrono::Utc;
+use gpui::*;
+use gpui_component::{
+    button::*, form::*, input::*, notification::NotificationType, select::*, ActiveTheme as _,
+    WindowExt,
+};
+use gpui_component::{h_flex, v_flex};
+use std::collections::HashSet;
+use std::sync::Arc;
 
 pub fn open_new_team_dialog<V: 'static>(
     db: Arc<dyn DatabasePort>,
@@ -74,19 +71,32 @@ pub fn open_new_team_dialog<V: 'static>(
                             .overflow_y_scroll()
                             .children(state.read(cx).agents.iter().map(|agent| {
                                 let agent_id = agent.id.clone();
-                                let is_selected = state.read(cx).selected_agents.contains(&agent_id);
+                                let is_selected =
+                                    state.read(cx).selected_agents.contains(&agent_id);
                                 let state_clone = state.clone();
                                 let theme = cx.theme().clone();
-                                
+
                                 div()
                                     .id(SharedString::from(format!("agent-tag-{}", agent.id)))
                                     .px(px(12.))
                                     .py(px(4.))
                                     .rounded_full()
                                     .border(px(1.))
-                                    .border_color(if is_selected { theme.primary } else { theme.border })
-                                    .bg(if is_selected { theme.primary.opacity(0.1) } else { theme.transparent })
-                                    .text_color(if is_selected { theme.primary } else { theme.muted_foreground })
+                                    .border_color(if is_selected {
+                                        theme.primary
+                                    } else {
+                                        theme.border
+                                    })
+                                    .bg(if is_selected {
+                                        theme.primary.opacity(0.1)
+                                    } else {
+                                        theme.transparent
+                                    })
+                                    .text_color(if is_selected {
+                                        theme.primary
+                                    } else {
+                                        theme.muted_foreground
+                                    })
                                     .text_size(px(13.))
                                     .cursor_pointer()
                                     .child(agent.name.clone())
@@ -150,20 +160,22 @@ pub fn open_new_team_dialog<V: 'static>(
                                         );
                                         return;
                                     }
- 
-                                     if state_save3.read(cx).selected_agents.is_empty() {
-                                         window.push_notification(
-                                             (NotificationType::Error, "Please select at least one agent."),
-                                             cx,
-                                         );
-                                         return;
-                                     }
+
+                                    if state_save3.read(cx).selected_agents.is_empty() {
+                                        window.push_notification(
+                                            (
+                                                NotificationType::Error,
+                                                "Please select at least one agent.",
+                                            ),
+                                            cx,
+                                        );
+                                        return;
+                                    }
 
                                     let now = Utc::now().to_rfc3339();
                                     let description =
                                         description_input3.read(cx).text().to_string();
-                                    let objectives =
-                                        objectives_input3.read(cx).text().to_string();
+                                    let objectives = objectives_input3.read(cx).text().to_string();
                                     let team_id = uuid::Uuid::new_v4().to_string();
                                     let team = Team {
                                         id: team_id.clone(),
@@ -189,10 +201,15 @@ pub fn open_new_team_dialog<V: 'static>(
                                     };
 
                                     if db_save3.insert_team(&team).is_ok() {
-                                        let selected_agents: Vec<String> =
-                                            state_save3.read(cx).selected_agents.iter().cloned().collect();
+                                        let selected_agents: Vec<String> = state_save3
+                                            .read(cx)
+                                            .selected_agents
+                                            .iter()
+                                            .cloned()
+                                            .collect();
                                         for agent_id in selected_agents {
-                                            let _ = db_save3.assign_agent_to_team(&team_id, &agent_id);
+                                            let _ =
+                                                db_save3.assign_agent_to_team(&team_id, &agent_id);
                                         }
                                         view_save3.update(cx, on_success_save3.clone());
                                         window.close_dialog(cx);
@@ -229,7 +246,8 @@ pub fn open_new_agent_dialog<V: 'static>(
     let system_prompt_input =
         cx.new(|cx| InputState::new(window, cx).placeholder("System prompt (optional)"));
     let role_input = cx.new(|cx| InputState::new(window, cx).placeholder("Role / Position"));
-    let details_input = cx.new(|cx| InputState::new(window, cx).placeholder("Agent Details / Info"));
+    let details_input =
+        cx.new(|cx| InputState::new(window, cx).placeholder("Agent Details / Info"));
 
     let providers: Vec<SharedString> = db
         .list_providers()
@@ -416,8 +434,10 @@ pub fn open_new_instance_dialog<V: 'static>(
     let template_options: Vec<SharedString> = teams.iter().map(|t| t.name.clone().into()).collect();
     let template_select = cx.new(|cx| SelectState::new(template_options, None, window, cx));
 
-    let name_input = cx.new(|cx| InputState::new(window, cx).placeholder("Instance name (e.g. Test Run)"));
-    let config_input = cx.new(|cx| InputState::new(window, cx).placeholder("Configuration / Context"));
+    let name_input =
+        cx.new(|cx| InputState::new(window, cx).placeholder("Instance name (e.g. Test Run)"));
+    let config_input =
+        cx.new(|cx| InputState::new(window, cx).placeholder("Configuration / Context"));
 
     window.open_dialog(cx, move |dialog, _window, _cx| {
         let view_save = view.clone();
@@ -487,9 +507,13 @@ pub fn open_new_instance_dialog<V: 'static>(
                                 let teams_save3 = teams_save2.clone();
 
                                 move |_ev, window, cx| {
-                                    let selected_template_name = template_select3.read(cx).selected_value();
+                                    let selected_template_name =
+                                        template_select3.read(cx).selected_value();
                                     let team_id = selected_template_name.and_then(|name| {
-                                        teams_save3.iter().find(|t| t.name == *name).map(|t| t.id.clone())
+                                        teams_save3
+                                            .iter()
+                                            .find(|t| t.name == *name)
+                                            .map(|t| t.id.clone())
                                     });
 
                                     if team_id.is_none() {
@@ -512,15 +536,39 @@ pub fn open_new_instance_dialog<V: 'static>(
 
                                     let config = config_input3.read(cx).text().to_string();
                                     let config = config.trim().to_string();
-                                    let config_opt = if config.is_empty() { None } else { Some(config.as_str()) };
+                                    let config_opt = if config.is_empty() {
+                                        None
+                                    } else {
+                                        Some(config.as_str())
+                                    };
 
-                                    let instance_id = format!("{}-{}", name.replace(" ", "-").to_lowercase(), uuid::Uuid::new_v4().to_string().chars().take(4).collect::<String>());
+                                    let instance_id = format!(
+                                        "{}-{}",
+                                        name.replace(" ", "-").to_lowercase(),
+                                        uuid::Uuid::new_v4()
+                                            .to_string()
+                                            .chars()
+                                            .take(4)
+                                            .collect::<String>()
+                                    );
 
-                                    if db_save3.create_instance(&instance_id, &name, &team_id.unwrap(), config_opt, Some("running")).is_ok() {
+                                    if db_save3
+                                        .create_instance(
+                                            &instance_id,
+                                            &name,
+                                            &team_id.unwrap(),
+                                            config_opt,
+                                            Some("running"),
+                                        )
+                                        .is_ok()
+                                    {
                                         view_save3.update(cx, on_success_save3.clone());
                                         window.close_dialog(cx);
                                         window.push_notification(
-                                            (NotificationType::Success, "Instance created successfully."),
+                                            (
+                                                NotificationType::Success,
+                                                "Instance created successfully.",
+                                            ),
                                             cx,
                                         );
                                     } else {
@@ -564,15 +612,12 @@ pub fn open_edit_instance_name_dialog<V: 'static>(
             .title("Rename Instance")
             .w(px(420.))
             .child(
-                v_form()
-                    .gap(px(12.))
-                    .py(px(8.))
-                    .child(
-                        field()
-                            .label("Instance Name")
-                            .required(true)
-                            .child(Input::new(&name_input_save)),
-                    ),
+                v_form().gap(px(12.)).py(px(8.)).child(
+                    field()
+                        .label("Instance Name")
+                        .required(true)
+                        .child(Input::new(&name_input_save)),
+                ),
             )
             .footer(move |_, _, _, _| {
                 let view_save2 = view_save.clone();
@@ -665,22 +710,35 @@ pub fn open_manage_team_dialog<V: 'static>(
                     .flex_wrap()
                     .py(px(8.))
                     .max_h(px(400.))
-                    .id("manage-team-scroll").overflow_y_scroll()
+                    .id("manage-team-scroll")
+                    .overflow_y_scroll()
                     .children(state.read(cx).agents.iter().map(|agent| {
                         let agent_id = agent.id.clone();
                         let is_selected = state.read(cx).selected_agents.contains(&agent_id);
                         let state_clone = state.clone();
                         let theme = cx.theme().clone();
-                        
+
                         div()
                             .id(SharedString::from(format!("manage-agent-tag-{}", agent.id)))
                             .px(px(12.))
                             .py(px(4.))
                             .rounded_full()
                             .border(px(1.))
-                            .border_color(if is_selected { theme.primary } else { theme.border })
-                            .bg(if is_selected { theme.primary.opacity(0.1) } else { theme.transparent })
-                            .text_color(if is_selected { theme.primary } else { theme.muted_foreground })
+                            .border_color(if is_selected {
+                                theme.primary
+                            } else {
+                                theme.border
+                            })
+                            .bg(if is_selected {
+                                theme.primary.opacity(0.1)
+                            } else {
+                                theme.transparent
+                            })
+                            .text_color(if is_selected {
+                                theme.primary
+                            } else {
+                                theme.muted_foreground
+                            })
                             .text_size(px(13.))
                             .cursor_pointer()
                             .child(agent.name.clone())
@@ -694,7 +752,7 @@ pub fn open_manage_team_dialog<V: 'static>(
                                     cx.notify();
                                 });
                             })
-                    }))
+                    })),
             )
             .footer({
                 move |_, _, _, _| {
@@ -716,19 +774,22 @@ pub fn open_manage_team_dialog<V: 'static>(
                             .label("Save Members")
                             .on_click(move |_ev, window, cx| {
                                 let state = state_save2.read(cx);
-                                let current_team_agents = db_save2.get_team_agents(&team_id_save2).unwrap_or_default();
-                                let current_set: HashSet<String> = current_team_agents.into_iter().collect();
-                                
+                                let current_team_agents =
+                                    db_save2.get_team_agents(&team_id_save2).unwrap_or_default();
+                                let current_set: HashSet<String> =
+                                    current_team_agents.into_iter().collect();
+
                                 // Agents to add
                                 for agent_id in state.selected_agents.difference(&current_set) {
                                     let _ = db_save2.assign_agent_to_team(&team_id_save2, agent_id);
                                 }
-                                
+
                                 // Agents to remove
                                 for agent_id in current_set.difference(&state.selected_agents) {
-                                    let _ = db_save2.remove_agent_from_team(&team_id_save2, agent_id);
+                                    let _ =
+                                        db_save2.remove_agent_from_team(&team_id_save2, agent_id);
                                 }
-                                
+
                                 view_save2.update(cx, on_success_save2.clone());
                                 window.close_dialog(cx);
                                 window.push_notification(
@@ -745,7 +806,6 @@ pub fn open_manage_team_dialog<V: 'static>(
             })
     });
 }
-
 
 pub fn open_edit_agent_dialog<V: 'static>(
     db: Arc<dyn DatabasePort>,
@@ -797,7 +857,7 @@ pub fn open_edit_agent_dialog<V: 'static>(
         .into_iter()
         .map(|p| SharedString::from(format!("{} / {}", p.provider_name, p.model)))
         .collect();
-        
+
     let current_provider = agent_to_edit
         .provider
         .split(" / ")
@@ -808,9 +868,14 @@ pub fn open_edit_agent_dialog<V: 'static>(
     let initial_provider_idx = providers
         .iter()
         .position(|p| p.as_ref().starts_with(&format!("{} /", current_provider)))
-        .or_else(|| providers.iter().position(|p| p.as_ref() == current_provider))
+        .or_else(|| {
+            providers
+                .iter()
+                .position(|p| p.as_ref() == current_provider)
+        })
         .map(|i| gpui_component::IndexPath::new(i));
-    let provider_select = cx.new(|cx| SelectState::new(providers, initial_provider_idx, window, cx));
+    let provider_select =
+        cx.new(|cx| SelectState::new(providers, initial_provider_idx, window, cx));
 
     window.open_dialog(cx, move |dialog, _window, _cx| {
         let view_save = view.clone();

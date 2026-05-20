@@ -1,4 +1,4 @@
-use gpui::{div, IntoElement, RenderOnce, Styled, ParentElement, Window, App};
+use gpui::{div, App, IntoElement, ParentElement, RenderOnce, Styled, Window};
 
 pub struct OnboardingStep {
     pub title: String,

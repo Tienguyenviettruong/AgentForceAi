@@ -35,7 +35,8 @@ impl<'a> MemberManager<'a> {
     }
 
     pub fn remove_member(&self, member_id: &str) -> Result<()> {
-        self.conn.execute("DELETE FROM members WHERE id = ?1", params![member_id])?;
+        self.conn
+            .execute("DELETE FROM members WHERE id = ?1", params![member_id])?;
         Ok(())
     }
 

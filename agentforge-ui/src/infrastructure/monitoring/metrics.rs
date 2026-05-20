@@ -19,14 +19,23 @@ impl MetricCard {
 
     pub fn render(self, cx: &App) -> impl IntoElement {
         let theme = cx.theme();
-        
+
         let change_el = if let Some(change) = self.metric.change {
             let (color, text) = if change >= 0.0 {
-                (gpui::Hsla::from(gpui::rgb(0x10b981)), format!("+{:.1}%", change))
+                (
+                    gpui::Hsla::from(gpui::rgb(0x10b981)),
+                    format!("+{:.1}%", change),
+                )
             } else {
-                (gpui::Hsla::from(gpui::rgb(0xef4444)), format!("{:.1}%", change))
+                (
+                    gpui::Hsla::from(gpui::rgb(0xef4444)),
+                    format!("{:.1}%", change),
+                )
             };
-            div().text_color(color).text_size(gpui::px(12.0)).child(text)
+            div()
+                .text_color(color)
+                .text_size(gpui::px(12.0))
+                .child(text)
         } else {
             div()
         };
@@ -44,7 +53,7 @@ impl MetricCard {
                 div()
                     .text_color(theme.muted_foreground)
                     .text_size(gpui::px(14.0))
-                    .child(self.metric.label.clone())
+                    .child(self.metric.label.clone()),
             )
             .child(
                 div()
@@ -56,9 +65,9 @@ impl MetricCard {
                             .text_color(theme.foreground)
                             .text_size(gpui::px(24.0))
                             .font_weight(gpui::FontWeight::BOLD)
-                            .child(self.metric.value.clone())
+                            .child(self.metric.value.clone()),
                     )
-                    .child(change_el)
+                    .child(change_el),
             )
     }
 }

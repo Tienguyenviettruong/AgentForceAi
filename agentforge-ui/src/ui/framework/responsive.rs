@@ -1,4 +1,4 @@
-use gpui::{div, IntoElement, ParentElement, RenderOnce, Window, App, px};
+use gpui::{div, px, App, IntoElement, ParentElement, RenderOnce, Window};
 
 pub enum Breakpoint {
     Mobile,

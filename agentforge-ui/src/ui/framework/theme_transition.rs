@@ -5,11 +5,7 @@ pub struct ThemeTransitionManager;
 
 impl ThemeTransitionManager {
     pub fn apply_theme(cx: &mut App, theme_name: &str) {
-        if let Some(theme_config) = ThemeRegistry::global(cx)
-            .themes()
-            .get(theme_name)
-            .cloned()
-        {
+        if let Some(theme_config) = ThemeRegistry::global(cx).themes().get(theme_name).cloned() {
             Theme::global_mut(cx).apply_config(&theme_config);
             cx.refresh_windows();
         }

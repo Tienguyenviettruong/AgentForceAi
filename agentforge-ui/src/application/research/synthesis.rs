@@ -35,7 +35,7 @@ impl SynthesisTask {
         if self.raw_data.is_empty() {
             return Err("No data to synthesize".to_string());
         }
-        
+
         // Mock synthesis process
         let synthesized_text = format!(
             "Synthesized {} distinct pieces of information into a cohesive summary.",

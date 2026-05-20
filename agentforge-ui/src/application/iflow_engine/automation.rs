@@ -20,7 +20,7 @@ impl IFlowAutomation {
             .ok()
             .and_then(|mut v| v.pop())
             .map(|i| i.id);
-            
+
         let ctx = Arc::new(WorkflowExecutionContext {
             db: db.clone(),
             team_bus: team_bus.clone(),
@@ -40,22 +40,28 @@ impl IFlowAutomation {
                     let Ok(workflow) = parsed else { continue };
 
                     let start_node = workflow.nodes.get(&workflow.start_node_id);
-                    let Some(start_node) = start_node else { continue };
+                    let Some(start_node) = start_node else {
+                        continue;
+                    };
 
                     let interval_ms = match &start_node.node_type {
                         NodeType::CronTrigger { interval_ms } => Some(*interval_ms),
                         _ => None,
                     };
-                    let Some(interval_ms) = interval_ms else { continue };
+                    let Some(interval_ms) = interval_ms else {
+                        continue;
+                    };
 
                     engine_cron.register_workflow(workflow.clone());
-                    let entry = next_runs.entry(workflow.id.clone()).or_insert_with(|| {
-                        Instant::now() + Duration::from_millis(interval_ms)
-                    });
+                    let entry = next_runs
+                        .entry(workflow.id.clone())
+                        .or_insert_with(|| Instant::now() + Duration::from_millis(interval_ms));
                     if Instant::now() >= *entry {
-                        if let Ok(execution_id) =
-                            engine_cron.start_workflow(&workflow.id, ExecutionStrategy::Parallel, Default::default())
-                        {
+                        if let Ok(execution_id) = engine_cron.start_workflow(
+                            &workflow.id,
+                            ExecutionStrategy::Parallel,
+                            Default::default(),
+                        ) {
                             let _ = Self::run_execution(&engine_cron, &execution_id).await;
                         }
                         *entry = Instant::now() + Duration::from_millis(interval_ms);
@@ -72,7 +78,7 @@ impl IFlowAutomation {
             let mut rx = team_bus
                 .register_member(&instance_id, "iflow_engine", "System")
                 .await;
-                
+
             while let Some(msg) = rx.recv().await {
                 if let Some(metadata) = msg.metadata {
                     if metadata.starts_with("iflow_result:") {
@@ -80,7 +86,11 @@ impl IFlowAutomation {
                         if parts.len() >= 3 {
                             let execution_id = parts[1];
                             let node_id = parts[2];
-                            if let Ok(_state) = engine_listener.resolve_agent_task(execution_id, node_id, msg.content) {
+                            if let Ok(_state) = engine_listener.resolve_agent_task(
+                                execution_id,
+                                node_id,
+                                msg.content,
+                            ) {
                                 // Resume execution
                                 let _ = Self::run_execution(&engine_listener, execution_id).await;
                             }
@@ -100,7 +110,7 @@ impl IFlowAutomation {
                         tokio::time::sleep(Duration::from_millis(100)).await;
                     }
                     continue;
-                },
+                }
                 WorkflowStatus::Pending => continue,
                 WorkflowStatus::Paused => return Ok(()),
                 WorkflowStatus::Completed => return Ok(()),

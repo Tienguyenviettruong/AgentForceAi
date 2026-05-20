@@ -1,10 +1,10 @@
 use super::{BaseProviderAdapter, ChatMessage, ChatResponse, TokenUsage};
 use anyhow::{anyhow, Result};
+use futures::stream::StreamExt;
 use gpui::SharedString;
+use std::env;
 use std::future::Future;
 use std::pin::Pin;
-use std::env;
-use futures::stream::StreamExt;
 
 /// Gemini CLI adapter with NDJSON streaming
 /// (Tasks 1.21, 1.22)
@@ -116,7 +116,11 @@ impl GeminiAdapter {
             if !res.status().is_success() {
                 let status = res.status();
                 let text = res.text().await.unwrap_or_default();
-                return Err(anyhow!("Gemini multimodal API error: {} - {}", status, text));
+                return Err(anyhow!(
+                    "Gemini multimodal API error: {} - {}",
+                    status,
+                    text
+                ));
             }
 
             let json: serde_json::Value = res.json().await?;
@@ -129,9 +133,18 @@ impl GeminiAdapter {
                 .get("usageMetadata")
                 .and_then(|u| u.as_object())
                 .map(|u| TokenUsage {
-                    input_tokens: u.get("promptTokenCount").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
-                    output_tokens: u.get("candidatesTokenCount").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
-                    total_tokens: u.get("totalTokenCount").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
+                    input_tokens: u
+                        .get("promptTokenCount")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0) as usize,
+                    output_tokens: u
+                        .get("candidatesTokenCount")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0) as usize,
+                    total_tokens: u
+                        .get("totalTokenCount")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0) as usize,
                 })
                 .unwrap_or_default();
 
@@ -162,14 +175,18 @@ impl BaseProviderAdapter for GeminiAdapter {
         Box::pin(async move {
             let config = config.ok_or_else(|| anyhow!("Adapter not initialized"))?;
             let api_key = match config.api_key_ref.clone() {
-                Some(v) if v.starts_with("env:") => env::var(v.trim_start_matches("env:"))
-                    .ok()
-                    .ok_or_else(|| anyhow!("API key env var missing: {}", v.trim_start_matches("env:")))?,
+                Some(v) if v.starts_with("env:") => {
+                    env::var(v.trim_start_matches("env:")).ok().ok_or_else(|| {
+                        anyhow!("API key env var missing: {}", v.trim_start_matches("env:"))
+                    })?
+                }
                 Some(v) => v,
                 None => env::var("GEMINI_API_KEY")
                     .ok()
                     .or_else(|| env::var("GOOGLE_API_KEY").ok())
-                    .ok_or_else(|| anyhow!("API key missing (set provider api_key_ref or env GEMINI_API_KEY)"))?,
+                    .ok_or_else(|| {
+                        anyhow!("API key missing (set provider api_key_ref or env GEMINI_API_KEY)")
+                    })?,
             };
             let model = config.model;
 
@@ -251,7 +268,12 @@ impl BaseProviderAdapter for GeminiAdapter {
         Box<
             dyn Future<
                     Output = Result<
-                        Box<dyn futures::Stream<Item = Result<crate::providers::StreamChunk, anyhow::Error>> + Send + Unpin>,
+                        Box<
+                            dyn futures::Stream<
+                                    Item = Result<crate::providers::StreamChunk, anyhow::Error>,
+                                > + Send
+                                + Unpin,
+                        >,
                     >,
                 > + Send,
         >,
@@ -261,14 +283,18 @@ impl BaseProviderAdapter for GeminiAdapter {
         Box::pin(async move {
             let config = config.ok_or_else(|| anyhow!("Adapter not initialized"))?;
             let api_key = match config.api_key_ref.clone() {
-                Some(v) if v.starts_with("env:") => env::var(v.trim_start_matches("env:"))
-                    .ok()
-                    .ok_or_else(|| anyhow!("API key env var missing: {}", v.trim_start_matches("env:")))?,
+                Some(v) if v.starts_with("env:") => {
+                    env::var(v.trim_start_matches("env:")).ok().ok_or_else(|| {
+                        anyhow!("API key env var missing: {}", v.trim_start_matches("env:"))
+                    })?
+                }
                 Some(v) => v,
                 None => env::var("GEMINI_API_KEY")
                     .ok()
                     .or_else(|| env::var("GOOGLE_API_KEY").ok())
-                    .ok_or_else(|| anyhow!("API key missing (set provider api_key_ref or env GEMINI_API_KEY)"))?,
+                    .ok_or_else(|| {
+                        anyhow!("API key missing (set provider api_key_ref or env GEMINI_API_KEY)")
+                    })?,
             };
             let model = config.model;
 
@@ -301,7 +327,8 @@ impl BaseProviderAdapter for GeminiAdapter {
                 let mut es = match reqwest_eventsource::EventSource::new(req) {
                     Ok(es) => es,
                     Err(e) => {
-                        let _ = tx.unbounded_send(Err(anyhow!("Failed to create event source: {}", e)));
+                        let _ =
+                            tx.unbounded_send(Err(anyhow!("Failed to create event source: {}", e)));
                         return;
                     }
                 };
@@ -316,9 +343,14 @@ impl BaseProviderAdapter for GeminiAdapter {
                             if message.data == "[DONE]" {
                                 break;
                             }
-                            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&message.data) {
-                                if let Some(text) = v["candidates"][0]["content"]["parts"][0]["text"].as_str() {
-                                    let _ = tx.unbounded_send(Ok(crate::providers::StreamChunk::Text(text.to_string())));
+                            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&message.data)
+                            {
+                                if let Some(text) =
+                                    v["candidates"][0]["content"]["parts"][0]["text"].as_str()
+                                {
+                                    let _ = tx.unbounded_send(Ok(
+                                        crate::providers::StreamChunk::Text(text.to_string()),
+                                    ));
                                 }
                             }
                         }
@@ -330,10 +362,17 @@ impl BaseProviderAdapter for GeminiAdapter {
                     }
                 }
 
-                let _ = tx.unbounded_send(Ok(crate::providers::StreamChunk::Done(crate::providers::TokenUsage::default())));
+                let _ = tx.unbounded_send(Ok(crate::providers::StreamChunk::Done(
+                    crate::providers::TokenUsage::default(),
+                )));
             });
 
-            Ok(Box::new(rx) as Box<dyn futures::Stream<Item = Result<crate::providers::StreamChunk, anyhow::Error>> + Send + Unpin>)
+            Ok(Box::new(rx)
+                as Box<
+                    dyn futures::Stream<Item = Result<crate::providers::StreamChunk, anyhow::Error>>
+                        + Send
+                        + Unpin,
+                >)
         })
     }
 

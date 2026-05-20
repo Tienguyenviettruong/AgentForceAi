@@ -1,10 +1,10 @@
 use super::{BaseProviderAdapter, ChatMessage, ChatResponse, TokenUsage};
 use anyhow::{anyhow, Result};
+use futures::stream::StreamExt;
 use gpui::SharedString;
+use std::env;
 use std::future::Future;
 use std::pin::Pin;
-use std::env;
-use futures::stream::StreamExt;
 
 static RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
 
@@ -93,7 +93,7 @@ impl BaseProviderAdapter for OpenRouterAdapter {
     ) -> Pin<Box<dyn Future<Output = Result<ChatResponse, anyhow::Error>> + Send>> {
         let config = self.config.clone();
         let client = self.client.clone();
-        
+
         Box::pin(async move {
             let config = config.ok_or_else(|| anyhow!("Adapter not initialized"))?;
             let api_key = match config.api_key_ref.clone() {
@@ -108,10 +108,13 @@ impl BaseProviderAdapter for OpenRouterAdapter {
             };
             let model = config.model;
 
-            let req_messages: Vec<OpenRouterMessage> = messages.into_iter().map(|m| OpenRouterMessage {
-                role: m.role.to_string(),
-                content: m.content.to_string(),
-            }).collect();
+            let req_messages: Vec<OpenRouterMessage> = messages
+                .into_iter()
+                .map(|m| OpenRouterMessage {
+                    role: m.role.to_string(),
+                    content: m.content.to_string(),
+                })
+                .collect();
 
             let request_body = OpenRouterRequest {
                 model,
@@ -145,11 +148,14 @@ impl BaseProviderAdapter for OpenRouterAdapter {
                     .and_then(|c| c.message.content.clone())
                     .unwrap_or_default();
 
-                let token_usage = response_body.usage.map(|u| TokenUsage {
-                    input_tokens: u.prompt_tokens,
-                    output_tokens: u.completion_tokens,
-                    total_tokens: u.total_tokens,
-                }).unwrap_or_default();
+                let token_usage = response_body
+                    .usage
+                    .map(|u| TokenUsage {
+                        input_tokens: u.prompt_tokens,
+                        output_tokens: u.completion_tokens,
+                        total_tokens: u.total_tokens,
+                    })
+                    .unwrap_or_default();
 
                 Ok(ChatResponse {
                     content: SharedString::from(content),
@@ -174,7 +180,12 @@ impl BaseProviderAdapter for OpenRouterAdapter {
         Box<
             dyn Future<
                     Output = Result<
-                        Box<dyn futures::Stream<Item = Result<crate::providers::StreamChunk, anyhow::Error>> + Send + Unpin>,
+                        Box<
+                            dyn futures::Stream<
+                                    Item = Result<crate::providers::StreamChunk, anyhow::Error>,
+                                > + Send
+                                + Unpin,
+                        >,
                         anyhow::Error,
                     >,
                 > + Send,
@@ -182,7 +193,7 @@ impl BaseProviderAdapter for OpenRouterAdapter {
     > {
         let config = self.config.clone();
         let client = self.client.clone();
-        
+
         Box::pin(async move {
             let config = config.ok_or_else(|| anyhow!("Adapter not initialized"))?;
             let api_key = match config.api_key_ref.clone() {
@@ -197,10 +208,13 @@ impl BaseProviderAdapter for OpenRouterAdapter {
             };
             let model = config.model;
 
-            let req_messages: Vec<OpenRouterMessage> = messages.into_iter().map(|m| OpenRouterMessage {
-                role: m.role.to_string(),
-                content: m.content.to_string(),
-            }).collect();
+            let req_messages: Vec<OpenRouterMessage> = messages
+                .into_iter()
+                .map(|m| OpenRouterMessage {
+                    role: m.role.to_string(),
+                    content: m.content.to_string(),
+                })
+                .collect();
 
             let request_body = serde_json::json!({
                 "model": model,
@@ -224,7 +238,8 @@ impl BaseProviderAdapter for OpenRouterAdapter {
                 let mut es = match reqwest_eventsource::EventSource::new(req) {
                     Ok(es) => es,
                     Err(e) => {
-                        let _ = tx.unbounded_send(Err(anyhow!("Failed to create event source: {}", e)));
+                        let _ =
+                            tx.unbounded_send(Err(anyhow!("Failed to create event source: {}", e)));
                         return;
                     }
                 };
@@ -235,17 +250,32 @@ impl BaseProviderAdapter for OpenRouterAdapter {
                         Ok(reqwest_eventsource::Event::Open) => continue,
                         Ok(reqwest_eventsource::Event::Message(message)) => {
                             if message.data == "[DONE]" {
-                                let _ = tx.unbounded_send(Ok(crate::providers::StreamChunk::Done(usage)));
+                                let _ = tx
+                                    .unbounded_send(Ok(crate::providers::StreamChunk::Done(usage)));
                                 break;
                             }
-                            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&message.data) {
-                                if let Some(content) = v["choices"][0]["delta"]["content"].as_str() {
-                                    let _ = tx.unbounded_send(Ok(crate::providers::StreamChunk::Text(content.to_string())));
+                            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&message.data)
+                            {
+                                if let Some(content) = v["choices"][0]["delta"]["content"].as_str()
+                                {
+                                    let _ = tx.unbounded_send(Ok(
+                                        crate::providers::StreamChunk::Text(content.to_string()),
+                                    ));
                                 }
                                 if let Some(u) = v.get("usage").and_then(|u| u.as_object()) {
-                                    usage.input_tokens = u.get("prompt_tokens").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
-                                    usage.output_tokens = u.get("completion_tokens").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
-                                    usage.total_tokens = u.get("total_tokens").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+                                    usage.input_tokens = u
+                                        .get("prompt_tokens")
+                                        .and_then(|x| x.as_u64())
+                                        .unwrap_or(0)
+                                        as usize;
+                                    usage.output_tokens = u
+                                        .get("completion_tokens")
+                                        .and_then(|x| x.as_u64())
+                                        .unwrap_or(0)
+                                        as usize;
+                                    usage.total_tokens =
+                                        u.get("total_tokens").and_then(|x| x.as_u64()).unwrap_or(0)
+                                            as usize;
                                 }
                             }
                         }
@@ -258,7 +288,12 @@ impl BaseProviderAdapter for OpenRouterAdapter {
                 }
             });
 
-            Ok(Box::new(rx) as Box<dyn futures::Stream<Item = Result<crate::providers::StreamChunk, anyhow::Error>> + Send + Unpin>)
+            Ok(Box::new(rx)
+                as Box<
+                    dyn futures::Stream<Item = Result<crate::providers::StreamChunk, anyhow::Error>>
+                        + Send
+                        + Unpin,
+                >)
         })
     }
 

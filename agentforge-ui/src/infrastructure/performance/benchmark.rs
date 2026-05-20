@@ -1,5 +1,5 @@
-use std::time::{Duration, Instant};
 use std::future::Future;
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone)]
 pub struct BenchmarkResult {
@@ -18,7 +18,12 @@ impl BenchmarkRunner {
         Self
     }
 
-    pub async fn run_async<F, Fut>(&self, name: &str, iterations: u32, mut task: F) -> BenchmarkResult
+    pub async fn run_async<F, Fut>(
+        &self,
+        name: &str,
+        iterations: u32,
+        mut task: F,
+    ) -> BenchmarkResult
     where
         F: FnMut() -> Fut,
         Fut: Future<Output = ()>,

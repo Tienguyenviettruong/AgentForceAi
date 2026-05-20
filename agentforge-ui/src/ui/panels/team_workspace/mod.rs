@@ -79,7 +79,7 @@ impl TeamWorkspacePanel {
             gpui_component::input::InputState::new(window, cx)
                 .multi_line(true)
                 .auto_grow(1, 5)
-                .placeholder("Describe new goal... (Enter to send, Shift+Enter for new line)")
+                .placeholder("Describe new goal... (Enter to send, Ctrl+Enter for new line)")
         });
 
         let mut panel = Self {
@@ -184,7 +184,8 @@ impl TeamWorkspacePanel {
         {
             if let Some(webview) = &self.office_webview {
                 // 1. Sync Visibility
-                let should_be_visible = self.chat_active_tab == 1 && !self.is_workspace_dropdown_open;
+                let should_be_visible =
+                    self.chat_active_tab == 1 && !self.is_workspace_dropdown_open;
                 webview.update(cx, |w, _| {
                     if should_be_visible {
                         w.show();
@@ -419,8 +420,14 @@ impl TeamWorkspacePanel {
                                         });
                                     }
                                     #[cfg(any(target_os = "windows", target_os = "macos"))]
-                                    this.push_office_chat_message(&msg.sender_member_id, &msg.content, false, &agent_name, cx);
-                                    
+                                    this.push_office_chat_message(
+                                        &msg.sender_member_id,
+                                        &msg.content,
+                                        false,
+                                        &agent_name,
+                                        cx,
+                                    );
+
                                     this.rebuild_chat_display(&session_id);
                                     if this.selected_session_id.as_deref()
                                         == Some(session_id.as_str())

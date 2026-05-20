@@ -1,9 +1,9 @@
+use chrono::Utc;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, RwLock};
-use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use chrono::Utc;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum MessageType {
@@ -48,11 +48,7 @@ impl TeamMessage {
         }
     }
 
-    pub fn new_broadcast(
-        team_instance_id: String,
-        sender: String,
-        content: String,
-    ) -> Self {
+    pub fn new_broadcast(team_instance_id: String, sender: String, content: String) -> Self {
         Self {
             id: Uuid::new_v4().to_string(),
             team_instance_id,
@@ -112,7 +108,12 @@ impl TeamBusRouter {
         }
     }
 
-    pub async fn register_member(&self, team_instance_id: &str, member_id: &str, role: &str) -> mpsc::Receiver<TeamMessage> {
+    pub async fn register_member(
+        &self,
+        team_instance_id: &str,
+        member_id: &str,
+        role: &str,
+    ) -> mpsc::Receiver<TeamMessage> {
         let (tx, rx) = mpsc::channel(100);
         let mut direct_guard = self.direct_channels.write().await;
         direct_guard
@@ -150,7 +151,10 @@ impl TeamBusRouter {
         }
     }
 
-    pub async fn subscribe_broadcast(&self, team_instance_id: &str) -> broadcast::Receiver<TeamMessage> {
+    pub async fn subscribe_broadcast(
+        &self,
+        team_instance_id: &str,
+    ) -> broadcast::Receiver<TeamMessage> {
         let mut bc_guard = self.broadcast_channels.write().await;
         if !bc_guard.contains_key(team_instance_id) {
             let (bc_tx, _) = broadcast::channel(1000);
@@ -209,7 +213,7 @@ impl TeamBusRouter {
                             }
                         }
                     }
-                    
+
                     let channels = self.direct_channels.read().await;
                     for recipient in recipients {
                         if let Some(txs) = channels.get(&recipient) {

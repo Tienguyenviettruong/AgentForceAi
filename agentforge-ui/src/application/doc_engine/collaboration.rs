@@ -67,7 +67,9 @@ impl CollaborationManager {
     }
 
     pub async fn apply_edit(&self, session_id: &str, action: EditAction) -> Result<()> {
-        let session_arc = self.get_session(session_id).await
+        let session_arc = self
+            .get_session(session_id)
+            .await
             .ok_or_else(|| anyhow::anyhow!("Session not found: {}", session_id))?;
 
         let mut session = session_arc.write().await;
@@ -91,7 +93,9 @@ impl CollaborationManager {
     }
 
     pub async fn update_status(&self, session_id: &str, status: SessionStatus) -> Result<()> {
-        let session_arc = self.get_session(session_id).await
+        let session_arc = self
+            .get_session(session_id)
+            .await
             .ok_or_else(|| anyhow::anyhow!("Session not found: {}", session_id))?;
 
         let mut session = session_arc.write().await;

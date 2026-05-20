@@ -1,5 +1,5 @@
-use rusqlite::{params, Connection, Result};
 use super::shared_task_list::Task;
+use rusqlite::{params, Connection, Result};
 
 pub struct TaskQueue<'a> {
     conn: &'a Connection,

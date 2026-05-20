@@ -22,7 +22,12 @@ pub struct CostAlert {
 }
 
 impl CostAlert {
-    pub fn new(budget_id: Uuid, threshold_percentage: f64, level: AlertLevel, message: &str) -> Self {
+    pub fn new(
+        budget_id: Uuid,
+        threshold_percentage: f64,
+        level: AlertLevel,
+        message: &str,
+    ) -> Self {
         Self {
             id: Uuid::new_v4(),
             budget_id,
@@ -39,7 +44,7 @@ impl CostAlert {
         }
 
         let current_percentage = (budget.spent / budget.limit) * 100.0;
-        
+
         if current_percentage >= self.threshold_percentage && self.triggered_at.is_none() {
             self.triggered_at = Some(Utc::now());
             true

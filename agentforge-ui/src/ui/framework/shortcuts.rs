@@ -1,4 +1,4 @@
-use gpui::{KeyBinding, App, Action};
+use gpui::{Action, App, KeyBinding};
 
 pub struct ShortcutManager;
 

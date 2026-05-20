@@ -34,7 +34,12 @@ impl ProtocolManager {
         }
     }
 
-    pub fn initiate_protocol(&mut self, protocol_id: &str, teams: Vec<String>, terms: &str) -> Result<()> {
+    pub fn initiate_protocol(
+        &mut self,
+        protocol_id: &str,
+        teams: Vec<String>,
+        terms: &str,
+    ) -> Result<()> {
         let protocol = CollaborationProtocol {
             protocol_id: protocol_id.to_string(),
             teams,

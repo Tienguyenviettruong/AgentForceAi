@@ -35,11 +35,19 @@ impl CoordinationCenter {
         Ok(())
     }
 
-    pub fn access_resource(&self, resource_id: &str, requesting_team: &str) -> Result<SharedResource> {
+    pub fn access_resource(
+        &self,
+        resource_id: &str,
+        requesting_team: &str,
+    ) -> Result<SharedResource> {
         let resources = self.resources.read().unwrap();
-        let resource = resources.get(resource_id).ok_or_else(|| anyhow::anyhow!("Resource not found"))?;
-        
-        if resource.owner_team == requesting_team || resource.allowed_teams.contains(requesting_team) {
+        let resource = resources
+            .get(resource_id)
+            .ok_or_else(|| anyhow::anyhow!("Resource not found"))?;
+
+        if resource.owner_team == requesting_team
+            || resource.allowed_teams.contains(requesting_team)
+        {
             Ok(resource.clone())
         } else {
             Err(anyhow::anyhow!("Access denied to resource"))

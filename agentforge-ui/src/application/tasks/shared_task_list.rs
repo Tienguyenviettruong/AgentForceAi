@@ -1,5 +1,5 @@
-use rusqlite::{params, Connection, Result};
 use chrono::Utc;
+use rusqlite::{params, Connection, Result};
 
 pub use crate::core::models::Task;
 
@@ -44,7 +44,12 @@ impl<'a> SharedTaskList<'a> {
         Ok(rows_affected > 0)
     }
 
-    pub fn claim_task_for_instance(&self, task_id: &str, agent_id: &str, instance_id: &str) -> Result<bool> {
+    pub fn claim_task_for_instance(
+        &self,
+        task_id: &str,
+        agent_id: &str,
+        instance_id: &str,
+    ) -> Result<bool> {
         let now = Utc::now().to_rfc3339();
         let rows_affected = self.conn.execute(
             "UPDATE tasks

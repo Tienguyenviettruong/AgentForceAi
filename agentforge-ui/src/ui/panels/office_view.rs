@@ -11,13 +11,13 @@ impl OfficeView {
     #[cfg(any(target_os = "windows", target_os = "macos"))]
     pub fn new(window: &mut Window, cx: &mut App) -> Self {
         let mut webview = None;
-        
+
         let builder = wry::WebViewBuilder::new();
         let html_content = include_str!("../../../assets/office/index.html");
         if let Ok(view) = builder.with_html(html_content).build_as_child(window) {
             webview = Some(WebView::new(view, window, cx));
         }
-        
+
         Self { webview }
     }
 

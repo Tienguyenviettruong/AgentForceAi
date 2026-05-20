@@ -1,20 +1,20 @@
 use crate::core::traits::database::DatabasePort;
-use gpui_component::button::{Button, ButtonVariants};
-use gpui_component::tab::{TabBar, Tab};
-use gpui_component::select::{Select, SelectState};
-use gpui_component::switch::Switch;
-use gpui_component::WindowExt;
-use gpui_component::IndexPath;
+use chrono::Utc;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    div, px, AppContext, Context, InteractiveElement, IntoElement,
-    ParentElement, StatefulInteractiveElement, Styled, Window
+    div, px, AppContext, Context, InteractiveElement, IntoElement, ParentElement,
+    StatefulInteractiveElement, Styled, Window,
 };
-use gpui_component::{h_flex, ActiveTheme as _, Sizable as _, StyledExt as _, Icon, IconName};
+use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::scroll::ScrollableElement as _;
-use std::sync::Arc;
+use gpui_component::select::{Select, SelectState};
+use gpui_component::switch::Switch;
+use gpui_component::tab::{Tab, TabBar};
+use gpui_component::IndexPath;
+use gpui_component::WindowExt;
+use gpui_component::{h_flex, ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _};
 use std::sync::atomic::{AtomicBool, Ordering};
-use chrono::Utc;
+use std::sync::Arc;
 
 use super::TeamWorkspacePanel;
 use crate::ui::components::markdown::render_markdown_message;
@@ -39,32 +39,44 @@ fn format_session_label(s: &crate::core::models::session::SessionRecord) -> Stri
         .map(|d| d.with_timezone(&chrono::Local))
         .map(|d| d.format("%m-%d %H:%M").to_string())
         .unwrap_or_else(|| "Session".to_string());
-    format!("{} • {}", dt, short_id)
+    format!("{} - {}", dt, short_id)
 }
 
 impl TeamWorkspacePanel {
-
-
-    pub(crate) fn render_chat_column(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(crate) fn render_chat_column(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let theme = cx.theme().clone();
         let view = cx.entity().clone();
 
         let _active_team_id = self.selected_team_id.clone().or_else(|| {
             self.selected_instance_id.as_ref().and_then(|iid| {
-                self.instances.iter().find(|i| i.id == *iid).map(|i| i.team_id.clone())
+                self.instances
+                    .iter()
+                    .find(|i| i.id == *iid)
+                    .map(|i| i.team_id.clone())
             })
         });
 
         let title = if let Some(instance_id) = &self.selected_instance_id {
             let inst = self.instances.iter().find(|i| i.id == *instance_id);
-            inst.map(|i| i.name.clone()).unwrap_or_else(|| format!("Instance {}", &instance_id[..std::cmp::min(8, instance_id.len())]))
+            inst.map(|i| i.name.clone()).unwrap_or_else(|| {
+                format!(
+                    "Instance {}",
+                    &instance_id[..std::cmp::min(8, instance_id.len())]
+                )
+            })
         } else if let Some(team_id) = &self.selected_team_id {
-            self.teams.iter().find(|t| t.id == *team_id).map(|t| t.name.clone()).unwrap_or_else(|| "Team Chat".to_string())
+            self.teams
+                .iter()
+                .find(|t| t.id == *team_id)
+                .map(|t| t.name.clone())
+                .unwrap_or_else(|| "Team Chat".to_string())
         } else {
             "Team Chat".to_string()
         };
-
-
 
         div()
             .h_full()
@@ -293,7 +305,7 @@ impl TeamWorkspacePanel {
                                                     .bg(theme.secondary)
                                                     .text_size(px(11.))
                                                     .text_color(theme.muted_foreground)
-                                                    .child(format!("← {}", peer_name)),
+                                                    .child(format!("<- {}", peer_name)),
                                             );
                                         }
                                         if !target_name.is_empty() {
@@ -305,7 +317,7 @@ impl TeamWorkspacePanel {
                                                     .bg(theme.secondary)
                                                     .text_size(px(11.))
                                                     .text_color(theme.muted_foreground)
-                                                    .child(format!("→ {}", target_name)),
+                                                    .child(format!("-> {}", target_name)),
                                             );
                                         }
                                         row
@@ -382,12 +394,14 @@ impl TeamWorkspacePanel {
                                                                                                         gpui_component::v_flex()
                                                                                                             .w_full()
                                                                                                             .h_full()
+                                                                                                            .min_w_0()
+                                                                                                            .overflow_hidden()
                                                                                                             .p_4()
                                                                                                             .gap_3()
-                                                                                                            .child(div().text_sm().text_color(theme.muted_foreground).child(format!("correlation_id: {}", cid_for_sheet)))
-                                                                                                            .child(div().text_sm().child(summary_for_sheet.clone()))
+                                                                                                            .child(div().flex_none().min_w_0().text_sm().whitespace_normal().line_height(gpui::relative(1.35)).text_color(theme.muted_foreground).child(format!("correlation_id: {}", cid_for_sheet)))
+                                                                                                            .child(div().flex_none().min_w_0().text_sm().whitespace_normal().line_height(gpui::relative(1.45)).child(summary_for_sheet.clone()))
                                                                                                             .child({
-                                                                                                                let mut row = h_flex().gap(px(10.)).items_center().w_full();
+                                                                                                                let mut row = h_flex().gap(px(10.)).items_center().w_full().min_w_0().flex_none();
                                                                                                                 for (i, label) in step_labels.iter().enumerate() {
                                                                                                                     let active = i <= step_idx;
                                                                                                                     let dot = div()
@@ -408,27 +422,45 @@ impl TeamWorkspacePanel {
                                                                                                                 }
                                                                                                                 row
                                                                                                             })
-                                                                                                            .child(div().text_sm().font_weight(gpui::FontWeight::SEMIBOLD).child("Events"))
+                                                                                                            .child(div().flex_none().text_sm().font_weight(gpui::FontWeight::SEMIBOLD).child("Events"))
                                                                                                             .child({
-                                                                                                                let mut ev_col = gpui_component::v_flex().w_full().gap_2();
-                                                                                                                for e in events.iter() {
-                                                                                                                    ev_col = ev_col.child(
-                                                                                                                        gpui_component::v_flex()
-                                                                                                                            .w_full()
-                                                                                                                            .p_3()
-                                                                                                                            .rounded_md()
-                                                                                                                            .bg(theme.secondary)
-                                                                                                                            .child(div().text_xs().text_color(theme.muted_foreground).child(format!("{} · {}", e.created_at, e.event_type)))
-                                                                                                                            .child(div().text_sm().child(e.summary.clone())),
-                                                                                                                    );
-                                                                                                                }
-                                                                                                                ev_col.overflow_y_scrollbar()
+                                                                                                                let event_list_state = gpui::ListState::new(events.len(), gpui::ListAlignment::Top, px(96.));
+                                                                                                                let events_for_list = events.clone();
+                                                                                                                let theme_for_list = theme.clone();
+                                                                                                                div()
+                                                                                                                    .flex_1()
+                                                                                                                    .min_h_0()
+                                                                                                                    .min_w_0()
+                                                                                                                    .vertical_scrollbar(&event_list_state)
+                                                                                                                    .child(
+                                                                                                                        gpui::list(
+                                                                                                                            event_list_state,
+                                                                                                                            move |ix, _window, _cx| {
+                                                                                                                                let Some(e) = events_for_list.get(ix) else {
+                                                                                                                                    return div().into_any_element();
+                                                                                                                                };
+
+                                                                                                                                gpui_component::v_flex()
+                                                                                                                                    .w_full()
+                                                                                                                                    .min_w_0()
+                                                                                                                                    .mb_3()
+                                                                                                                                    .p_3()
+                                                                                                                                    .gap_2()
+                                                                                                                                    .rounded_md()
+                                                                                                                                    .bg(theme_for_list.secondary)
+                                                                                                                                    .child(div().min_w_0().text_xs().whitespace_normal().line_height(gpui::relative(1.35)).text_color(theme_for_list.muted_foreground).child(format!("{} - {}", e.created_at, e.event_type)))
+                                                                                                                                    .child(div().min_w_0().text_sm().whitespace_normal().line_height(gpui::relative(1.45)).child(e.summary.clone()))
+                                                                                                                                    .into_any_element()
+                                                                                                                            },
+                                                                                                                        )
+                                                                                                                        .size_full(),
+                                                                                                                    )
                                                                                                             }),
                                                                                                     )
                                                                                             });
                                                                                         }
                                                                                     })
-                                                                                .label(format!("{} · {}", latest, cid.chars().take(8).collect::<String>()));
+                                                                                .label(format!("{} - {}", latest, cid.chars().take(8).collect::<String>()));
                                                                             col = col.child(
                                                                                 gpui_component::v_flex()
                                                                                     .w_full()
@@ -828,7 +860,7 @@ impl TeamWorkspacePanel {
                                     .child(
                                         div().flex_col()
                                             .child(div().text_xs().text_color(theme.foreground).child(file_name))
-                                            .child(div().text_xs().text_color(theme.muted_foreground).child(format!("{} • {:.1} KB", ext, size_kb)))
+                                            .child(div().text_xs().text_color(theme.muted_foreground).child(format!("{} - {:.1} KB", ext, size_kb)))
                                     )
                                     .child(
                                         div()
@@ -1373,10 +1405,10 @@ impl TeamWorkspacePanel {
     }
 
     /// Push a chat message into the Office webview's chat panel.
-    /// `agent_id`  – ID of the agent whose conversation thread to update.
-    /// `text`      – The message text.
-    /// `is_self`   – true = user/self message (right bubble), false = agent reply (left).
-    /// `agent_name`– Display name for the agent (shown above agent bubbles).
+    /// `agent_id`  - ID of the agent whose conversation thread to update.
+    /// `text`      - The message text.
+    /// `is_self`   - true = user/self message (right bubble), false = agent reply (left).
+    /// `agent_name` - Display name for the agent (shown above agent bubbles).
     #[cfg(any(target_os = "windows", target_os = "macos"))]
     pub(crate) fn push_office_chat_message(
         &self,
@@ -1386,7 +1418,9 @@ impl TeamWorkspacePanel {
         agent_name: &str,
         cx: &gpui::App,
     ) {
-        let Some(ref webview) = self.office_webview else { return };
+        let Some(ref webview) = self.office_webview else {
+            return;
+        };
         // Escape quotes/newlines so the JS string is valid
         let safe_text = text
             .replace('\\', "\\\\")
@@ -1421,7 +1455,10 @@ impl TeamWorkspacePanel {
             if let Some(flag) = &self.generation_cancel_flag {
                 flag.store(true, Ordering::SeqCst);
                 window.push_notification(
-                    (gpui_component::notification::NotificationType::Info, "Stopping generation..."),
+                    (
+                        gpui_component::notification::NotificationType::Info,
+                        "Stopping generation...",
+                    ),
                     cx,
                 );
             }
@@ -1435,14 +1472,19 @@ impl TeamWorkspacePanel {
         }
         self.is_slash_dropdown_open = false;
         cx.notify();
-        
+
         let instance_id = if let Some(id) = &self.selected_instance_id {
             id.clone()
         } else {
             return; // Don't send if no instance is selected
         };
 
-        let team_id = self.instances.iter().find(|i| i.id == *instance_id).map(|i| i.team_id.clone()).unwrap_or_default();
+        let team_id = self
+            .instances
+            .iter()
+            .find(|i| i.id == *instance_id)
+            .map(|i| i.team_id.clone())
+            .unwrap_or_default();
         let mode = crate::AppState::global(cx)
             .mode_manager
             .lock()
@@ -1463,7 +1505,9 @@ impl TeamWorkspacePanel {
                 );
                 return;
             };
-            let Ok(session_id) = db.create_session_for_instance(&instance_id, &agent_id) else { return };
+            let Ok(session_id) = db.create_session_for_instance(&instance_id, &agent_id) else {
+                return;
+            };
             self.selected_session_id = Some(session_id.clone());
             self.instance_active_session
                 .insert(instance_id.clone(), session_id.clone());
@@ -1476,7 +1520,10 @@ impl TeamWorkspacePanel {
         let mut text = raw_text.clone();
         if raw_text == "/" {
             window.push_notification(
-                (gpui_component::notification::NotificationType::Info, "Commands: /plan <goal>, /spec <goal>, /run"),
+                (
+                    gpui_component::notification::NotificationType::Info,
+                    "Commands: /plan <goal>, /spec <goal>, /run",
+                ),
                 cx,
             );
             return;
@@ -1485,7 +1532,10 @@ impl TeamWorkspacePanel {
             let goal = rest.trim();
             if goal.is_empty() {
                 window.push_notification(
-                    (gpui_component::notification::NotificationType::Info, "Dùng: /plan <mục tiêu>"),
+                    (
+                        gpui_component::notification::NotificationType::Info,
+                        "Dùng: /plan <mục tiêu>",
+                    ),
                     cx,
                 );
                 return;
@@ -1499,7 +1549,10 @@ impl TeamWorkspacePanel {
             let goal = rest.trim();
             if goal.is_empty() {
                 window.push_notification(
-                    (gpui_component::notification::NotificationType::Info, "Dùng: /spec <mục tiêu>"),
+                    (
+                        gpui_component::notification::NotificationType::Info,
+                        "Dùng: /spec <mục tiêu>",
+                    ),
                     cx,
                 );
                 return;
@@ -1513,7 +1566,11 @@ impl TeamWorkspacePanel {
 
         {
             let history = self.chat_histories.entry(session_id.clone()).or_default();
-            history.push(crate::providers::ChatMessage { role: "user".into(), content: text.clone().into(), agent_name: None });
+            history.push(crate::providers::ChatMessage {
+                role: "user".into(),
+                content: text.clone().into(),
+                agent_name: None,
+            });
         }
         self.rebuild_chat_display(&session_id);
         let display_len = self
@@ -1521,12 +1578,18 @@ impl TeamWorkspacePanel {
             .get(&session_id)
             .map(|v| v.len())
             .unwrap_or(0);
-        self.chat_list_state = gpui::ListState::new(display_len, gpui::ListAlignment::Bottom, px(200.));
-        let history_snapshot = self.chat_histories.get(&session_id).cloned().unwrap_or_default();
+        self.chat_list_state =
+            gpui::ListState::new(display_len, gpui::ListAlignment::Bottom, px(200.));
+        let history_snapshot = self
+            .chat_histories
+            .get(&session_id)
+            .cloned()
+            .unwrap_or_default();
 
         // Sync user message to Office view
         {
-            let first_agent_id = db.get_instance_agents(&instance_id)
+            let first_agent_id = db
+                .get_instance_agents(&instance_id)
                 .ok()
                 .and_then(|ids| ids.into_iter().next())
                 .unwrap_or_default();
@@ -1548,10 +1611,8 @@ impl TeamWorkspacePanel {
 
         if let Ok(agent_ids) = db.get_instance_agents(&instance_id) {
             if let Some(agent_id) = agent_ids.first() {
-                let _ = db
-                    .ensure_session(&session_id, agent_id, Some(&instance_id));
-                let _ = db
-                    .append_conversation_turn(&session_id, "user", &text, None);
+                let _ = db.ensure_session(&session_id, agent_id, Some(&instance_id));
+                let _ = db.append_conversation_turn(&session_id, "user", &text, None);
                 let _ = db.touch_session(&session_id);
             }
         }
@@ -1562,7 +1623,11 @@ impl TeamWorkspacePanel {
             action: "chat_message".to_string(),
             user_id: Some("user".to_string()),
             resource: instance_id.clone(),
-            details: format!("User message ({} chars) in session {}", text.len(), session_id),
+            details: format!(
+                "User message ({} chars) in session {}",
+                text.len(),
+                session_id
+            ),
         };
         let _ = db.insert_audit_log(&audit_event);
 
@@ -1602,7 +1667,8 @@ impl TeamWorkspacePanel {
                         .ok()
                         .flatten();
                     if session.is_none() {
-                        let _ = db.create_session_for_instance(&target_instance_id, &target_agent_id);
+                        let _ =
+                            db.create_session_for_instance(&target_instance_id, &target_agent_id);
                         session = db
                             .get_latest_session_for_instance(&target_instance_id)
                             .ok()
@@ -1610,14 +1676,22 @@ impl TeamWorkspacePanel {
                     }
                     if let Some(session) = session {
                         let meta = serde_json::json!({"agent_name":"Cross-team"}).to_string();
-                        let _ = db.ensure_session(&session.id, &target_agent_id, Some(&target_instance_id));
-                        let _ = db.append_conversation_turn(&session.id, "assistant", &content, Some(&meta));
+                        let _ = db.ensure_session(
+                            &session.id,
+                            &target_agent_id,
+                            Some(&target_instance_id),
+                        );
+                        let _ = db.append_conversation_turn(
+                            &session.id,
+                            "assistant",
+                            &content,
+                            Some(&meta),
+                        );
                         let _ = db.touch_session(&session.id);
                     }
                 }
             }
         }
-
 
         let is_run_command = raw_text == "/run";
         let mode_clone = mode;
@@ -1631,7 +1705,6 @@ impl TeamWorkspacePanel {
         let view = cx.entity().clone();
         let workspace_dir_clone = self.workspace_path.clone();
 
-        
         if is_run_command {
             cx.spawn(async move |_, cx| {
                 let _is_run_command = true;
@@ -1867,16 +1940,16 @@ impl TeamWorkspacePanel {
             cx.notify();
             return;
         }
-        
+
         let cancel_flag = Arc::new(AtomicBool::new(false));
         self.is_generating = true;
         self.generation_cancel_flag = Some(cancel_flag.clone());
-        self.chat_list_state = gpui::ListState::new(display_len, gpui::ListAlignment::Bottom, px(200.));
+        self.chat_list_state =
+            gpui::ListState::new(display_len, gpui::ListAlignment::Bottom, px(200.));
         self.chat_input_state.update(cx, |state, cx| {
             state.set_value("", window, cx);
         });
         cx.notify();
-
 
         // Trigger AI response asynchronously
         let history_clone = history_snapshot.clone();
@@ -1888,7 +1961,7 @@ impl TeamWorkspacePanel {
         let session_id_for_ai = session_id.clone();
 
         let debate_mode = self.debate_mode;
-let db_clone = db.clone();
+        let db_clone = db.clone();
         let team_bus_for_ai = self.team_bus.clone();
         let team_bus_clone = self.team_bus.clone();
         let workspace_dir_for_ai = workspace_dir_clone.clone();
@@ -2752,9 +2825,21 @@ let db_clone = db.clone();
         let theme = cx.theme().clone();
 
         let (source_index, msg) = match row {
-            super::ChatDisplayRow::CrossTeamThreadHeader { correlation_id, handoff_type, from_team, count, preview, has_request: _, has_response } => {
+            super::ChatDisplayRow::CrossTeamThreadHeader {
+                correlation_id,
+                handoff_type,
+                from_team,
+                count,
+                preview,
+                has_request: _,
+                has_response,
+            } => {
                 let is_expanded = self.expanded_threads.contains(&correlation_id);
-                let icon = if is_expanded { IconName::ChevronDown } else { IconName::ChevronRight };
+                let icon = if is_expanded {
+                    IconName::ChevronDown
+                } else {
+                    IconName::ChevronRight
+                };
                 let session_id_clone = session_id.clone();
                 let correlation_id_clone = correlation_id.clone();
                 let from_team_label = self
@@ -2774,13 +2859,21 @@ let db_clone = db.clone();
                         chars += 1;
                     }
                     if chars >= 12 && end < from_team_label.len() {
-                        format!("{}…", &from_team_label[..end])
+                        format!("{}...", &from_team_label[..end])
                     } else {
                         from_team_label
                     }
                 };
-                let correlation_short = if correlation_id.len() > 8 { &correlation_id[..8] } else { &correlation_id };
-                let status_color = if has_response { gpui::green() } else { gpui::yellow() };
+                let correlation_short = if correlation_id.len() > 8 {
+                    &correlation_id[..8]
+                } else {
+                    &correlation_id
+                };
+                let status_color = if has_response {
+                    gpui::green()
+                } else {
+                    gpui::yellow()
+                };
                 let status_label = if has_response { "Responded" } else { "Pending" };
                 return div()
                     .id(("cross-team-thread", ix))
@@ -2804,7 +2897,11 @@ let db_clone = db.clone();
                             .get(&session_id_clone)
                             .map(|v| v.len())
                             .unwrap_or(0);
-                        this.chat_list_state = gpui::ListState::new(display_len, gpui::ListAlignment::Bottom, px(200.));
+                        this.chat_list_state = gpui::ListState::new(
+                            display_len,
+                            gpui::ListAlignment::Bottom,
+                            px(200.),
+                        );
                         cx.notify();
                     }))
                     .child(
@@ -2820,8 +2917,20 @@ let db_clone = db.clone();
                                         h_flex()
                                             .items_center()
                                             .gap(px(8.))
-                                            .child(Icon::new(icon).size(px(14.)).text_color(theme.muted_foreground))
-                                            .child(div().font_weight(gpui::FontWeight::BOLD).text_size(px(13.)).child(format!("Cross-team {} ({})", handoff_type, count)))
+                                            .child(
+                                                Icon::new(icon)
+                                                    .size(px(14.))
+                                                    .text_color(theme.muted_foreground),
+                                            )
+                                            .child(
+                                                div()
+                                                    .font_weight(gpui::FontWeight::BOLD)
+                                                    .text_size(px(13.))
+                                                    .child(format!(
+                                                        "Cross-team {} ({})",
+                                                        handoff_type, count
+                                                    )),
+                                            ),
                                     )
                                     .child(
                                         h_flex()
@@ -2835,22 +2944,25 @@ let db_clone = db.clone();
                                                     .bg(status_color.opacity(0.14))
                                                     .text_color(status_color)
                                                     .text_size(px(11.))
-                                                    .child(status_label)
+                                                    .child(status_label),
                                             )
                                             .child(
                                                 div()
                                                     .text_size(px(12.))
                                                     .text_color(theme.muted_foreground)
-                                                    .child(format!("{} • {}", correlation_short, from_team_short))
-                                            )
-                                    )
+                                                    .child(format!(
+                                                        "{} - {}",
+                                                        correlation_short, from_team_short
+                                                    )),
+                                            ),
+                                    ),
                             )
                             .child(
                                 div()
                                     .text_size(px(12.))
                                     .text_color(theme.muted_foreground)
-                                    .child(preview)
-                            )
+                                    .child(preview),
+                            ),
                     )
                     .into_any_element();
             }
@@ -2858,14 +2970,14 @@ let db_clone = db.clone();
         };
 
         let is_user = msg.role == "user";
-        
+
         let msg_key = format!("{}_{}", session_id, source_index);
         let is_expanded = self.expanded_messages.contains(&msg_key);
-        
+
         // Count lines for user message to see if we need collapse
         let lines: Vec<&str> = msg.content.lines().collect();
         let needs_collapse = is_user && lines.len() > 5;
-        
+
         let content_to_render = if needs_collapse && !is_expanded {
             // Show only first line + indicator
             let first_line = lines.first().unwrap_or(&"");
@@ -2880,7 +2992,7 @@ let db_clone = db.clone();
             "Agent".to_string()
         };
         let mut display_content = content_to_render.clone();
-        
+
         if !is_user {
             // Strip legacy prefixes like [Task Completed] {task_id}:
 
@@ -2889,7 +3001,7 @@ let db_clone = db.clone();
                     display_content = display_content[idx + 2..].to_string();
                 }
             }
-            // Strip legacy interactive [AgentName]: 
+            // Strip legacy interactive [AgentName]:
             else if let Some(end_bracket) = display_content.find("]: ") {
                 if display_content.starts_with('[') {
                     if msg.agent_name.is_none() {
@@ -2904,10 +3016,19 @@ let db_clone = db.clone();
                     .trim_start_matches("[CROSS_TEAM_HANDOFF]")
                     .trim();
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(payload_str) {
-                    let handoff_type = v.get("handoff_type").and_then(|x| x.as_str()).unwrap_or("handoff");
-                    let correlation_id = v.get("correlation_id").and_then(|x| x.as_str()).unwrap_or("");
+                    let handoff_type = v
+                        .get("handoff_type")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or("handoff");
+                    let correlation_id = v
+                        .get("correlation_id")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or("");
                     let from_team = v.get("from_team").and_then(|x| x.as_str()).unwrap_or("");
-                    let package = v.get("briefing_package").and_then(|x| x.as_str()).unwrap_or("");
+                    let package = v
+                        .get("briefing_package")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or("");
                     display_name = format!("Cross-team {}", handoff_type);
                     display_content = format!(
                         "correlation_id: {}\nfrom_team: {}\n\n{}",
@@ -2960,7 +3081,9 @@ let db_clone = db.clone();
                                 .child(Icon::empty().path("icons/trash.svg").size_8())
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     if let Some(session_id) = this.selected_session_id.clone() {
-                                        if let Some(history) = this.chat_histories.get_mut(&session_id) {
+                                        if let Some(history) =
+                                            this.chat_histories.get_mut(&session_id)
+                                        {
                                             if source_index < history.len() {
                                                 history.remove(source_index);
                                                 this.rebuild_chat_display(&session_id);
@@ -2969,31 +3092,35 @@ let db_clone = db.clone();
                                                     .get(&session_id)
                                                     .map(|v| v.len())
                                                     .unwrap_or(0);
-                                                this.chat_list_state = gpui::ListState::new(display_len, gpui::ListAlignment::Bottom, px(200.));
+                                                this.chat_list_state = gpui::ListState::new(
+                                                    display_len,
+                                                    gpui::ListAlignment::Bottom,
+                                                    px(200.),
+                                                );
                                                 cx.notify();
                                             }
                                         }
                                     }
-                                }))
+                                })),
                         )
                         // Clipboard
                         .child(
                             gpui_component::clipboard::Clipboard::new(("clipboard", ix))
-                                .value(msg.content.clone().to_string())
-                        )
+                                .value(msg.content.clone().to_string()),
+                        ),
                 )
                 .child(
                     div()
-                    .max_w(px(640.0))
-            // .ml_auto()
-                    .p_2()
-                    .bg(gpui::Hsla::from(gpui::rgb(0xadecf9)))
-                    .border_1()
-                    .border_color(gpui::Hsla::from(gpui::rgba(0x11182722)))
-                    .rounded_lg()
-                    .overflow_hidden()
-                    .flex()
-                    .child(text_element)
+                        .max_w(px(640.0))
+                        // .ml_auto()
+                        .p_2()
+                        .bg(gpui::Hsla::from(gpui::rgb(0xadecf9)))
+                        .border_1()
+                        .border_color(gpui::Hsla::from(gpui::rgba(0x11182722)))
+                        .rounded_lg()
+                        .overflow_hidden()
+                        .flex()
+                        .child(text_element)
                         .when(needs_collapse, |d: gpui::Div| {
                             d.child(
                                 div()
@@ -3001,7 +3128,11 @@ let db_clone = db.clone();
                                     .cursor_pointer()
                                     .flex_none()
                                     .text_color(theme.muted_foreground)
-                                    .child(if is_expanded { IconName::ChevronUp } else { IconName::ChevronDown })
+                                    .child(if is_expanded {
+                                        IconName::ChevronUp
+                                    } else {
+                                        IconName::ChevronDown
+                                    })
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         if this.expanded_messages.contains(&msg_key) {
                                             this.expanded_messages.remove(&msg_key);
@@ -3009,10 +3140,11 @@ let db_clone = db.clone();
                                             this.expanded_messages.insert(msg_key.clone());
                                         }
                                         cx.notify();
-                                    }))
+                                    })),
                             )
-                        })
-                ).into_any_element()
+                        }),
+                )
+                .into_any_element()
         } else {
             div()
                 .w_full()
@@ -3020,39 +3152,43 @@ let db_clone = db.clone();
                 .justify_start()
                 .child(
                     h_flex()
-                            .w_full()
-                            .gap_2()
-                            .items_start()
-                            .child(agent_avatar)
-                            .child(
-                                div()
-                                    .max_w(gpui::relative(0.85))
-                                    .flex()
-                                    .flex_col()
-                                    .overflow_hidden()
-                                    .child(
-                                        div()
-                                            .text_size(px(12.))
-                                            .text_color(theme.muted_foreground)
-                                            .mb(px(2.))
-                                            .child(display_name)
-                                    )
-                                    .child(
-                                        div()
-                                            .w_full()
-                                            .rounded_lg()
-                                            .overflow_hidden()
-                                            .child(text_element)
-                                    )
-                            )
-                ).into_any_element()
+                        .w_full()
+                        .gap_2()
+                        .items_start()
+                        .child(agent_avatar)
+                        .child(
+                            div()
+                                .max_w(gpui::relative(0.85))
+                                .flex()
+                                .flex_col()
+                                .overflow_hidden()
+                                .child(
+                                    div()
+                                        .text_size(px(12.))
+                                        .text_color(theme.muted_foreground)
+                                        .mb(px(2.))
+                                        .child(display_name),
+                                )
+                                .child(
+                                    div()
+                                        .w_full()
+                                        .rounded_lg()
+                                        .overflow_hidden()
+                                        .child(text_element),
+                                ),
+                        ),
+                )
+                .into_any_element()
         };
 
         div().p_2().child(elem).into_any_element()
     }
 
-    fn render_message_text(content: &str, theme: &gpui_component::Theme, cx: &mut Window) -> impl IntoElement {
+    fn render_message_text(
+        content: &str,
+        theme: &gpui_component::Theme,
+        cx: &mut Window,
+    ) -> impl IntoElement {
         render_markdown_message(content, theme, cx)
     }
-
 }

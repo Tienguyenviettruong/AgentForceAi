@@ -1,3 +1,3 @@
 pub mod core;
-pub mod web;
 pub mod synthesis;
+pub mod web;

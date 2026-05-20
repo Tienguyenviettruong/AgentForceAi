@@ -1,9 +1,9 @@
 use super::{BaseProviderAdapter, ChatMessage, ChatResponse, TokenUsage};
 use anyhow::{anyhow, Result};
+use futures::stream::StreamExt;
 use gpui::SharedString;
 use std::future::Future;
 use std::pin::Pin;
-use futures::stream::StreamExt;
 
 /// Codex CLI adapter via JSON-RPC
 /// (Tasks 1.19, 1.20)
@@ -49,32 +49,31 @@ impl CodexAdapter {
     pub fn execute_command(&self, command: &str) -> Result<String> {
         let cmd = self.command_line.clone();
         let input = command.to_string();
-        let output = get_runtime()
-            .block_on(async move {
-                let mut child = tokio::process::Command::new(cmd)
-                    .stdin(std::process::Stdio::piped())
-                    .stdout(std::process::Stdio::piped())
-                    .stderr(std::process::Stdio::piped())
-                    .spawn()
-                    .map_err(|e| anyhow!("Failed to spawn codex command: {}", e))?;
+        let output = get_runtime().block_on(async move {
+            let mut child = tokio::process::Command::new(cmd)
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .map_err(|e| anyhow!("Failed to spawn codex command: {}", e))?;
 
-                if let Some(mut stdin) = child.stdin.take() {
-                    use tokio::io::AsyncWriteExt;
-                    stdin.write_all(input.as_bytes()).await.ok();
-                }
+            if let Some(mut stdin) = child.stdin.take() {
+                use tokio::io::AsyncWriteExt;
+                stdin.write_all(input.as_bytes()).await.ok();
+            }
 
-                let output = child
-                    .wait_with_output()
-                    .await
-                    .map_err(|e| anyhow!("Failed to wait codex output: {}", e))?;
+            let output = child
+                .wait_with_output()
+                .await
+                .map_err(|e| anyhow!("Failed to wait codex output: {}", e))?;
 
-                if !output.status.success() {
-                    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-                    return Err(anyhow!("Codex command failed: {}", stderr));
-                }
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                return Err(anyhow!("Codex command failed: {}", stderr));
+            }
 
-                Ok(String::from_utf8_lossy(&output.stdout).to_string())
-            })?;
+            Ok(String::from_utf8_lossy(&output.stdout).to_string())
+        })?;
         Ok(output)
     }
 }
@@ -127,7 +126,9 @@ impl BaseProviderAdapter for CodexAdapter {
                 }
 
                 Ok(ChatResponse {
-                    content: SharedString::from(String::from_utf8_lossy(&output.stdout).to_string()),
+                    content: SharedString::from(
+                        String::from_utf8_lossy(&output.stdout).to_string(),
+                    ),
                     token_usage: TokenUsage::default(),
                 })
             };
@@ -149,7 +150,12 @@ impl BaseProviderAdapter for CodexAdapter {
         Box<
             dyn Future<
                     Output = Result<
-                        Box<dyn futures::Stream<Item = Result<crate::providers::StreamChunk, anyhow::Error>> + Send + Unpin>,
+                        Box<
+                            dyn futures::Stream<
+                                    Item = Result<crate::providers::StreamChunk, anyhow::Error>,
+                                > + Send
+                                + Unpin,
+                        >,
                     >,
                 > + Send,
         >,
@@ -173,7 +179,8 @@ impl BaseProviderAdapter for CodexAdapter {
                 {
                     Ok(c) => c,
                     Err(e) => {
-                        let _ = tx.unbounded_send(Err(anyhow!("Failed to spawn codex command: {}", e)));
+                        let _ =
+                            tx.unbounded_send(Err(anyhow!("Failed to spawn codex command: {}", e)));
                         return;
                     }
                 };
@@ -198,19 +205,28 @@ impl BaseProviderAdapter for CodexAdapter {
                         Ok(0) => break,
                         Ok(n) => {
                             let text = String::from_utf8_lossy(&buf[..n]).to_string();
-                            let _ = tx.unbounded_send(Ok(crate::providers::StreamChunk::Text(text)));
+                            let _ =
+                                tx.unbounded_send(Ok(crate::providers::StreamChunk::Text(text)));
                         }
                         Err(e) => {
-                            let _ = tx.unbounded_send(Err(anyhow!("Codex stdout read error: {}", e)));
+                            let _ =
+                                tx.unbounded_send(Err(anyhow!("Codex stdout read error: {}", e)));
                             break;
                         }
                     }
                 }
 
-                let _ = tx.unbounded_send(Ok(crate::providers::StreamChunk::Done(crate::providers::TokenUsage::default())));
+                let _ = tx.unbounded_send(Ok(crate::providers::StreamChunk::Done(
+                    crate::providers::TokenUsage::default(),
+                )));
             });
 
-            Ok(Box::new(rx) as Box<dyn futures::Stream<Item = Result<crate::providers::StreamChunk, anyhow::Error>> + Send + Unpin>)
+            Ok(Box::new(rx)
+                as Box<
+                    dyn futures::Stream<Item = Result<crate::providers::StreamChunk, anyhow::Error>>
+                        + Send
+                        + Unpin,
+                >)
         })
     }
 

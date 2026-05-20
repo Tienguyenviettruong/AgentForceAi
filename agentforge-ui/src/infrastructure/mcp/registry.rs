@@ -35,21 +35,39 @@ impl McpAuthMiddleware {
     }
 
     /// Intercepts a tool call. Returns `Ok(true)` if allowed, `Ok(false)` if denied.
-    pub async fn intercept_call(&self, role_id: &str, user_id: Option<&str>, tool_name: &str) -> Result<bool> {
+    pub async fn intercept_call(
+        &self,
+        role_id: &str,
+        user_id: Option<&str>,
+        tool_name: &str,
+    ) -> Result<bool> {
         let required_permission = format!("mcp:execute:{}", tool_name);
-        
-        let has_all = self.role_manager.check_permission(role_id, "all").unwrap_or(false);
-        let has_mcp_all = self.role_manager.check_permission(role_id, "mcp:execute:all").unwrap_or(false);
-        let has_specific = self.role_manager.check_permission(role_id, &required_permission).unwrap_or(false);
-        
+
+        let has_all = self
+            .role_manager
+            .check_permission(role_id, "all")
+            .unwrap_or(false);
+        let has_mcp_all = self
+            .role_manager
+            .check_permission(role_id, "mcp:execute:all")
+            .unwrap_or(false);
+        let has_specific = self
+            .role_manager
+            .check_permission(role_id, &required_permission)
+            .unwrap_or(false);
+
         let allowed = has_all || has_mcp_all || has_specific;
-        
-        let action = if allowed { "mcp_tool_execute_allowed" } else { "mcp_tool_execute_denied" };
+
+        let action = if allowed {
+            "mcp_tool_execute_allowed"
+        } else {
+            "mcp_tool_execute_denied"
+        };
         let details = format!("Role {} attempted to execute tool {}", role_id, tool_name);
-        
+
         let mut logger = self.audit_logger.lock().await;
         let _ = logger.log(action, user_id, "mcp_tool", &details).await;
-        
+
         Ok(allowed)
     }
 }

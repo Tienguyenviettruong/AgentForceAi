@@ -32,7 +32,7 @@ impl DatabaseOptimizer {
             PRAGMA cache_size = -64000;
             PRAGMA temp_store = MEMORY;
             PRAGMA mmap_size = 30000000000;
-            "
+            ",
         )?;
         Ok(())
     }
@@ -48,7 +48,10 @@ impl DatabaseOptimizer {
     pub async fn create_index(&self, table: &str, column: &str) -> Result<()> {
         let conn = self.connection.lock().unwrap();
         let index_name = format!("idx_{}_{}", table, column);
-        let query = format!("CREATE INDEX IF NOT EXISTS {} ON {} ({})", index_name, table, column);
+        let query = format!(
+            "CREATE INDEX IF NOT EXISTS {} ON {} ({})",
+            index_name, table, column
+        );
         conn.execute(&query, [])?;
         Ok(())
     }

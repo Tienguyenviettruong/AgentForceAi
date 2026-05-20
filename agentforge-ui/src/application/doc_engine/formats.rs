@@ -34,7 +34,7 @@ impl Formatter for WordFormatter {
         for line in content.lines() {
             doc = doc.add_paragraph(Paragraph::new().add_run(Run::new().add_text(line)));
         }
-        
+
         let mut buf = Cursor::new(Vec::new());
         doc.build().pack(&mut buf)?;
         Ok(buf.into_inner())
@@ -50,22 +50,23 @@ impl Formatter for PdfFormatter {
 
     fn format(&self, content: &str) -> Result<Vec<u8>> {
         use printpdf::*;
-        
 
         let (doc, page1, layer1) = PdfDocument::new("Document", Mm(210.0), Mm(297.0), "Layer 1");
         let current_layer = doc.get_page(page1).get_layer(layer1);
-        
-        let font = doc.add_builtin_font(BuiltinFont::Helvetica)
+
+        let font = doc
+            .add_builtin_font(BuiltinFont::Helvetica)
             .map_err(|e| anyhow::anyhow!("Font error: {:?}", e))?;
-            
+
         current_layer.use_text(content, 12.0, Mm(10.0), Mm(280.0), &font);
-        
+
         let mut buf = Vec::new();
         {
             let mut writer = std::io::BufWriter::new(&mut buf);
-            doc.save(&mut writer).map_err(|e| anyhow::anyhow!("PDF save error: {:?}", e))?;
+            doc.save(&mut writer)
+                .map_err(|e| anyhow::anyhow!("PDF save error: {:?}", e))?;
         }
-        
+
         Ok(buf)
     }
 }
@@ -85,16 +86,17 @@ impl FormatManager {
         let mut manager = Self {
             formatters: HashMap::new(),
         };
-        
+
         manager.register_formatter(Box::new(MarkdownFormatter));
         manager.register_formatter(Box::new(WordFormatter));
         manager.register_formatter(Box::new(PdfFormatter));
-        
+
         manager
     }
 
     pub fn register_formatter(&mut self, formatter: Box<dyn Formatter>) {
-        self.formatters.insert(formatter.name().to_string(), formatter);
+        self.formatters
+            .insert(formatter.name().to_string(), formatter);
     }
 
     pub fn get_formatter(&self, name: &str) -> Option<&dyn Formatter> {

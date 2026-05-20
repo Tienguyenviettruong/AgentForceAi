@@ -31,9 +31,24 @@ impl AnalyticsPanel {
                 .border_color(theme.border)
                 .pb_2()
                 .mb_2()
-                .child(div().w_1_2().text_color(theme.muted_foreground).child("Agent / Tool"))
-                .child(div().w_1_4().text_color(theme.muted_foreground).child("Calls"))
-                .child(div().w_1_4().text_color(theme.muted_foreground).child("Avg Latency")),
+                .child(
+                    div()
+                        .w_1_2()
+                        .text_color(theme.muted_foreground)
+                        .child("Agent / Tool"),
+                )
+                .child(
+                    div()
+                        .w_1_4()
+                        .text_color(theme.muted_foreground)
+                        .child("Calls"),
+                )
+                .child(
+                    div()
+                        .w_1_4()
+                        .text_color(theme.muted_foreground)
+                        .child("Avg Latency"),
+                ),
         );
 
         // Entries
@@ -43,9 +58,24 @@ impl AnalyticsPanel {
                     .flex()
                     .w_full()
                     .items_center()
-                    .child(div().w_1_2().text_color(theme.foreground).child(entry.name.clone()))
-                    .child(div().w_1_4().text_color(theme.foreground).child(entry.calls.to_string()))
-                    .child(div().w_1_4().text_color(theme.foreground).child(format!("{:.1}ms", entry.latency))),
+                    .child(
+                        div()
+                            .w_1_2()
+                            .text_color(theme.foreground)
+                            .child(entry.name.clone()),
+                    )
+                    .child(
+                        div()
+                            .w_1_4()
+                            .text_color(theme.foreground)
+                            .child(entry.calls.to_string()),
+                    )
+                    .child(
+                        div()
+                            .w_1_4()
+                            .text_color(theme.foreground)
+                            .child(format!("{:.1}ms", entry.latency)),
+                    ),
             );
         }
 
@@ -63,7 +93,7 @@ impl AnalyticsPanel {
                     .text_size(gpui::px(16.0))
                     .font_weight(gpui::FontWeight::BOLD)
                     .mb_4()
-                    .child("Top Analytics")
+                    .child("Top Analytics"),
             )
             .child(list)
     }

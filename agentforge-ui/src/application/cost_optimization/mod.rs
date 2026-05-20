@@ -1,3 +1,3 @@
 pub mod core;
-pub mod optimization;
 pub mod failover;
+pub mod optimization;

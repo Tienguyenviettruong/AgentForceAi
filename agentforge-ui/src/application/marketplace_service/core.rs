@@ -35,8 +35,12 @@ impl MarketplaceClient {
 
     pub async fn search(&self, query: &str) -> Result<Vec<MarketplaceListing>> {
         let q = query.to_lowercase();
-        Ok(self.listings.values()
-            .filter(|l| l.name.to_lowercase().contains(&q) || l.description.to_lowercase().contains(&q))
+        Ok(self
+            .listings
+            .values()
+            .filter(|l| {
+                l.name.to_lowercase().contains(&q) || l.description.to_lowercase().contains(&q)
+            })
             .cloned()
             .collect())
     }

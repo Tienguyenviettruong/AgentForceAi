@@ -1,14 +1,14 @@
-pub mod embeddings;
-pub mod registry;
 pub mod claude;
 pub mod codex;
+pub mod custom;
+pub mod embeddings;
 pub mod gemini;
+pub mod health;
 pub mod iflow;
 pub mod opencode;
-pub mod custom;
-pub mod plugin;
-pub mod health;
 pub mod openrouter;
+pub mod plugin;
+pub mod registry;
 
 use std::future::Future;
 use std::pin::Pin;
@@ -38,8 +38,9 @@ pub trait BaseProviderAdapter: Send + Sync {
             dyn Future<
                     Output = Result<
                         Box<
-                            dyn futures::Stream<Item = Result<crate::providers::StreamChunk, anyhow::Error>>
-                                + Send
+                            dyn futures::Stream<
+                                    Item = Result<crate::providers::StreamChunk, anyhow::Error>,
+                                > + Send
                                 + Unpin,
                         >,
                         anyhow::Error,

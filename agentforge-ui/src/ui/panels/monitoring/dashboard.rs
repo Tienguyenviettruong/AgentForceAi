@@ -1,13 +1,13 @@
 use gpui::{div, prelude::*, App, IntoElement};
 use gpui_component::ActiveTheme as _;
 
+use super::charts::{BarChart, ChartData};
 use crate::infrastructure::monitoring::{
     activity::{ActivityFeed, ActivityItem},
     agent_health::{AgentHealth, AgentHealthPanel},
     analytics::{AnalyticEntry, AnalyticsPanel},
     metrics::{MetricCard, MetricValue},
 };
-use super::charts::{BarChart, ChartData};
 
 pub struct MonitoringDashboard {
     // We would typically store state here and update it from a backend service.
@@ -41,7 +41,11 @@ impl MonitoringDashboard {
 
         let mut metrics_row = div().flex().gap_4().w_full();
         for metric in &self.metrics {
-            metrics_row = metrics_row.child(div().flex_1().child(MetricCard::new(metric.clone()).render(cx)));
+            metrics_row = metrics_row.child(
+                div()
+                    .flex_1()
+                    .child(MetricCard::new(metric.clone()).render(cx)),
+            );
         }
 
         div()
@@ -57,7 +61,7 @@ impl MonitoringDashboard {
                     .text_color(theme.foreground)
                     .text_size(gpui::px(24.0))
                     .font_weight(gpui::FontWeight::BOLD)
-                    .child("Monitoring Dashboard")
+                    .child("Monitoring Dashboard"),
             )
             .child(metrics_row)
             .child(
@@ -66,15 +70,25 @@ impl MonitoringDashboard {
                     .gap_6()
                     .w_full()
                     .child(
-                        div()
-                            .flex_1()
-                            .child(BarChart::new("Task Executions (7 Days)", self.chart_data.iter().map(|c| ChartData { label: c.label.clone(), value: c.value }).collect()).render(cx))
+                        div().flex_1().child(
+                            BarChart::new(
+                                "Task Executions (7 Days)",
+                                self.chart_data
+                                    .iter()
+                                    .map(|c| ChartData {
+                                        label: c.label.clone(),
+                                        value: c.value,
+                                    })
+                                    .collect(),
+                            )
+                            .render(cx),
+                        ),
                     )
                     .child(
                         div()
                             .flex_1()
-                            .child(AnalyticsPanel::new(self.analytics.clone()).render(cx))
-                    )
+                            .child(AnalyticsPanel::new(self.analytics.clone()).render(cx)),
+                    ),
             )
             .child(
                 div()
@@ -84,13 +98,13 @@ impl MonitoringDashboard {
                     .child(
                         div()
                             .flex_1()
-                            .child(AgentHealthPanel::new(self.agents.clone()).render(cx))
+                            .child(AgentHealthPanel::new(self.agents.clone()).render(cx)),
                     )
                     .child(
                         div()
                             .flex_1()
-                            .child(ActivityFeed::new(self.activities.clone()).render(cx))
-                    )
+                            .child(ActivityFeed::new(self.activities.clone()).render(cx)),
+                    ),
             )
     }
 }

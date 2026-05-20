@@ -22,8 +22,8 @@ impl CustomAdapterSDK {
 
 impl BaseProviderAdapter for CustomAdapterSDK {
     fn provider_id(&self) -> &'static str {
-        // Normally this would be dynamic based on the plugin, but returning a static str 
-        // to satisfy the trait for this mock SDK. In a real scenario we'd use a leak or 
+        // Normally this would be dynamic based on the plugin, but returning a static str
+        // to satisfy the trait for this mock SDK. In a real scenario we'd use a leak or
         // Box::leak(self.plugin_name.clone().into_boxed_str())
         "custom"
     }
@@ -52,14 +52,31 @@ impl BaseProviderAdapter for CustomAdapterSDK {
         Box<
             dyn Future<
                     Output = Result<
-                        Box<dyn futures::Stream<Item = Result<crate::providers::StreamChunk, anyhow::Error>> + Send + Unpin>,
+                        Box<
+                            dyn futures::Stream<
+                                    Item = Result<crate::providers::StreamChunk, anyhow::Error>,
+                                > + Send
+                                + Unpin,
+                        >,
                     >,
                 > + Send,
         >,
     > {
         Box::pin(async move {
-            let stream = futures::stream::iter(vec![Ok(crate::providers::StreamChunk::Text("Custom adapter SDK stream".to_string())), Ok(crate::providers::StreamChunk::Done(crate::providers::TokenUsage::default()))]);
-            Ok(Box::new(stream) as Box<dyn futures::Stream<Item = Result<crate::providers::StreamChunk, anyhow::Error>> + Send + Unpin>)
+            let stream = futures::stream::iter(vec![
+                Ok(crate::providers::StreamChunk::Text(
+                    "Custom adapter SDK stream".to_string(),
+                )),
+                Ok(crate::providers::StreamChunk::Done(
+                    crate::providers::TokenUsage::default(),
+                )),
+            ]);
+            Ok(Box::new(stream)
+                as Box<
+                    dyn futures::Stream<Item = Result<crate::providers::StreamChunk, anyhow::Error>>
+                        + Send
+                        + Unpin,
+                >)
         })
     }
 

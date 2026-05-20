@@ -9,4 +9,3 @@ pub fn set_office_webview_init_in_progress(value: bool) {
 pub fn office_webview_init_in_progress() -> bool {
     OFFICE_WEBVIEW_INIT_IN_PROGRESS.load(Ordering::SeqCst)
 }
-

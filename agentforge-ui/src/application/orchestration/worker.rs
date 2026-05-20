@@ -1,9 +1,9 @@
-use std::sync::Arc;
 use crate::core::traits::database::DatabasePort;
-use crate::infrastructure::message_bus::routing::{TeamBusRouter, TeamMessage, MessageType};
+use crate::infrastructure::message_bus::routing::{MessageType, TeamBusRouter, TeamMessage};
 use crate::providers::BaseProviderAdapter;
 use serde::Deserialize;
 use std::collections::HashMap;
+use std::sync::Arc;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
@@ -45,15 +45,25 @@ impl AgentWorker {
     }
 
     pub async fn start(self: Arc<Self>) {
-        let agent_role = self.get_agent_role().await.unwrap_or_else(|| "Agent".to_string());
-        
-        let mut rx = self.team_bus
+        let agent_role = self
+            .get_agent_role()
+            .await
+            .unwrap_or_else(|| "Agent".to_string());
+
+        let mut rx = self
+            .team_bus
             .register_member(&self.team_instance_id, &self.agent_id, &agent_role)
             .await;
-        let mut bc_rx = self.team_bus.subscribe_broadcast(&self.team_instance_id).await;
+        let mut bc_rx = self
+            .team_bus
+            .subscribe_broadcast(&self.team_instance_id)
+            .await;
         let mut tick = tokio::time::interval(std::time::Duration::from_secs(2));
 
-        println!("AgentWorker {} (Role: {}) started for instance {}", self.agent_id, agent_role, self.team_instance_id);
+        println!(
+            "AgentWorker {} (Role: {}) started for instance {}",
+            self.agent_id, agent_role, self.team_instance_id
+        );
 
         loop {
             tokio::select! {
@@ -71,7 +81,9 @@ impl AgentWorker {
             }
         }
 
-        self.team_bus.unregister_member(&self.team_instance_id, &self.agent_id, &agent_role).await;
+        self.team_bus
+            .unregister_member(&self.team_instance_id, &self.agent_id, &agent_role)
+            .await;
         println!("AgentWorker {} stopped", self.agent_id);
     }
 
@@ -116,7 +128,10 @@ impl AgentWorker {
             return;
         }
 
-        println!("AgentWorker {} received message: {}", self.agent_id, msg.content);
+        println!(
+            "AgentWorker {} received message: {}",
+            self.agent_id, msg.content
+        );
 
         // Process iFlow task dispatch
         if let Some(metadata) = &msg.metadata {
@@ -169,7 +184,10 @@ impl AgentWorker {
                 .to_string();
             (t, s)
         } else {
-            (handoff.handoff_type.clone(), handoff.briefing_package.clone())
+            (
+                handoff.handoff_type.clone(),
+                handoff.briefing_package.clone(),
+            )
         };
 
         let summary = if summary.len() > 180 {
@@ -186,18 +204,18 @@ impl AgentWorker {
             &summary,
         );
 
-        let _ = self
-            .db
-            .insert_cross_team_case_event(&crate::core::models::CrossTeamCaseEventRecord {
-                id: Uuid::new_v4().to_string(),
-                correlation_id: handoff.correlation_id.clone(),
-                from_instance_id: handoff.from_team.clone(),
-                reply_to_instance_id: handoff.reply_to_team.clone(),
-                event_type,
-                summary,
-                payload: msg.metadata.clone(),
-                created_at: chrono::Utc::now().to_rfc3339(),
-            });
+        let _ =
+            self.db
+                .insert_cross_team_case_event(&crate::core::models::CrossTeamCaseEventRecord {
+                    id: Uuid::new_v4().to_string(),
+                    correlation_id: handoff.correlation_id.clone(),
+                    from_instance_id: handoff.from_team.clone(),
+                    reply_to_instance_id: handoff.reply_to_team.clone(),
+                    event_type,
+                    summary,
+                    payload: msg.metadata.clone(),
+                    created_at: chrono::Utc::now().to_rfc3339(),
+                });
     }
 
     async fn try_execute_next_task(&self) {
@@ -220,7 +238,9 @@ impl AgentWorker {
                         .find(|p| provider_kind(p) == agent.provider.as_str())
                 })
             });
-        let Some(provider_config) = provider_config else { return; };
+        let Some(provider_config) = provider_config else {
+            return;
+        };
 
         let team_id = self
             .db
@@ -245,8 +265,9 @@ impl AgentWorker {
                 continue;
             }
             if let Some(payload) = &task.payload {
-                if let Ok(dag_task) =
-                    serde_json::from_str::<crate::application::orchestration::core::DagTask>(payload)
+                if let Ok(dag_task) = serde_json::from_str::<
+                    crate::application::orchestration::core::DagTask,
+                >(payload)
                 {
                     let mut all_deps_met = true;
                     for dep_id in dag_task.dependencies {
@@ -290,8 +311,10 @@ impl AgentWorker {
             .ok()
             .flatten();
 
-        let chat_service =
-            crate::application::services::chat_service::ChatService::new(self.db.clone(), self.team_bus.clone());
+        let chat_service = crate::application::services::chat_service::ChatService::new(
+            self.db.clone(),
+            self.team_bus.clone(),
+        );
         let sys_prompt = chat_service
             .build_dynamic_system_prompt(&team_id, &self.team_instance_id, &self.agent_id)
             .unwrap_or_default();
@@ -339,23 +362,43 @@ impl AgentWorker {
         let adapter: Option<Arc<dyn BaseProviderAdapter>> = match provider_kind(&provider_config) {
             "openrouter" => {
                 let mut a = crate::providers::openrouter::OpenRouterAdapter::new();
-                if a.initialize(&provider_config).is_ok() { Some(Arc::new(a)) } else { None }
+                if a.initialize(&provider_config).is_ok() {
+                    Some(Arc::new(a))
+                } else {
+                    None
+                }
             }
             "claude" => {
                 let mut a = crate::providers::claude::ClaudeAdapter::new();
-                if a.initialize(&provider_config).is_ok() { Some(Arc::new(a)) } else { None }
+                if a.initialize(&provider_config).is_ok() {
+                    Some(Arc::new(a))
+                } else {
+                    None
+                }
             }
             "gemini" => {
                 let mut a = crate::providers::gemini::GeminiAdapter::new();
-                if a.initialize(&provider_config).is_ok() { Some(Arc::new(a)) } else { None }
+                if a.initialize(&provider_config).is_ok() {
+                    Some(Arc::new(a))
+                } else {
+                    None
+                }
             }
             "codex" => {
                 let mut a = crate::providers::codex::CodexAdapter::new();
-                if a.initialize(&provider_config).is_ok() { Some(Arc::new(a)) } else { None }
+                if a.initialize(&provider_config).is_ok() {
+                    Some(Arc::new(a))
+                } else {
+                    None
+                }
             }
             "opencode" => {
                 let mut a = crate::providers::opencode::OpenCodeAdapter::new();
-                if a.initialize(&provider_config).is_ok() { Some(Arc::new(a)) } else { None }
+                if a.initialize(&provider_config).is_ok() {
+                    Some(Arc::new(a))
+                } else {
+                    None
+                }
             }
             _ => None,
         };
@@ -381,7 +424,8 @@ impl AgentWorker {
                     self.db.clone(),
                     self.team_bus.clone(),
                 );
-                let (files_written, _) = chat_service.parse_and_write_files(&text, workspace_dir.as_ref());
+                let (files_written, _) =
+                    chat_service.parse_and_write_files(&text, workspace_dir.as_ref());
                 let mut final_text = format!("[Task Completed] {}:\n{}", task.id, text);
                 if !files_written.is_empty() {
                     final_text.push_str("\n\n**Files Generated/Modified:**\n");
@@ -427,7 +471,9 @@ impl AgentWorker {
             .ok()
             .flatten();
         if session.is_none() {
-            let _ = self.db.create_session_for_instance(&self.team_instance_id, &self.agent_id);
+            let _ = self
+                .db
+                .create_session_for_instance(&self.team_instance_id, &self.agent_id);
             session = self
                 .db
                 .get_latest_session_for_instance(&self.team_instance_id)
@@ -435,9 +481,9 @@ impl AgentWorker {
                 .flatten();
         }
         if let Some(session) = session {
-            let _ = self
-                .db
-                .ensure_session(&session.id, &self.agent_id, Some(&self.team_instance_id));
+            let _ =
+                self.db
+                    .ensure_session(&session.id, &self.agent_id, Some(&self.team_instance_id));
             let _ = self.db.append_conversation_turn(
                 &session.id,
                 "assistant",
@@ -493,7 +539,11 @@ impl AgentWorker {
         let _ = self.team_bus.route_message(msg).await;
     }
 
-    async fn execute_cross_team_review(&self, original_msg: &TeamMessage, handoff: CrossTeamHandoff) {
+    async fn execute_cross_team_review(
+        &self,
+        original_msg: &TeamMessage,
+        handoff: CrossTeamHandoff,
+    ) {
         let agent = match self.db.get_agent(&self.agent_id) {
             Ok(Some(a)) => a,
             _ => return,
@@ -511,15 +561,26 @@ impl AgentWorker {
                         .find(|p| provider_kind(p) == agent.provider.as_str())
                 })
             });
-        let Some(provider_config) = provider_config else { return; };
+        let Some(provider_config) = provider_config else {
+            return;
+        };
 
-        let team_id = self.db
+        let team_id = self
+            .db
             .list_instances()
             .ok()
-            .and_then(|instances| instances.into_iter().find(|i| i.id == self.team_instance_id).map(|i| i.team_id))
+            .and_then(|instances| {
+                instances
+                    .into_iter()
+                    .find(|i| i.id == self.team_instance_id)
+                    .map(|i| i.team_id)
+            })
             .unwrap_or_default();
 
-        let chat_service = crate::application::services::chat_service::ChatService::new(self.db.clone(), self.team_bus.clone());
+        let chat_service = crate::application::services::chat_service::ChatService::new(
+            self.db.clone(),
+            self.team_bus.clone(),
+        );
         let mut sys = chat_service
             .build_dynamic_system_prompt(&team_id, &self.team_instance_id, &self.agent_id)
             .unwrap_or_default();
@@ -553,33 +614,58 @@ impl AgentWorker {
             },
         ];
 
-        let adapter: Option<Arc<dyn crate::providers::BaseProviderAdapter>> = match provider_kind(&provider_config) {
-            "openrouter" => {
-                let mut a = crate::providers::openrouter::OpenRouterAdapter::new();
-                if a.initialize(&provider_config).is_ok() { Some(Arc::new(a)) } else { None }
-            }
-            "claude" => {
-                let mut a = crate::providers::claude::ClaudeAdapter::new();
-                if a.initialize(&provider_config).is_ok() { Some(Arc::new(a)) } else { None }
-            }
-            "gemini" => {
-                let mut a = crate::providers::gemini::GeminiAdapter::new();
-                if a.initialize(&provider_config).is_ok() { Some(Arc::new(a)) } else { None }
-            }
-            "codex" => {
-                let mut a = crate::providers::codex::CodexAdapter::new();
-                if a.initialize(&provider_config).is_ok() { Some(Arc::new(a)) } else { None }
-            }
-            "opencode" => {
-                let mut a = crate::providers::opencode::OpenCodeAdapter::new();
-                if a.initialize(&provider_config).is_ok() { Some(Arc::new(a)) } else { None }
-            }
-            _ => None,
+        let adapter: Option<Arc<dyn crate::providers::BaseProviderAdapter>> =
+            match provider_kind(&provider_config) {
+                "openrouter" => {
+                    let mut a = crate::providers::openrouter::OpenRouterAdapter::new();
+                    if a.initialize(&provider_config).is_ok() {
+                        Some(Arc::new(a))
+                    } else {
+                        None
+                    }
+                }
+                "claude" => {
+                    let mut a = crate::providers::claude::ClaudeAdapter::new();
+                    if a.initialize(&provider_config).is_ok() {
+                        Some(Arc::new(a))
+                    } else {
+                        None
+                    }
+                }
+                "gemini" => {
+                    let mut a = crate::providers::gemini::GeminiAdapter::new();
+                    if a.initialize(&provider_config).is_ok() {
+                        Some(Arc::new(a))
+                    } else {
+                        None
+                    }
+                }
+                "codex" => {
+                    let mut a = crate::providers::codex::CodexAdapter::new();
+                    if a.initialize(&provider_config).is_ok() {
+                        Some(Arc::new(a))
+                    } else {
+                        None
+                    }
+                }
+                "opencode" => {
+                    let mut a = crate::providers::opencode::OpenCodeAdapter::new();
+                    if a.initialize(&provider_config).is_ok() {
+                        Some(Arc::new(a))
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            };
+
+        let Some(adapter) = adapter else {
+            return;
         };
 
-        let Some(adapter) = adapter else { return; };
-
-        let mcp_registry = Arc::new(crate::infrastructure::mcp::registry::McpToolRegistry::new(self.db.clone()));
+        let mcp_registry = Arc::new(crate::infrastructure::mcp::registry::McpToolRegistry::new(
+            self.db.clone(),
+        ));
         let executor = crate::application::orchestration::executor::AgentExecutor::new(
             adapter,
             mcp_registry,
@@ -591,7 +677,11 @@ impl AgentWorker {
             None,
         );
 
-        let result = executor.execute_task(history).await.ok().unwrap_or_default();
+        let result = executor
+            .execute_task(history)
+            .await
+            .ok()
+            .unwrap_or_default();
         if handoff.reply_to_team.is_empty() {
             return;
         }
@@ -628,7 +718,11 @@ impl AgentWorker {
         }
     }
 
-    async fn execute_cross_team_message(&self, original_msg: &TeamMessage, handoff: CrossTeamHandoff) {
+    async fn execute_cross_team_message(
+        &self,
+        original_msg: &TeamMessage,
+        handoff: CrossTeamHandoff,
+    ) {
         let correlation_id = if handoff.correlation_id.is_empty() {
             Uuid::new_v4().to_string()
         } else {
@@ -666,7 +760,9 @@ impl AgentWorker {
                         .find(|p| provider_kind(p) == agent.provider.as_str())
                 })
             });
-        let Some(provider_config) = provider_config else { return; };
+        let Some(provider_config) = provider_config else {
+            return;
+        };
 
         let team_id = self
             .db
@@ -680,7 +776,10 @@ impl AgentWorker {
             })
             .unwrap_or_default();
 
-        let chat_service = crate::application::services::chat_service::ChatService::new(self.db.clone(), self.team_bus.clone());
+        let chat_service = crate::application::services::chat_service::ChatService::new(
+            self.db.clone(),
+            self.team_bus.clone(),
+        );
         let mut sys = chat_service
             .build_dynamic_system_prompt(&team_id, &self.team_instance_id, &self.agent_id)
             .unwrap_or_default();
@@ -717,33 +816,58 @@ impl AgentWorker {
             },
         ];
 
-        let adapter: Option<Arc<dyn crate::providers::BaseProviderAdapter>> = match provider_kind(&provider_config) {
-            "openrouter" => {
-                let mut a = crate::providers::openrouter::OpenRouterAdapter::new();
-                if a.initialize(&provider_config).is_ok() { Some(Arc::new(a)) } else { None }
-            }
-            "claude" => {
-                let mut a = crate::providers::claude::ClaudeAdapter::new();
-                if a.initialize(&provider_config).is_ok() { Some(Arc::new(a)) } else { None }
-            }
-            "gemini" => {
-                let mut a = crate::providers::gemini::GeminiAdapter::new();
-                if a.initialize(&provider_config).is_ok() { Some(Arc::new(a)) } else { None }
-            }
-            "codex" => {
-                let mut a = crate::providers::codex::CodexAdapter::new();
-                if a.initialize(&provider_config).is_ok() { Some(Arc::new(a)) } else { None }
-            }
-            "opencode" => {
-                let mut a = crate::providers::opencode::OpenCodeAdapter::new();
-                if a.initialize(&provider_config).is_ok() { Some(Arc::new(a)) } else { None }
-            }
-            _ => None,
+        let adapter: Option<Arc<dyn crate::providers::BaseProviderAdapter>> =
+            match provider_kind(&provider_config) {
+                "openrouter" => {
+                    let mut a = crate::providers::openrouter::OpenRouterAdapter::new();
+                    if a.initialize(&provider_config).is_ok() {
+                        Some(Arc::new(a))
+                    } else {
+                        None
+                    }
+                }
+                "claude" => {
+                    let mut a = crate::providers::claude::ClaudeAdapter::new();
+                    if a.initialize(&provider_config).is_ok() {
+                        Some(Arc::new(a))
+                    } else {
+                        None
+                    }
+                }
+                "gemini" => {
+                    let mut a = crate::providers::gemini::GeminiAdapter::new();
+                    if a.initialize(&provider_config).is_ok() {
+                        Some(Arc::new(a))
+                    } else {
+                        None
+                    }
+                }
+                "codex" => {
+                    let mut a = crate::providers::codex::CodexAdapter::new();
+                    if a.initialize(&provider_config).is_ok() {
+                        Some(Arc::new(a))
+                    } else {
+                        None
+                    }
+                }
+                "opencode" => {
+                    let mut a = crate::providers::opencode::OpenCodeAdapter::new();
+                    if a.initialize(&provider_config).is_ok() {
+                        Some(Arc::new(a))
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            };
+
+        let Some(adapter) = adapter else {
+            return;
         };
 
-        let Some(adapter) = adapter else { return; };
-
-        let mcp_registry = Arc::new(crate::infrastructure::mcp::registry::McpToolRegistry::new(self.db.clone()));
+        let mcp_registry = Arc::new(crate::infrastructure::mcp::registry::McpToolRegistry::new(
+            self.db.clone(),
+        ));
         let executor = crate::application::orchestration::executor::AgentExecutor::new(
             adapter,
             mcp_registry,
@@ -755,7 +879,11 @@ impl AgentWorker {
             None,
         );
 
-        let response_text = executor.execute_task(history).await.ok().unwrap_or_default();
+        let response_text = executor
+            .execute_task(history)
+            .await
+            .ok()
+            .unwrap_or_default();
         if handoff.reply_to_team.is_empty() || response_text.is_empty() {
             return;
         }
@@ -800,7 +928,9 @@ impl AgentWorker {
                 .ok()
                 .flatten();
             if session.is_none() {
-                let _ = self.db.create_session_for_instance(&handoff.reply_to_team, &origin_agent_id);
+                let _ = self
+                    .db
+                    .create_session_for_instance(&handoff.reply_to_team, &origin_agent_id);
                 session = self
                     .db
                     .get_latest_session_for_instance(&handoff.reply_to_team)
@@ -809,10 +939,17 @@ impl AgentWorker {
             }
             if let Some(session) = session {
                 let meta = serde_json::json!({"agent_name": agent.name}).to_string();
-                let _ = self
-                    .db
-                    .ensure_session(&session.id, &origin_agent_id, Some(&handoff.reply_to_team));
-                let _ = self.db.append_conversation_turn(&session.id, "assistant", &content, Some(&meta));
+                let _ = self.db.ensure_session(
+                    &session.id,
+                    &origin_agent_id,
+                    Some(&handoff.reply_to_team),
+                );
+                let _ = self.db.append_conversation_turn(
+                    &session.id,
+                    "assistant",
+                    &content,
+                    Some(&meta),
+                );
                 let _ = self.db.touch_session(&session.id);
             }
         }
@@ -820,8 +957,10 @@ impl AgentWorker {
 
     async fn execute_iflow_task(&self, msg: TeamMessage) {
         let parts: Vec<&str> = msg.metadata.as_ref().unwrap().split(':').collect();
-        if parts.len() < 3 { return; }
-        
+        if parts.len() < 3 {
+            return;
+        }
+
         let execution_id = parts[1];
         let node_id = parts[2];
         let instruction = &msg.content;
@@ -843,7 +982,9 @@ impl AgentWorker {
                         .find(|p| provider_kind(p) == agent.provider.as_str())
                 })
             });
-        let Some(provider_config) = provider_config else { return; };
+        let Some(provider_config) = provider_config else {
+            return;
+        };
 
         let mut history = Vec::new();
         if let Some(system_prompt) = agent.system_prompt.clone() {
@@ -862,7 +1003,7 @@ impl AgentWorker {
         // We will send a stream message back
         let message_id = uuid::Uuid::new_v4().to_string();
         let content = format!("[{}]: ", agent.name);
-        
+
         let stream_msg = TeamMessage {
             id: message_id.clone(),
             team_instance_id: self.team_instance_id.clone(),
@@ -871,7 +1012,10 @@ impl AgentWorker {
             recipient_role: None,
             message_type: MessageType::Broadcast,
             content: content.clone(),
-            metadata: Some(format!("{{\"workflow_execution_id\":\"{}\",\"node_id\":\"{}\"}}", execution_id, node_id)),
+            metadata: Some(format!(
+                "{{\"workflow_execution_id\":\"{}\",\"node_id\":\"{}\"}}",
+                execution_id, node_id
+            )),
             delivery_status: "delivered".to_string(),
             created_at: chrono::Utc::now().to_rfc3339(),
         };
@@ -879,13 +1023,13 @@ impl AgentWorker {
         let _ = self.team_bus.route_message(stream_msg.clone()).await;
 
         let mut output_text = String::new();
-        
+
         // Using a macro or similar block to handle adapters
         // For brevity, we instantiate openrouter adapter directly here
         // In real app, we should use a factory
         use crate::providers::BaseProviderAdapter;
         use futures::stream::StreamExt;
-        
+
         let mut adapter = crate::providers::openrouter::OpenRouterAdapter::new();
         if adapter.initialize(&provider_config).is_ok() {
             if let Ok(mut stream) = adapter.send_message_stream(history).await {
@@ -894,7 +1038,10 @@ impl AgentWorker {
                         match chunk {
                             crate::providers::StreamChunk::Text(t) => {
                                 output_text.push_str(&t);
-                                let _ = self.db.update_team_message_content(&message_id, &format!("[{}]: {}", agent.name, output_text));
+                                let _ = self.db.update_team_message_content(
+                                    &message_id,
+                                    &format!("[{}]: {}", agent.name, output_text),
+                                );
                             }
                             crate::providers::StreamChunk::Done(_) => break,
                         }
@@ -962,11 +1109,11 @@ impl WorkerManager {
                         self.db.clone(),
                         self.team_bus.clone(),
                     ));
-                    
+
                     let handle = tokio::spawn(async move {
                         worker.start().await;
                     });
-                    
+
                     workers.insert(worker_key, handle);
                 }
             }

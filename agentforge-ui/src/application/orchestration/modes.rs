@@ -44,7 +44,10 @@ impl ModeManager {
 
     pub fn transition_to(&mut self, new_mode: OperatingMode, reason: &str) -> Result<(), String> {
         if !self.can_transition(new_mode) {
-            return Err(format!("Cannot transition from {:?} to {:?}", self.current_mode, new_mode));
+            return Err(format!(
+                "Cannot transition from {:?} to {:?}",
+                self.current_mode, new_mode
+            ));
         }
 
         let event = ModeTransitionEvent {

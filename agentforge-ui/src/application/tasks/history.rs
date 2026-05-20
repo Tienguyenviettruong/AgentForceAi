@@ -1,5 +1,5 @@
-use rusqlite::{params, Connection, Result};
 use chrono::Utc;
+use rusqlite::{params, Connection, Result};
 
 pub struct TaskHistoryEntry {
     pub id: String,
@@ -60,7 +60,7 @@ impl<'a> HistoryManager<'a> {
             "SELECT id, task_id, changed_by, old_status, new_status, details, changed_at
              FROM task_history
              WHERE task_id = ?1
-             ORDER BY changed_at ASC"
+             ORDER BY changed_at ASC",
         )?;
 
         let iter = stmt.query_map(params![task_id], |row| {

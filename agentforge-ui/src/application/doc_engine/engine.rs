@@ -1,10 +1,10 @@
+use anyhow::Result;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use serde::{Deserialize, Serialize};
-use anyhow::Result;
 
-use crate::docs::templates::TemplateManager;
 use crate::docs::formats::FormatManager;
+use crate::docs::templates::TemplateManager;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EngineConfig {
@@ -53,17 +53,23 @@ impl DocumentEngine {
 
     pub async fn generate_document(&self, request: DocumentRequest) -> Result<DocumentResult> {
         // 1. Get template
-        let templates: tokio::sync::RwLockReadGuard<'_, TemplateManager> = self.template_manager.read().await;
-        let template = templates.get_template(&request.template_name)
+        let templates: tokio::sync::RwLockReadGuard<'_, TemplateManager> =
+            self.template_manager.read().await;
+        let template = templates
+            .get_template(&request.template_name)
             .ok_or_else(|| anyhow::anyhow!("Template not found: {}", request.template_name))?;
 
         // 2. Render template
         let rendered_content = template.render(&request.content_data)?;
 
         // 3. Format output
-        let format_name = request.format.unwrap_or_else(|| self.config.default_format.clone());
-        let formats: tokio::sync::RwLockReadGuard<'_, FormatManager> = self.format_manager.read().await;
-        let formatter = formats.get_formatter(&format_name)
+        let format_name = request
+            .format
+            .unwrap_or_else(|| self.config.default_format.clone());
+        let formats: tokio::sync::RwLockReadGuard<'_, FormatManager> =
+            self.format_manager.read().await;
+        let formatter = formats
+            .get_formatter(&format_name)
             .ok_or_else(|| anyhow::anyhow!("Format not supported: {}", format_name))?;
 
         let final_content = formatter.format(&rendered_content)?;

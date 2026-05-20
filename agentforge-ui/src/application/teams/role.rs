@@ -1,6 +1,6 @@
+use crate::core::traits::database::DatabasePort;
 use anyhow::Result;
 use std::sync::Arc;
-use crate::core::traits::database::DatabasePort;
 
 pub struct Role {
     pub id: String,

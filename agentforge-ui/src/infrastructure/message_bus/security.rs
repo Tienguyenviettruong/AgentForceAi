@@ -17,7 +17,11 @@ impl SecurityManager {
         // In a real implementation, use AES-GCM or similar.
         // Here we just do a mock "encryption" by reversing the string and appending the key prefix.
         let reversed: String = payload.chars().rev().collect();
-        format!("ENC[{}]_{}", self.encryption_key.chars().take(4).collect::<String>(), reversed)
+        format!(
+            "ENC[{}]_{}",
+            self.encryption_key.chars().take(4).collect::<String>(),
+            reversed
+        )
     }
 
     /// Decrypts a message payload (mock implementation)
@@ -44,7 +48,7 @@ impl SecurityManager {
         }
         message.content.hash(&mut hasher);
         self.encryption_key.hash(&mut hasher); // Salt with our key
-        
+
         format!("{:x}", hasher.finish())
     }
 
@@ -59,14 +63,14 @@ impl SecurityManager {
         // Encrypt content
         let encrypted_content = self.encrypt(&message.content);
         message.content = encrypted_content;
-        
+
         // Generate hash (after encryption so we verify what's sent)
         let hash = self.generate_integrity_hash(&message);
-        
+
         // Store hash in metadata
         // In a real system we'd parse JSON, add it, and serialize back
         message.metadata = Some(format!("{{\"integrity_hash\": \"{}\"}}", hash));
-        
+
         message
     }
 }

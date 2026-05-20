@@ -17,7 +17,10 @@ impl Skill for CodeReviewSkill {
 
     async fn execute(&self, input: SkillInput) -> SkillOutput {
         let code = input.parameters.get("code").cloned().unwrap_or_default();
-        let result = format!("Reviewed code of length {}. Found no immediate issues.", code.len());
+        let result = format!(
+            "Reviewed code of length {}. Found no immediate issues.",
+            code.len()
+        );
         SkillOutput {
             result,
             success: true,
@@ -34,7 +37,8 @@ impl Skill for CodeGenerateSkill {
         SkillMetadata {
             id: "core.code_generate".to_string(),
             name: "Code Generation".to_string(),
-            description: "Generates source code based on natural language requirements.".to_string(),
+            description: "Generates source code based on natural language requirements."
+                .to_string(),
             version: "1.0".to_string(),
             category: "Core".to_string(),
         }
@@ -67,7 +71,10 @@ impl Skill for CodeDebugSkill {
 
     async fn execute(&self, input: SkillInput) -> SkillOutput {
         let error = input.parameters.get("error").cloned().unwrap_or_default();
-        let result = format!("Analyzed error: {}. Suggestion: Check variable bounds.", error);
+        let result = format!(
+            "Analyzed error: {}. Suggestion: Check variable bounds.",
+            error
+        );
         SkillOutput {
             result,
             success: true,

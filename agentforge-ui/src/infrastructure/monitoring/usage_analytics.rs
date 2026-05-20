@@ -2,8 +2,9 @@ use gpui::{div, App, Context, Focusable, IntoElement, ParentElement, Render, Sty
 use gpui_component::StyledExt;
 use gpui_component::{
     button::{Button, ButtonVariants},
-    h_flex, v_flex,
+    h_flex,
     theme::ActiveTheme,
+    v_flex,
 };
 
 pub struct UsageAnalytics {
@@ -18,7 +19,7 @@ impl UsageAnalytics {
         let db = crate::AppState::global(cx).db.clone();
         let total_tasks = db.get_total_tasks_completed().unwrap_or(0);
         let active_agents = db.get_active_agents_count().unwrap_or(0);
-        
+
         Self {
             focus_handle: cx.focus_handle(),
             db,
@@ -27,8 +28,6 @@ impl UsageAnalytics {
         }
     }
 }
-
-
 
 impl Render for UsageAnalytics {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -127,5 +126,3 @@ impl Render for UsageAnalytics {
             )
     }
 }
-
-

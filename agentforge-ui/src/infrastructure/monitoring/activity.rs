@@ -33,9 +33,14 @@ impl ActivityFeed {
         for item in &self.activities {
             let (icon, color) = match item.activity_type {
                 ActivityType::Info => (IconName::Info, theme.accent),
-                ActivityType::Warning => (IconName::TriangleAlert, gpui::Hsla::from(gpui::rgb(0xf59e0b))),
+                ActivityType::Warning => (
+                    IconName::TriangleAlert,
+                    gpui::Hsla::from(gpui::rgb(0xf59e0b)),
+                ),
                 ActivityType::Error => (IconName::CircleX, gpui::Hsla::from(gpui::rgb(0xef4444))),
-                ActivityType::Success => (IconName::CircleCheck, gpui::Hsla::from(gpui::rgb(0x10b981))),
+                ActivityType::Success => {
+                    (IconName::CircleCheck, gpui::Hsla::from(gpui::rgb(0x10b981)))
+                }
             };
 
             list = list.child(
@@ -43,12 +48,7 @@ impl ActivityFeed {
                     .flex()
                     .items_start()
                     .gap_3()
-                    .child(
-                        div()
-                            .text_color(color)
-                            .mt(gpui::px(2.0))
-                            .child(icon)
-                    )
+                    .child(div().text_color(color).mt(gpui::px(2.0)).child(icon))
                     .child(
                         div()
                             .flex()
@@ -57,15 +57,15 @@ impl ActivityFeed {
                                 div()
                                     .text_color(theme.foreground)
                                     .text_size(gpui::px(14.0))
-                                    .child(item.message.clone())
+                                    .child(item.message.clone()),
                             )
                             .child(
                                 div()
                                     .text_color(theme.muted_foreground)
                                     .text_size(gpui::px(12.0))
-                                    .child(item.timestamp.clone())
-                            )
-                    )
+                                    .child(item.timestamp.clone()),
+                            ),
+                    ),
             );
         }
 
@@ -83,7 +83,7 @@ impl ActivityFeed {
                     .text_size(gpui::px(16.0))
                     .font_weight(gpui::FontWeight::BOLD)
                     .mb_4()
-                    .child("Recent Activity")
+                    .child("Recent Activity"),
             )
             .child(list)
     }

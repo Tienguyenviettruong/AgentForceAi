@@ -17,7 +17,9 @@ pub fn provider_kind(p: &crate::db::Provider) -> &str {
 
 /// Create a provider adapter based on the provider config, initialize it, and return as Arc<dyn BaseProviderAdapter>.
 /// Returns None if initialization fails.
-pub fn create_adapter(provider_config: &crate::db::Provider) -> Option<Arc<dyn BaseProviderAdapter>> {
+pub fn create_adapter(
+    provider_config: &crate::db::Provider,
+) -> Option<Arc<dyn BaseProviderAdapter>> {
     match provider_kind(provider_config) {
         "openrouter" => {
             let mut adapter = crate::providers::openrouter::OpenRouterAdapter::new();

@@ -77,7 +77,11 @@ impl ObsidianMarkdown {
     }
 
     /// Convert into a KnowledgeItem for the Brain
-    pub async fn into_knowledge_item(self, title: &str, vault_path: Option<String>) -> Result<KnowledgeItem, String> {
+    pub async fn into_knowledge_item(
+        self,
+        title: &str,
+        vault_path: Option<String>,
+    ) -> Result<KnowledgeItem, String> {
         let tags: Vec<Tag> = self.tags.into_iter().map(Tag).collect();
 
         Ok(KnowledgeItem {
@@ -99,7 +103,7 @@ impl ObsidianMarkdown {
     }
 }
 
-use notify::{Watcher, RecursiveMode, RecommendedWatcher, Event as NotifyEvent};
+use notify::{Event as NotifyEvent, RecommendedWatcher, RecursiveMode, Watcher};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -108,17 +112,17 @@ pub struct ObsidianWatcher {
     pub rx: mpsc::Receiver<notify::Result<NotifyEvent>>,
 }
 
-
-
 impl ObsidianWatcher {
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self, String> {
         let (tx, rx) = mpsc::channel(100);
-        
+
         let mut watcher = notify::recommended_watcher(move |res| {
             let _ = tx.blocking_send(res);
-        }).map_err(|e| e.to_string())?;
+        })
+        .map_err(|e| e.to_string())?;
 
-        watcher.watch(path.as_ref(), RecursiveMode::Recursive)
+        watcher
+            .watch(path.as_ref(), RecursiveMode::Recursive)
             .map_err(|e| e.to_string())?;
 
         Ok(Self { watcher, rx })
@@ -129,30 +133,52 @@ use crate::core::traits::database::DatabasePort;
 use notify::EventKind;
 use std::path::PathBuf;
 
-
-pub async fn sync_obsidian_file(path: &std::path::Path, db: &dyn crate::core::traits::database::DatabasePort) {
+pub async fn sync_obsidian_file(
+    path: &std::path::Path,
+    db: &dyn crate::core::traits::database::DatabasePort,
+) {
     if path.extension().and_then(|s| s.to_str()) == Some("md") {
         if let Ok(markdown) = ObsidianMarkdown::read_from_file(path).await {
-            let title = path.file_stem().and_then(|s| s.to_str()).unwrap_or("Untitled");
-            let vault_path_str = path.canonicalize().unwrap_or_else(|_| path.to_path_buf()).to_string_lossy().to_string();
-            
+            let title = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("Untitled");
+            let vault_path_str = path
+                .canonicalize()
+                .unwrap_or_else(|_| path.to_path_buf())
+                .to_string_lossy()
+                .to_string();
+
             // Check if an item with this vault_path already exists
-            let existing_item = db.get_all_knowledge_items().unwrap_or_default()
+            let existing_item = db
+                .get_all_knowledge_items()
+                .unwrap_or_default()
                 .into_iter()
-                .find(|i| i.vault_path.as_ref().map(|p| std::path::Path::new(p).canonicalize().unwrap_or_else(|_| std::path::PathBuf::from(p)).to_string_lossy().to_string()) == Some(vault_path_str.clone()));
-                
-            let mut item = markdown.into_knowledge_item(title, Some(vault_path_str)).await.unwrap();
-            
+                .find(|i| {
+                    i.vault_path.as_ref().map(|p| {
+                        std::path::Path::new(p)
+                            .canonicalize()
+                            .unwrap_or_else(|_| std::path::PathBuf::from(p))
+                            .to_string_lossy()
+                            .to_string()
+                    }) == Some(vault_path_str.clone())
+                });
+
+            let mut item = markdown
+                .into_knowledge_item(title, Some(vault_path_str))
+                .await
+                .unwrap();
+
             if let Some(existing) = existing_item {
                 item.id = existing.id; // Preserve ID so it updates instead of duplicating
             }
-            
+
             if let Err(e) = db.upsert_knowledge_item(&item) {
                 eprintln!("Failed to sync Obsidian file to DB: {}", e);
             } else {
                 let text_chunks = chunk_text(&item.content, 500);
                 let embedding_provider = crate::providers::embeddings::EmbeddingProvider::new();
-                
+
                 let mut chunk_data = Vec::new();
                 for (i, chunk_text) in text_chunks.into_iter().enumerate() {
                     let text: String = chunk_text;
@@ -160,7 +186,7 @@ pub async fn sync_obsidian_file(path: &std::path::Path, db: &dyn crate::core::tr
                         chunk_data.push((i, text, embedding));
                     }
                 }
-                
+
                 if !chunk_data.is_empty() {
                     if let Err(e) = db.upsert_knowledge_chunks(&item.id.to_string(), chunk_data) {
                         eprintln!("Failed to sync chunks to DB: {}", e);
@@ -183,7 +209,10 @@ impl ObsidianWatcher {
         let scan_db = db.clone();
         runtime.spawn(async move {
             // Using walkdir to find all .md files
-            for entry in walkdir::WalkDir::new(&scan_path).into_iter().filter_map(|e| e.ok()) {
+            for entry in walkdir::WalkDir::new(&scan_path)
+                .into_iter()
+                .filter_map(|e| e.ok())
+            {
                 if entry.file_type().is_file() {
                     sync_obsidian_file(entry.path(), &*scan_db).await;
                 }
@@ -253,10 +282,10 @@ pub fn chunk_text(text: &str, max_tokens: usize) -> Vec<String> {
     // Basic chunker: split by double newlines (paragraphs), then group up to ~max_tokens (assuming ~4 chars/token)
     let max_chars = max_tokens * 4;
     let paragraphs: Vec<&str> = text.split("\n\n").collect();
-    
+
     let mut chunks = Vec::new();
     let mut current_chunk = String::new();
-    
+
     for p in paragraphs {
         if current_chunk.len() + p.len() > max_chars && !current_chunk.is_empty() {
             chunks.push(current_chunk.trim().to_string());
@@ -265,10 +294,10 @@ pub fn chunk_text(text: &str, max_tokens: usize) -> Vec<String> {
         current_chunk.push_str(p);
         current_chunk.push_str("\n\n");
     }
-    
+
     if !current_chunk.is_empty() {
         chunks.push(current_chunk.trim().to_string());
     }
-    
+
     chunks
 }

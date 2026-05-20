@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -28,7 +28,10 @@ impl WebSearchEngine {
             results.push(WebSearchResult {
                 title: format!("Search Result {} for {}", i + 1, query.keywords.join(" ")),
                 url: format!("https://example.com/result/{}", i + 1),
-                snippet: format!("This is a simulated search snippet for the keywords: {}", query.keywords.join(", ")),
+                snippet: format!(
+                    "This is a simulated search snippet for the keywords: {}",
+                    query.keywords.join(", ")
+                ),
                 fetched_at: Utc::now(),
             });
         }

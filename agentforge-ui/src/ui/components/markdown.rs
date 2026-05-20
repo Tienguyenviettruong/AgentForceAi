@@ -1,5 +1,8 @@
 use gpui::prelude::FluentBuilder;
-use gpui::{div, px, AnyElement, App, FontStyle, FontWeight, InteractiveElement, IntoElement, ParentElement, Styled, Window};
+use gpui::{
+    div, px, AnyElement, App, FontStyle, FontWeight, InteractiveElement, IntoElement,
+    ParentElement, Styled, Window,
+};
 use gpui_component::{scroll::ScrollableElement as _, Theme};
 use pulldown_cmark::{Alignment, Event, Options, Parser, Tag, TagEnd};
 
@@ -90,21 +93,34 @@ fn parse_markdown(content: &str) -> Vec<MdNode> {
                 }
                 Tag::TableHead => {
                     current_cell_index = 0;
-                    stack.push(MdNode::TableRow(true, current_table_alignments.clone(), vec![]));
+                    stack.push(MdNode::TableRow(
+                        true,
+                        current_table_alignments.clone(),
+                        vec![],
+                    ));
                 }
                 Tag::TableRow => {
                     current_cell_index = 0;
-                    stack.push(MdNode::TableRow(false, current_table_alignments.clone(), vec![]));
+                    stack.push(MdNode::TableRow(
+                        false,
+                        current_table_alignments.clone(),
+                        vec![],
+                    ));
                 }
                 Tag::TableCell => {
-                    let alignment = current_table_alignments.get(current_cell_index).copied().unwrap_or(Alignment::None);
+                    let alignment = current_table_alignments
+                        .get(current_cell_index)
+                        .copied()
+                        .unwrap_or(Alignment::None);
                     stack.push(MdNode::TableCell(alignment, vec![]));
                     current_cell_index += 1;
                 }
                 Tag::Strong => strong_depth += 1,
                 Tag::Emphasis => emphasis_depth += 1,
                 Tag::Strikethrough => strikethrough_depth += 1,
-                Tag::Link { dest_url, .. } => stack.push(MdNode::Link(dest_url.to_string(), vec![])),
+                Tag::Link { dest_url, .. } => {
+                    stack.push(MdNode::Link(dest_url.to_string(), vec![]))
+                }
                 Tag::CodeBlock(kind) => {
                     in_code_block = true;
                     code_content.clear();
@@ -132,7 +148,9 @@ fn parse_markdown(content: &str) -> Vec<MdNode> {
                         | MdNode::Table(_, children)
                         | MdNode::TableRow(_, _, children)
                         | MdNode::TableCell(_, children)
-                        | MdNode::Link(_, children) => children.push(MdNode::Html(html.to_string())),
+                        | MdNode::Link(_, children) => {
+                            children.push(MdNode::Html(html.to_string()))
+                        }
                         _ => {}
                     }
                 }
@@ -236,7 +254,9 @@ fn parse_markdown(content: &str) -> Vec<MdNode> {
                         | MdNode::Table(_, children)
                         | MdNode::TableRow(_, _, children)
                         | MdNode::TableCell(_, children)
-                        | MdNode::Link(_, children) => children.push(MdNode::Text(" ".to_string(), style)),
+                        | MdNode::Link(_, children) => {
+                            children.push(MdNode::Text(" ".to_string(), style))
+                        }
                         _ => {}
                     }
                 }
@@ -254,7 +274,9 @@ fn parse_markdown(content: &str) -> Vec<MdNode> {
                         | MdNode::Table(_, children)
                         | MdNode::TableRow(_, _, children)
                         | MdNode::TableCell(_, children)
-                        | MdNode::Link(_, children) => children.push(MdNode::Text("\n".to_string(), style)),
+                        | MdNode::Link(_, children) => {
+                            children.push(MdNode::Text("\n".to_string(), style))
+                        }
                         _ => {}
                     }
                 }
@@ -285,7 +307,12 @@ fn parse_markdown(content: &str) -> Vec<MdNode> {
     }
 }
 
-fn render_inline(children: &[MdNode], theme: &Theme, cx: &mut Window, config: MarkdownRenderConfig) -> gpui::Div {
+fn render_inline(
+    children: &[MdNode],
+    theme: &Theme,
+    cx: &mut Window,
+    config: MarkdownRenderConfig,
+) -> gpui::Div {
     let mut container = gpui::div().flex().flex_wrap().gap_x(px(4.)).w_full();
     for child in children {
         match child {
@@ -314,9 +341,9 @@ fn render_inline(children: &[MdNode], theme: &Theme, cx: &mut Window, config: Ma
                             el.text_style()
                                 .get_or_insert_with(Default::default)
                                 .strikethrough = Some(gpui::StrikethroughStyle {
-                                    thickness: px(1.0),
-                                    color: Some(theme.foreground),
-                                });
+                                thickness: px(1.0),
+                                color: Some(theme.foreground),
+                            });
                         }
 
                         if config.enable_obsidian_tags {
@@ -356,9 +383,9 @@ fn render_inline(children: &[MdNode], theme: &Theme, cx: &mut Window, config: Ma
                     el.text_style()
                         .get_or_insert_with(Default::default)
                         .strikethrough = Some(gpui::StrikethroughStyle {
-                            thickness: px(1.0),
-                            color: Some(theme.foreground),
-                        });
+                        thickness: px(1.0),
+                        color: Some(theme.foreground),
+                    });
                 }
                 container = container.child(el);
             }
@@ -367,22 +394,21 @@ fn render_inline(children: &[MdNode], theme: &Theme, cx: &mut Window, config: Ma
                 let label = render_inline(link_children, theme, cx, config)
                     .text_color(theme.accent)
                     .cursor_pointer();
-                container = container.child(
-                    gpui::div()
-                        .child(label)
-                        .on_mouse_down(gpui::MouseButton::Left, {
-                            let url = url.clone();
-                            move |_, _window: &mut Window, cx: &mut App| {
-                                cx.open_url(&url);
-                            }
-                        })
-                );
+                container = container.child(gpui::div().child(label).on_mouse_down(
+                    gpui::MouseButton::Left,
+                    {
+                        let url = url.clone();
+                        move |_, _window: &mut Window, cx: &mut App| {
+                            cx.open_url(&url);
+                        }
+                    },
+                ));
             }
             MdNode::Html(html) => {
                 container = container.child(
                     gpui::div()
                         .child(html.clone())
-                        .text_color(theme.muted_foreground)
+                        .text_color(theme.muted_foreground),
                 );
             }
             _ => container = container.child(render_block(child, theme, cx, config)),
@@ -410,7 +436,13 @@ fn node_text_len(node: &MdNode) -> usize {
     }
 }
 
-fn render_table(table_alignments: &[Alignment], rows: &[MdNode], theme: &Theme, cx: &mut Window, config: MarkdownRenderConfig) -> AnyElement {
+fn render_table(
+    table_alignments: &[Alignment],
+    rows: &[MdNode],
+    theme: &Theme,
+    cx: &mut Window,
+    config: MarkdownRenderConfig,
+) -> AnyElement {
     let mut col_count = table_alignments.len();
     for row in rows {
         if let MdNode::TableRow(_, _, cells) = row {
@@ -485,7 +517,8 @@ fn render_table(table_alignments: &[Alignment], rows: &[MdNode], theme: &Theme, 
                 if let Some(cell) = cells.get(col_ix) {
                     match cell {
                         MdNode::TableCell(_, children) => {
-                            cell_el = cell_el.child(render_inline(children, theme, cx, config).w_full());
+                            cell_el =
+                                cell_el.child(render_inline(children, theme, cx, config).w_full());
                         }
                         _ => cell_el = cell_el.child(render_block(cell, theme, cx, config)),
                     }
@@ -507,9 +540,16 @@ fn render_table(table_alignments: &[Alignment], rows: &[MdNode], theme: &Theme, 
         .into_any_element()
 }
 
-fn render_block(node: &MdNode, theme: &Theme, cx: &mut Window, config: MarkdownRenderConfig) -> AnyElement {
+fn render_block(
+    node: &MdNode,
+    theme: &Theme,
+    cx: &mut Window,
+    config: MarkdownRenderConfig,
+) -> AnyElement {
     match node {
-        MdNode::Paragraph(children) => render_inline(children, theme, cx, config).mb(px(8.)).into_any_element(),
+        MdNode::Paragraph(children) => render_inline(children, theme, cx, config)
+            .mb(px(8.))
+            .into_any_element(),
         MdNode::Heading(level, children) => {
             let size = match level {
                 1 => px(24.),
@@ -562,10 +602,12 @@ fn render_block(node: &MdNode, theme: &Theme, cx: &mut Window, config: MarkdownR
                 item_container = item_container.child(
                     gpui::div()
                         .font_family(theme.mono_font_family.clone())
-                        .child(checkbox)
+                        .child(checkbox),
                 );
             }
-            item_container.child(render_inline(children, theme, cx, config)).into_any_element()
+            item_container
+                .child(render_inline(children, theme, cx, config))
+                .into_any_element()
         }
         MdNode::CodeBlock(lang, code) => gpui::div()
             .w_full()
@@ -584,7 +626,12 @@ fn render_block(node: &MdNode, theme: &Theme, cx: &mut Window, config: MarkdownR
                     .child({
                         let mut col = gpui_component::v_flex().w_full().gap_2();
                         if !lang.trim().is_empty() {
-                            col = col.child(div().text_xs().text_color(theme.muted_foreground).child(lang.clone()));
+                            col = col.child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.muted_foreground)
+                                    .child(lang.clone()),
+                            );
                         }
                         col.child(div().child(code.clone()))
                     }),

@@ -21,10 +21,51 @@ impl StatusBar {
             status_text: "Ready".into(),
         }
     }
+
+    fn provider_status(cx: &mut Context<Self>) -> (SharedString, gpui::Hsla) {
+        let providers = match crate::AppState::global(cx).db.list_providers() {
+            Ok(providers) => providers,
+            Err(_) => return ("Provider Status Unavailable".into(), gpui::red()),
+        };
+
+        if providers.is_empty() {
+            return ("No Provider".into(), cx.theme().muted_foreground);
+        }
+
+        let available_count = providers
+            .iter()
+            .filter(|provider| {
+                matches!(
+                    provider.status.to_lowercase().as_str(),
+                    "available" | "online" | "active" | "healthy"
+                )
+            })
+            .count();
+
+        if available_count == providers.len() {
+            (
+                format!(
+                    "{} Provider{}",
+                    available_count,
+                    if available_count == 1 { "" } else { "s" }
+                )
+                .into(),
+                gpui::green(),
+            )
+        } else if available_count > 0 {
+            (
+                format!("{} / {} Providers", available_count, providers.len()).into(),
+                gpui::yellow(),
+            )
+        } else {
+            ("Providers Offline".into(), gpui::red())
+        }
+    }
 }
 
 impl Render for StatusBar {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let (provider_status_text, provider_status_color) = Self::provider_status(cx);
         let theme = cx.theme();
 
         div()
@@ -88,7 +129,8 @@ impl Render for StatusBar {
                             .items_center()
                             .gap(px(4.))
                             .child(IconName::Globe)
-                            .child("Online"),
+                            .text_color(provider_status_color)
+                            .child(provider_status_text),
                     )
                     .child(
                         div()

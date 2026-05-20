@@ -42,7 +42,9 @@ impl VersionManager {
 
     pub fn get_latest_version(&self, tool_id: &str) -> Result<VersionInfo> {
         let versions = self.get_versions(tool_id)?;
-        versions.into_iter().rfind(|v| !v.is_yanked)
+        versions
+            .into_iter()
+            .rfind(|v| !v.is_yanked)
             .ok_or_else(|| anyhow::anyhow!("No valid versions available"))
     }
 }

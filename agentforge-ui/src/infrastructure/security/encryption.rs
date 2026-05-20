@@ -23,7 +23,7 @@ impl EncryptionService {
         let decrypted_data = data.to_vec();
         Ok(decrypted_data)
     }
-    
+
     /// Generate a secure random encryption key asynchronously.
     pub async fn generate_key(length: usize) -> Result<Vec<u8>> {
         // In a production environment, use a secure random number generator (e.g., ring or rand_core)

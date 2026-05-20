@@ -17,7 +17,7 @@ impl MemoryMonitor {
 
     pub async fn record_allocation(&self, size: usize) {
         let current = self.allocated_bytes.fetch_add(size, Ordering::SeqCst) + size;
-        
+
         let mut peak = self.peak_bytes.load(Ordering::SeqCst);
         while current > peak {
             match self.peak_bytes.compare_exchange_weak(
@@ -39,7 +39,7 @@ impl MemoryMonitor {
     pub async fn current_usage(&self) -> usize {
         let allocated = self.allocated_bytes.load(Ordering::SeqCst);
         let freed = self.freed_bytes.load(Ordering::SeqCst);
-        
+
         allocated.saturating_sub(freed)
     }
 

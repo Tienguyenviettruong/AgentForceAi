@@ -1,5 +1,5 @@
-use gpui::{App};
 use crate::{AppState, NotificationEntry};
+use gpui::App;
 
 pub struct NotificationManager;
 

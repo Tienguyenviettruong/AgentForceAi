@@ -2,16 +2,16 @@ use crate::application::iflow_engine::engine::{
     ExecutionStrategy, WorkflowEngine, WorkflowState, WorkflowStatus,
 };
 use crate::application::iflow_engine::nodes::{Node, NodeType, WorkflowData};
-use crate::core::traits::database::DatabasePort;
 use crate::core::models::workflow::WorkflowRecord;
+use crate::core::traits::database::DatabasePort;
 use gpui::*;
 use gpui_component::button::Button;
+use gpui_component::dock::{Panel, PanelEvent, TitleStyle};
+use gpui_component::scroll::ScrollableElement as _;
+use gpui_component::Sizable;
 use gpui_component::WindowExt;
 use gpui_component::{h_flex, v_flex};
-use gpui_component::Sizable;
-use gpui_component::dock::{Panel, PanelEvent, TitleStyle};
-use gpui_component::{ActiveTheme as _, StyledExt as _, Icon, IconName};
-use gpui_component::scroll::ScrollableElement as _;
+use gpui_component::{ActiveTheme as _, Icon, IconName, StyledExt as _};
 use std::collections::HashMap;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -61,7 +61,10 @@ impl FlowNode {
                     + (self.inputs.len() as f32 * PORT_HEIGHT)
                     + (idx as f32 * PORT_HEIGHT)
                     + PORT_HEIGHT / 2.0;
-                point(self.position.x + NODE_WIDTH - PADDING - 5.0, self.position.y + offset_y)
+                point(
+                    self.position.x + NODE_WIDTH - PADDING - 5.0,
+                    self.position.y + offset_y,
+                )
             })
     }
 }
@@ -100,14 +103,14 @@ pub struct IFlowBuilderPanel {
     last_execution_state: Option<WorkflowState>,
     workflow_to_canvas: HashMap<String, Uuid>,
     canvas_to_workflow: HashMap<Uuid, String>,
-    
+
     db: Arc<dyn DatabasePort>,
 }
 
 impl IFlowBuilderPanel {
     pub fn new(_window: &mut Window, cx: &mut App) -> Self {
         let db = crate::AppState::global(cx).db.clone();
-        
+
         let workflow_engine = WorkflowEngine::new();
         let workflow = crate::application::iflow_engine::engine::Workflow {
             id: uuid::Uuid::new_v4().to_string(),
@@ -168,9 +171,12 @@ impl IFlowBuilderPanel {
         let mut sorted = Vec::new();
         let mut visited = std::collections::HashSet::new();
         let mut queue = std::collections::VecDeque::new();
-        
+
         // Find start node, or just use the first available
-        if let Some(start) = workflow.nodes.values().find(|n| n.id == "start" || n.node_type == crate::application::iflow_engine::nodes::NodeType::Start) {
+        if let Some(start) = workflow.nodes.values().find(|n| {
+            n.id == "start"
+                || n.node_type == crate::application::iflow_engine::nodes::NodeType::Start
+        }) {
             queue.push_back(start.id.clone());
         } else if let Some(first) = workflow.nodes.keys().next() {
             queue.push_back(first.clone());
@@ -185,7 +191,12 @@ impl IFlowBuilderPanel {
                         queue.push_back(next_id.clone());
                     }
                     // Also handle decision nodes
-                    if let crate::application::iflow_engine::nodes::NodeType::Decision { true_next, false_next, .. } = &node.node_type {
+                    if let crate::application::iflow_engine::nodes::NodeType::Decision {
+                        true_next,
+                        false_next,
+                        ..
+                    } = &node.node_type
+                    {
                         queue.push_back(true_next.clone());
                         queue.push_back(false_next.clone());
                     }
@@ -453,7 +464,12 @@ impl IFlowBuilderPanel {
                                         }),
                                     ),
                             )
-                            .child(div().text_size(px(12.0 * zoom)).text_color(theme.muted_foreground).child(port.name.clone()))
+                            .child(
+                                div()
+                                    .text_size(px(12.0 * zoom))
+                                    .text_color(theme.muted_foreground)
+                                    .child(port.name.clone()),
+                            )
                     }))
                     .children(node.outputs.iter().map(|port| {
                         let port_id = port.id.clone();
@@ -462,7 +478,12 @@ impl IFlowBuilderPanel {
                             .flex()
                             .items_center()
                             .justify_between()
-                            .child(div().text_size(px(12.0 * zoom)).text_color(theme.muted_foreground).child(port.name.clone()))
+                            .child(
+                                div()
+                                    .text_size(px(12.0 * zoom))
+                                    .text_color(theme.muted_foreground)
+                                    .child(port.name.clone()),
+                            )
                             .child(
                                 div()
                                     .w(px(12.0 * zoom))
@@ -521,16 +542,29 @@ impl IFlowBuilderPanel {
                 div()
                     .text_size(px(16.))
                     .font_weight(FontWeight::BOLD)
-                    .text_color(theme.foreground).child("Dashboard"),
+                    .text_color(theme.foreground)
+                    .child("Dashboard"),
             )
             .child(
                 div()
                     .flex()
                     .gap_2()
-                    .child(div().text_color(theme.foreground).child(format!("Nodes: {}", self.state.nodes.len())))
-                    .child(div().text_color(theme.foreground).child(format!("Connections: {}", self.state.connections.len()))),
+                    .child(
+                        div()
+                            .text_color(theme.foreground)
+                            .child(format!("Nodes: {}", self.state.nodes.len())),
+                    )
+                    .child(
+                        div()
+                            .text_color(theme.foreground)
+                            .child(format!("Connections: {}", self.state.connections.len())),
+                    ),
             )
-            .child(div().text_color(theme.foreground).child(format!("Execution: {}", status_text)))
+            .child(
+                div()
+                    .text_color(theme.foreground)
+                    .child(format!("Execution: {}", status_text)),
+            )
             .child(
                 div()
                     .flex()
@@ -643,34 +677,56 @@ impl IFlowBuilderPanel {
 
     fn render_logs(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
-        
+
         let mut log_items = vec![];
-        log_items.push(div().text_color(theme.muted_foreground).child("• Initialize Environment..."));
-        log_items.push(div().text_color(theme.muted_foreground).child("• Ready for execution..."));
-        
+        log_items.push(
+            div()
+                .text_color(theme.muted_foreground)
+                .child("• Initialize Environment..."),
+        );
+        log_items.push(
+            div()
+                .text_color(theme.muted_foreground)
+                .child("• Ready for execution..."),
+        );
+
         if let Some(state) = &self.last_execution_state {
             for node_id in &state.completed_nodes {
-                let name = self.canvas_to_workflow.iter()
+                let name = self
+                    .canvas_to_workflow
+                    .iter()
                     .find(|(_, wid)| *wid == node_id)
                     .and_then(|(cid, _)| self.state.nodes.iter().find(|n| n.id == *cid))
                     .map(|n| n.title.clone())
                     .unwrap_or_else(|| node_id.clone());
-                log_items.push(div().text_color(theme.success).child(format!("✓ Completed: {}", name)));
+                log_items.push(
+                    div()
+                        .text_color(theme.success)
+                        .child(format!("✓ Completed: {}", name)),
+                );
             }
             for node_id in &state.current_nodes {
-                let name = self.canvas_to_workflow.iter()
+                let name = self
+                    .canvas_to_workflow
+                    .iter()
                     .find(|(_, wid)| *wid == node_id)
                     .and_then(|(cid, _)| self.state.nodes.iter().find(|n| n.id == *cid))
                     .map(|n| n.title.clone())
                     .unwrap_or_else(|| node_id.clone());
-                log_items.push(div().text_color(theme.primary).child(format!("> Running: {}", name)));
+                log_items.push(
+                    div()
+                        .text_color(theme.primary)
+                        .child(format!("> Running: {}", name)),
+                );
             }
         }
-        
+
         log_items.push(
-            h_flex().gap_2().mt_4().items_center()
-                
-                .child(div().text_color(theme.primary).child("Waiting for AI response..."))
+            h_flex().gap_2().mt_4().items_center().child(
+                div()
+                    .text_color(theme.primary)
+                    .child("Waiting for AI response..."),
+            ),
         );
 
         div()
@@ -689,7 +745,7 @@ impl IFlowBuilderPanel {
                     .text_size(px(18.))
                     .font_weight(FontWeight::BOLD)
                     .text_color(theme.foreground)
-                    .child("Execution Logs")
+                    .child("Execution Logs"),
             )
             .child(
                 div()
@@ -702,7 +758,7 @@ impl IFlowBuilderPanel {
                     .flex()
                     .flex_col()
                     .gap_2()
-                    .children(log_items)
+                    .children(log_items),
             )
     }
 
@@ -878,7 +934,7 @@ impl IFlowBuilderPanel {
 
     fn save_workflow(&mut self, _cx: &mut Context<Self>) {
         let workflow = self.serialize_to_workflow();
-        
+
         let json = serde_json::to_string(&workflow).unwrap_or_default();
         let record = WorkflowRecord {
             id: workflow.id.clone(),
@@ -904,8 +960,12 @@ impl IFlowBuilderPanel {
 
         // Pass 1: Build nodes
         for canvas_node in &self.state.nodes {
-            let wf_id = self.canvas_to_workflow.get(&canvas_node.id).cloned().unwrap_or_else(|| canvas_node.id.to_string());
-            
+            let wf_id = self
+                .canvas_to_workflow
+                .get(&canvas_node.id)
+                .cloned()
+                .unwrap_or_else(|| canvas_node.id.to_string());
+
             if matches!(canvas_node.node_data, NodeType::Start) {
                 start_id = wf_id.clone();
             }
@@ -921,20 +981,36 @@ impl IFlowBuilderPanel {
 
         // Pass 2: Build connections
         for conn in &self.state.connections {
-            let from_wf_id = self.canvas_to_workflow.get(&conn.from_node).cloned().unwrap_or_else(|| conn.from_node.to_string());
-            let to_wf_id = self.canvas_to_workflow.get(&conn.to_node).cloned().unwrap_or_else(|| conn.to_node.to_string());
-            
+            let from_wf_id = self
+                .canvas_to_workflow
+                .get(&conn.from_node)
+                .cloned()
+                .unwrap_or_else(|| conn.from_node.to_string());
+            let to_wf_id = self
+                .canvas_to_workflow
+                .get(&conn.to_node)
+                .cloned()
+                .unwrap_or_else(|| conn.to_node.to_string());
+
             if let Some(node) = nodes_map.get_mut(&from_wf_id) {
                 // If it's a decision or review node, we should ideally map ports to true_next/false_next
                 match &mut node.node_type {
-                    NodeType::Decision { true_next, false_next, .. } => {
+                    NodeType::Decision {
+                        true_next,
+                        false_next,
+                        ..
+                    } => {
                         if conn.from_port == "true" {
                             *true_next = to_wf_id.clone();
                         } else {
                             *false_next = to_wf_id.clone();
                         }
                     }
-                    NodeType::HumanReview { approved_next, rejected_next, .. } => {
+                    NodeType::HumanReview {
+                        approved_next,
+                        rejected_next,
+                        ..
+                    } => {
                         if conn.from_port == "approve" {
                             *approved_next = to_wf_id.clone();
                         } else {
@@ -948,7 +1024,10 @@ impl IFlowBuilderPanel {
             }
         }
 
-        let wf_id = self.workflow_id.clone().unwrap_or_else(|| Uuid::new_v4().to_string());
+        let wf_id = self
+            .workflow_id
+            .clone()
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
 
         crate::application::iflow_engine::engine::Workflow {
             id: wf_id,
@@ -1044,17 +1123,14 @@ impl IFlowBuilderPanel {
                                     .text_color(theme.muted_foreground)
                                     .child(format!("{} • v{}", date_str, wf.version)),
                             )
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                {
-                                    move |_, _, cx| {
-                                        view_load.update(cx, |this: &mut IFlowBuilderPanel, cx| {
-                                            this.load_workflow_record(&wf_clone);
-                                            cx.notify();
-                                        });
-                                    }
-                                },
-                            ),
+                            .on_mouse_down(MouseButton::Left, {
+                                move |_, _, cx| {
+                                    view_load.update(cx, |this: &mut IFlowBuilderPanel, cx| {
+                                        this.load_workflow_record(&wf_clone);
+                                        cx.notify();
+                                    });
+                                }
+                            }),
                     )
                     .child(
                         div()
@@ -1272,11 +1348,14 @@ impl Render for IFlowBuilderPanel {
                 div()
                     .text_size(px(18.))
                     .font_weight(FontWeight::BOLD)
-                    .text_color(theme.foreground).child("Workflow Pipeline")
+                    .text_color(theme.foreground)
+                    .child("Workflow Pipeline"),
             )
-            .child(self.render_dashboard(cx)).child(self.render_palette(cx))
+            .child(self.render_dashboard(cx))
+            .child(self.render_palette(cx))
             .child(
-                h_flex().gap_2()
+                h_flex()
+                    .gap_2()
                     .child(
                         Button::new("iflow-load-latest")
                             .small()
@@ -1288,7 +1367,10 @@ impl Render for IFlowBuilderPanel {
                                     cx.notify();
                                 } else {
                                     window.push_notification(
-                                        (gpui_component::notification::NotificationType::Info, "No workflows in DB."),
+                                        (
+                                            gpui_component::notification::NotificationType::Info,
+                                            "No workflows in DB.",
+                                        ),
                                         cx,
                                     );
                                 }
@@ -1309,18 +1391,24 @@ impl Render for IFlowBuilderPanel {
                                         let wf_name = wf.name.clone();
                                         let wf_clone = wf.clone();
                                         list = list.child(
-                                            Button::new(gpui::SharedString::from(format!("pick-{}", wf_id)))
-                                                .label(wf_name)
-                                                .on_click({
-                                                    let view = view.clone();
-                                                    move |_, window, cx| {
-                                                        view.update(cx, |this: &mut IFlowBuilderPanel, cx| {
+                                            Button::new(gpui::SharedString::from(format!(
+                                                "pick-{}",
+                                                wf_id
+                                            )))
+                                            .label(wf_name)
+                                            .on_click({
+                                                let view = view.clone();
+                                                move |_, window, cx| {
+                                                    view.update(
+                                                        cx,
+                                                        |this: &mut IFlowBuilderPanel, cx| {
                                                             this.load_workflow_record(&wf_clone);
                                                             cx.notify();
-                                                        });
-                                                        window.close_dialog(cx);
-                                                    }
-                                                }),
+                                                        },
+                                                    );
+                                                    window.close_dialog(cx);
+                                                }
+                                            }),
                                         );
                                     }
                                     dialog
@@ -1328,16 +1416,14 @@ impl Render for IFlowBuilderPanel {
                                         .w(px(640.))
                                         .child(list)
                                         .footer(|_, _, _, _| {
-                                            vec![
-                                                Button::new("close-iflow-pick")
-                                                    .label("Close")
-                                                    .on_click(|_, window, cx| window.close_dialog(cx))
-                                                    .into_any_element(),
-                                            ]
+                                            vec![Button::new("close-iflow-pick")
+                                                .label("Close")
+                                                .on_click(|_, window, cx| window.close_dialog(cx))
+                                                .into_any_element()]
                                         })
                                 });
                             })),
-                    )
+                    ),
             );
 
         let right_panel = v_flex()
@@ -1352,7 +1438,8 @@ impl Render for IFlowBuilderPanel {
                 div()
                     .text_size(px(18.))
                     .font_weight(FontWeight::BOLD)
-                    .text_color(theme.foreground).child("Node Library")
+                    .text_color(theme.foreground)
+                    .child("Node Library"),
             )
             .child(self.render_logs(cx))
             .child(self.render_workflow_list(cx));

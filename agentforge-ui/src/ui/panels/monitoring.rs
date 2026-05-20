@@ -3,14 +3,17 @@ pub mod dashboard;
 pub mod token_dashboard;
 
 use gpui::EventEmitter;
-use gpui::{prelude::*, div, App, Context, Focusable, IntoElement, ParentElement, Render, Styled, Window, Entity, AppContext};
+use gpui::{
+    div, prelude::*, App, AppContext, Context, Entity, Focusable, IntoElement, ParentElement,
+    Render, Styled, Window,
+};
 use gpui_component::dock::PanelEvent;
 use gpui_component::dock::{Panel, TitleStyle};
 use gpui_component::{h_flex, v_flex, ActiveTheme};
 
+use crate::monitoring::usage_analytics::UsageAnalytics;
 use crate::ui::panels::monitoring::dashboard::MonitoringDashboard;
 use crate::ui::panels::monitoring::token_dashboard::TokenDashboard;
-use crate::monitoring::usage_analytics::UsageAnalytics;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum MonitoringTab {
@@ -70,46 +73,86 @@ impl Render for MonitoringPanel {
             .gap_4()
             .p_4()
             .child(
-                div().id("tab_dashboard")
+                div()
+                    .id("tab_dashboard")
                     .cursor_pointer()
-                    .text_color(if self.active_tab == MonitoringTab::Dashboard { theme.foreground } else { theme.muted_foreground })
-                    .font_weight(if self.active_tab == MonitoringTab::Dashboard { gpui::FontWeight::BOLD } else { gpui::FontWeight::NORMAL })
+                    .text_color(if self.active_tab == MonitoringTab::Dashboard {
+                        theme.foreground
+                    } else {
+                        theme.muted_foreground
+                    })
+                    .font_weight(if self.active_tab == MonitoringTab::Dashboard {
+                        gpui::FontWeight::BOLD
+                    } else {
+                        gpui::FontWeight::NORMAL
+                    })
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.active_tab = MonitoringTab::Dashboard;
                         cx.notify();
                     }))
-                    .child("System Health")
+                    .child("System Health"),
             )
             .child(
-                div().id("tab_token_usage")
+                div()
+                    .id("tab_token_usage")
                     .cursor_pointer()
-                    .text_color(if self.active_tab == MonitoringTab::TokenUsage { theme.foreground } else { theme.muted_foreground })
-                    .font_weight(if self.active_tab == MonitoringTab::TokenUsage { gpui::FontWeight::BOLD } else { gpui::FontWeight::NORMAL })
+                    .text_color(if self.active_tab == MonitoringTab::TokenUsage {
+                        theme.foreground
+                    } else {
+                        theme.muted_foreground
+                    })
+                    .font_weight(if self.active_tab == MonitoringTab::TokenUsage {
+                        gpui::FontWeight::BOLD
+                    } else {
+                        gpui::FontWeight::NORMAL
+                    })
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.active_tab = MonitoringTab::TokenUsage;
                         cx.notify();
                     }))
-                    .child("Token Usage")
+                    .child("Token Usage"),
             )
             .child(
-                div().id("tab_usage_analytics")
+                div()
+                    .id("tab_usage_analytics")
                     .cursor_pointer()
-                    .text_color(if self.active_tab == MonitoringTab::UsageAnalytics { theme.foreground } else { theme.muted_foreground })
-                    .font_weight(if self.active_tab == MonitoringTab::UsageAnalytics { gpui::FontWeight::BOLD } else { gpui::FontWeight::NORMAL })
+                    .text_color(if self.active_tab == MonitoringTab::UsageAnalytics {
+                        theme.foreground
+                    } else {
+                        theme.muted_foreground
+                    })
+                    .font_weight(if self.active_tab == MonitoringTab::UsageAnalytics {
+                        gpui::FontWeight::BOLD
+                    } else {
+                        gpui::FontWeight::NORMAL
+                    })
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.active_tab = MonitoringTab::UsageAnalytics;
                         cx.notify();
                     }))
-                    .child("Usage Analytics")
+                    .child("Usage Analytics"),
             );
 
         let content = match self.active_tab {
-            MonitoringTab::Dashboard => div().size_full().child(self.dashboard.render(cx)).into_any_element(),
-            MonitoringTab::TokenUsage => div().size_full().child(self.token_dashboard.clone()).into_any_element(),
-            MonitoringTab::UsageAnalytics => div().size_full().child(self.usage_analytics.clone()).into_any_element(),
+            MonitoringTab::Dashboard => div()
+                .size_full()
+                .child(self.dashboard.render(cx))
+                .into_any_element(),
+            MonitoringTab::TokenUsage => div()
+                .size_full()
+                .child(self.token_dashboard.clone())
+                .into_any_element(),
+            MonitoringTab::UsageAnalytics => div()
+                .size_full()
+                .child(self.usage_analytics.clone())
+                .into_any_element(),
         };
 
-        v_flex().size_full().bg(theme.background).child(tabs).child(div().flex_1().child(content))
+        v_flex()
+            .size_full()
+            .bg(theme.background)
+            .child(tabs)
+            .child(div().flex_1().child(content))
     }
 }
 

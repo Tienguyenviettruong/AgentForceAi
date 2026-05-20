@@ -1,12 +1,12 @@
+use crate::core::models::{
+    Agent, Instance, Provider, ProviderTemplate, SessionRecord, Team, WorkflowRecord,
+};
+use crate::core::traits::database::DatabasePort;
 use crate::knowledge::core::KnowledgeItem;
-use crate::core::models::{Agent, Instance, Provider, ProviderTemplate, SessionRecord, Team, WorkflowRecord};
+use anyhow::Result;
 use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension};
-use anyhow::Result;
-use crate::core::traits::database::DatabasePort;
 use std::sync::Mutex;
-
-
 
 pub struct Database {
     conn: Mutex<Connection>,
@@ -14,7 +14,8 @@ pub struct Database {
 
 impl Database {
     pub fn new() -> Result<Self> {
-        let db_path = std::env::var("AGENTFORGE_DB_PATH").unwrap_or_else(|_| "agentforge.db".to_string());
+        let db_path =
+            std::env::var("AGENTFORGE_DB_PATH").unwrap_or_else(|_| "agentforge.db".to_string());
         let conn = Connection::open(&db_path)?;
 
         conn.execute_batch(
@@ -341,13 +342,15 @@ impl Database {
                 "CREATE VIRTUAL TABLE knowledge_entries_fts USING fts5(id UNINDEXED, title, content, tags)",
                 [],
             )?;
-            let mut stmt = conn.prepare("SELECT id, title, content, tags FROM knowledge_entries")?;
+            let mut stmt =
+                conn.prepare("SELECT id, title, content, tags FROM knowledge_entries")?;
             let rows = stmt.query_map([], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
-                    row.get::<_, Option<String>>(3)?.unwrap_or_else(|| "[]".to_string()),
+                    row.get::<_, Option<String>>(3)?
+                        .unwrap_or_else(|| "[]".to_string()),
                 ))
             })?;
             for r in rows {
@@ -589,7 +592,7 @@ impl crate::core::traits::database::DatabasePort for Database {
                 created_at: row.get(5)?,
             })
         })?;
-        
+
         let mut instances = Vec::new();
         for r in iter {
             instances.push(r?);
@@ -644,7 +647,10 @@ impl crate::core::traits::database::DatabasePort for Database {
     fn delete_agent(&self, agent_id: &str) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         // Remove relationships if any (foreign keys with ON DELETE CASCADE normally handle this, but let's be explicit for team_agents)
-        conn.execute("DELETE FROM team_agents WHERE agent_id = ?1", params![agent_id])?;
+        conn.execute(
+            "DELETE FROM team_agents WHERE agent_id = ?1",
+            params![agent_id],
+        )?;
         conn.execute("DELETE FROM agents WHERE id = ?1", params![agent_id])?;
         Ok(())
     }
@@ -700,7 +706,7 @@ impl crate::core::traits::database::DatabasePort for Database {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare("SELECT agent_id FROM members WHERE team_id = ?1")?;
         let iter = stmt.query_map(params![team_id], |row: &rusqlite::Row| row.get(0))?;
-        
+
         let mut agents = Vec::new();
         for a in iter {
             agents.push(a?);
@@ -711,13 +717,15 @@ impl crate::core::traits::database::DatabasePort for Database {
     fn get_instance_agents(&self, instance_id: &str) -> Result<Vec<String>> {
         let conn = self.conn.lock().unwrap();
         // Priority to Coordinator
-        let mut stmt = conn.prepare("
+        let mut stmt = conn.prepare(
+            "
             SELECT m.agent_id 
             FROM members m
             LEFT JOIN roles r ON m.role_id = r.id
             WHERE m.instance_id = ?1
             ORDER BY CASE WHEN LOWER(r.name) = 'coordinator' THEN 0 ELSE 1 END, m.joined_at ASC
-        ")?;
+        ",
+        )?;
         let iter = stmt.query_map(params![instance_id], |row: &rusqlite::Row| row.get(0))?;
         let mut agents = Vec::new();
         for a in iter {
@@ -728,16 +736,19 @@ impl crate::core::traits::database::DatabasePort for Database {
         }
 
         let mut stmt = conn.prepare("SELECT team_id FROM instances WHERE id = ?1")?;
-        let team_id: String = stmt.query_row(params![instance_id], |row: &rusqlite::Row| row.get(0))?;
+        let team_id: String =
+            stmt.query_row(params![instance_id], |row: &rusqlite::Row| row.get(0))?;
         drop(stmt);
 
-        let mut stmt = conn.prepare("
+        let mut stmt = conn.prepare(
+            "
             SELECT m.agent_id 
             FROM members m
             LEFT JOIN roles r ON m.role_id = r.id
             WHERE m.team_id = ?1
             ORDER BY CASE WHEN LOWER(r.name) = 'coordinator' THEN 0 ELSE 1 END, m.joined_at ASC
-        ")?;
+        ",
+        )?;
         let iter = stmt.query_map(params![team_id], |row: &rusqlite::Row| row.get(0))?;
         let mut agents = Vec::new();
         for a in iter {
@@ -746,7 +757,10 @@ impl crate::core::traits::database::DatabasePort for Database {
         Ok(agents)
     }
 
-    fn get_instance_agent_name_mapping(&self, instance_id: &str) -> Result<std::collections::HashMap<String, String>> {
+    fn get_instance_agent_name_mapping(
+        &self,
+        instance_id: &str,
+    ) -> Result<std::collections::HashMap<String, String>> {
         let conn = self.conn.lock().unwrap();
         let mut map = std::collections::HashMap::new();
 
@@ -754,26 +768,29 @@ impl crate::core::traits::database::DatabasePort for Database {
             "SELECT a.name, m.agent_id 
              FROM members m 
              JOIN agents a ON m.agent_id = a.id 
-             WHERE m.instance_id = ?1"
+             WHERE m.instance_id = ?1",
         )?;
-        
+
         let iter = stmt.query_map(rusqlite::params![instance_id], |row: &rusqlite::Row| {
             let agent_name: String = row.get(0)?;
             let agent_id: String = row.get(1)?;
             Ok((agent_name, agent_id))
         })?;
-        
+
         for (agent_name, agent_id) in iter.flatten() {
             map.insert(agent_name, agent_id);
         }
-        
+
         if !map.is_empty() {
             return Ok(map);
         }
 
         // Fallback to team_id
         let mut stmt_team = conn.prepare("SELECT team_id FROM instances WHERE id = ?1")?;
-        let team_id_result: Result<String, _> = stmt_team.query_row(rusqlite::params![instance_id], |row: &rusqlite::Row| row.get(0));
+        let team_id_result: Result<String, _> = stmt_team
+            .query_row(rusqlite::params![instance_id], |row: &rusqlite::Row| {
+                row.get(0)
+            });
         drop(stmt_team);
 
         if let Ok(team_id) = team_id_result {
@@ -781,23 +798,22 @@ impl crate::core::traits::database::DatabasePort for Database {
                 "SELECT a.name, m.agent_id 
                  FROM members m 
                  JOIN agents a ON m.agent_id = a.id 
-                 WHERE m.team_id = ?1"
+                 WHERE m.team_id = ?1",
             )?;
-            
+
             let iter = stmt.query_map(rusqlite::params![team_id], |row: &rusqlite::Row| {
                 let agent_name: String = row.get(0)?;
                 let agent_id: String = row.get(1)?;
                 Ok((agent_name, agent_id))
             })?;
-            
+
             for (agent_name, agent_id) in iter.flatten() {
                 map.insert(agent_name, agent_id);
             }
         }
-        
+
         Ok(map)
     }
-
 
     fn upsert_task(
         &self,
@@ -821,7 +837,6 @@ impl crate::core::traits::database::DatabasePort for Database {
         Ok(())
     }
 
-    
     fn get_total_tokens_per_agent(&self) -> Result<Vec<(String, usize)>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
@@ -829,15 +844,15 @@ impl crate::core::traits::database::DatabasePort for Database {
              FROM token_usage t
              JOIN agents a ON t.agent_id = a.id
              GROUP BY t.agent_id
-             ORDER BY SUM(t.total_tokens) DESC"
+             ORDER BY SUM(t.total_tokens) DESC",
         )?;
-        
+
         let iter = stmt.query_map([], |row: &rusqlite::Row| {
             let name: String = row.get(0)?;
             let tokens: usize = row.get(1)?;
             Ok((name, tokens))
         })?;
-        
+
         let mut result = Vec::new();
         for item in iter {
             result.push(item?);
@@ -852,15 +867,15 @@ impl crate::core::traits::database::DatabasePort for Database {
              FROM token_usage t
              JOIN instances i ON t.instance_id = i.id
              GROUP BY t.instance_id
-             ORDER BY SUM(t.total_tokens) DESC"
+             ORDER BY SUM(t.total_tokens) DESC",
         )?;
-        
+
         let iter = stmt.query_map([], |row: &rusqlite::Row| {
             let id: String = row.get(0)?;
             let tokens: usize = row.get(1)?;
             Ok((id, tokens))
         })?;
-        
+
         let mut result = Vec::new();
         for item in iter {
             result.push(item?);
@@ -876,15 +891,15 @@ impl crate::core::traits::database::DatabasePort for Database {
              JOIN agents a ON m.agent_id = a.id
              WHERE m.instance_id IS NOT NULL
              GROUP BY m.agent_id
-             ORDER BY COUNT(DISTINCT m.instance_id) DESC"
+             ORDER BY COUNT(DISTINCT m.instance_id) DESC",
         )?;
-        
+
         let iter = stmt.query_map([], |row: &rusqlite::Row| {
             let name: String = row.get(0)?;
             let count: usize = row.get(1)?;
             Ok((name, count))
         })?;
-        
+
         let mut result = Vec::new();
         for item in iter {
             result.push(item?);
@@ -895,29 +910,40 @@ impl crate::core::traits::database::DatabasePort for Database {
     fn get_total_daily_tokens(&self) -> Result<usize> {
         let conn = self.conn.lock().unwrap();
         let now = chrono::Utc::now().naive_utc().date().to_string();
-        let mut stmt = conn.prepare(
-            "SELECT SUM(total_tokens) FROM token_usage WHERE date(created_at) = ?1"
-        )?;
-        let count: Option<usize> = stmt.query_row(rusqlite::params![now], |row: &rusqlite::Row| row.get(0)).unwrap_or(Some(0));
+        let mut stmt =
+            conn.prepare("SELECT SUM(total_tokens) FROM token_usage WHERE date(created_at) = ?1")?;
+        let count: Option<usize> = stmt
+            .query_row(rusqlite::params![now], |row: &rusqlite::Row| row.get(0))
+            .unwrap_or(Some(0));
         Ok(count.unwrap_or(0))
     }
 
-    
     fn get_total_tasks_completed(&self) -> Result<usize> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare("SELECT COUNT(*) FROM tasks WHERE status = 'completed'")?;
-        let count: usize = stmt.query_row(rusqlite::params![], |row: &rusqlite::Row| row.get(0)).unwrap_or(0);
+        let count: usize = stmt
+            .query_row(rusqlite::params![], |row: &rusqlite::Row| row.get(0))
+            .unwrap_or(0);
         Ok(count)
     }
 
     fn get_active_agents_count(&self) -> Result<usize> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare("SELECT COUNT(*) FROM agents WHERE status = 'active'")?;
-        let count: usize = stmt.query_row(rusqlite::params![], |row: &rusqlite::Row| row.get(0)).unwrap_or(0);
+        let count: usize = stmt
+            .query_row(rusqlite::params![], |row: &rusqlite::Row| row.get(0))
+            .unwrap_or(0);
         Ok(count)
     }
 
-    fn insert_token_usage(&self, instance_id: Option<&str>, agent_id: &str, input_tokens: usize, output_tokens: usize, total_tokens: usize) -> Result<()> {
+    fn insert_token_usage(
+        &self,
+        instance_id: Option<&str>,
+        agent_id: &str,
+        input_tokens: usize,
+        output_tokens: usize,
+        total_tokens: usize,
+    ) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         let id = uuid::Uuid::new_v4().to_string();
         let now = chrono::Utc::now().to_rfc3339();
@@ -928,7 +954,6 @@ impl crate::core::traits::database::DatabasePort for Database {
         )?;
         Ok(())
     }
-
 
     fn assign_task_to_agent(&self, task_id: &str, agent_id: &str) -> Result<()> {
         let conn = self.conn.lock().unwrap();
@@ -941,7 +966,6 @@ impl crate::core::traits::database::DatabasePort for Database {
         )?;
         Ok(())
     }
-
 
     fn list_tasks_for_instance(
         &self,
@@ -1020,7 +1044,12 @@ impl crate::core::traits::database::DatabasePort for Database {
         Ok(tasks)
     }
 
-    fn claim_task_for_instance(&self, task_id: &str, agent_id: &str, instance_id: &str) -> Result<bool> {
+    fn claim_task_for_instance(
+        &self,
+        task_id: &str,
+        agent_id: &str,
+        instance_id: &str,
+    ) -> Result<bool> {
         let conn = self.conn.lock().unwrap();
         let now = Utc::now().to_rfc3339();
         let rows_affected = conn.execute(
@@ -1075,16 +1104,22 @@ impl crate::core::traits::database::DatabasePort for Database {
         let now = chrono::Utc::now().to_rfc3339();
         let team_id = "sdg-team-123".to_string();
 
-        conn.execute(
-            "INSERT INTO teams (id, name, description, objectives, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            rusqlite::params![team_id, "SDG", "SDG Team", "Test real data with OpenRouter", now, now],
-        )?;
+        // conn.execute(
+        //     "INSERT INTO teams (id, name, description, objectives, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        //     rusqlite::params![team_id, "SDG", "SDG Team", "Test real data with OpenRouter", now, now],
+        // )?;
 
-        conn.execute(
-            "INSERT OR IGNORE INTO instances (id, team_id, config, state, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            rusqlite::params!["sdg-instance-123", team_id, None::<String>, None::<String>, now],
-        )?;
+        // conn.execute(
+        //     "INSERT OR IGNORE INTO instances (id, team_id, config, state, created_at)
+        //      VALUES (?1, ?2, ?3, ?4, ?5)",
+        //     rusqlite::params![
+        //         "sdg-instance-123",
+        //         team_id,
+        //         None::<String>,
+        //         None::<String>,
+        //         now
+        //     ],
+        // )?;
 
         conn.execute(
             "INSERT OR IGNORE INTO provider_configs (id, provider_name, model, adapter_type, command, api_key_ref, status, is_builtin, created_at, updated_at) 
@@ -1118,7 +1153,7 @@ impl crate::core::traits::database::DatabasePort for Database {
                 rusqlite::params![uuid::Uuid::new_v4().to_string(), team_id, agent_id, now],
             )?;
         }
-        
+
         Ok(())
     }
     fn get_agent(&self, agent_id: &str) -> Result<Option<Agent>> {
@@ -1142,7 +1177,10 @@ impl crate::core::traits::database::DatabasePort for Database {
         }
     }
 
-    fn insert_team_message(&self, msg: &crate::infrastructure::message_bus::routing::TeamMessage) -> Result<()> {
+    fn insert_team_message(
+        &self,
+        msg: &crate::infrastructure::message_bus::routing::TeamMessage,
+    ) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         let msg_type = match msg.message_type {
             crate::infrastructure::message_bus::routing::MessageType::Direct => "direct",
@@ -1240,28 +1278,35 @@ impl crate::core::traits::database::DatabasePort for Database {
              LIMIT ?3",
         )?;
 
-        let iter = stmt.query_map(params![team_instance_id, msg_type, limit], |row: &rusqlite::Row| {
-            let msg_type_str: String = row.get(5)?;
-            let message_type = match msg_type_str.as_str() {
-                "direct" => crate::infrastructure::message_bus::routing::MessageType::Direct,
-                "broadcast" => crate::infrastructure::message_bus::routing::MessageType::Broadcast,
-                "role_group" => crate::infrastructure::message_bus::routing::MessageType::RoleGroup,
-                _ => crate::infrastructure::message_bus::routing::MessageType::System,
-            };
+        let iter = stmt.query_map(
+            params![team_instance_id, msg_type, limit],
+            |row: &rusqlite::Row| {
+                let msg_type_str: String = row.get(5)?;
+                let message_type = match msg_type_str.as_str() {
+                    "direct" => crate::infrastructure::message_bus::routing::MessageType::Direct,
+                    "broadcast" => {
+                        crate::infrastructure::message_bus::routing::MessageType::Broadcast
+                    }
+                    "role_group" => {
+                        crate::infrastructure::message_bus::routing::MessageType::RoleGroup
+                    }
+                    _ => crate::infrastructure::message_bus::routing::MessageType::System,
+                };
 
-            Ok(crate::infrastructure::message_bus::routing::TeamMessage {
-                id: row.get(0)?,
-                team_instance_id: row.get(1)?,
-                sender_member_id: row.get(2)?,
-                recipient_member_id: row.get(3)?,
-                recipient_role: row.get(4)?,
-                message_type,
-                content: row.get(6)?,
-                metadata: row.get(7)?,
-                delivery_status: row.get(8)?,
-                created_at: row.get(9)?,
-            })
-        })?;
+                Ok(crate::infrastructure::message_bus::routing::TeamMessage {
+                    id: row.get(0)?,
+                    team_instance_id: row.get(1)?,
+                    sender_member_id: row.get(2)?,
+                    recipient_member_id: row.get(3)?,
+                    recipient_role: row.get(4)?,
+                    message_type,
+                    content: row.get(6)?,
+                    metadata: row.get(7)?,
+                    delivery_status: row.get(8)?,
+                    created_at: row.get(9)?,
+                })
+            },
+        )?;
 
         let mut messages = Vec::new();
         for m in iter {
@@ -1391,7 +1436,7 @@ impl crate::core::traits::database::DatabasePort for Database {
             let role = row.get::<usize, String>(0)?;
             let content = row.get::<usize, String>(1)?;
             let metadata = row.get::<usize, Option<String>>(2).unwrap_or(None);
-            
+
             let mut agent_name = None;
             if let Some(meta_str) = metadata {
                 if let Ok(json) = serde_json::from_str::<serde_json::Value>(&meta_str) {
@@ -1400,13 +1445,23 @@ impl crate::core::traits::database::DatabasePort for Database {
                     }
                 }
             }
-            
-            msgs.push(crate::core::models::ChatMessage { role: role.into(), content: content.into(), agent_name });
+
+            msgs.push(crate::core::models::ChatMessage {
+                role: role.into(),
+                content: content.into(),
+                agent_name,
+            });
         }
         Ok(msgs)
     }
 
-    fn save_message(&self, team_id: &str, instance_id: Option<&str>, role: &str, content: &str) -> Result<()> {
+    fn save_message(
+        &self,
+        team_id: &str,
+        instance_id: Option<&str>,
+        role: &str,
+        content: &str,
+    ) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         let id = uuid::Uuid::new_v4().to_string();
         let now = chrono::Utc::now().to_rfc3339();
@@ -1418,7 +1473,11 @@ impl crate::core::traits::database::DatabasePort for Database {
         Ok(())
     }
 
-    fn get_messages(&self, team_id: &str, instance_id: Option<&str>) -> Result<Vec<crate::core::models::ChatMessage>> {
+    fn get_messages(
+        &self,
+        team_id: &str,
+        instance_id: Option<&str>,
+    ) -> Result<Vec<crate::core::models::ChatMessage>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt;
         let mut rows = if let Some(iid) = instance_id {
@@ -1433,16 +1492,20 @@ impl crate::core::traits::database::DatabasePort for Database {
         while let Some(row) = rows.next()? {
             let role = row.get::<usize, String>(0)?;
             let content = row.get::<usize, String>(1)?;
-            msgs.push(crate::core::models::ChatMessage { role: role.into(), content: content.into(), agent_name: None });
+            msgs.push(crate::core::models::ChatMessage {
+                role: role.into(),
+                content: content.into(),
+                agent_name: None,
+            });
         }
         Ok(msgs)
     }
 
     fn upsert_knowledge_item(&self, item: &KnowledgeItem) -> Result<()> {
         let conn = self.conn.lock().unwrap();
-        
+
         let tags_json = serde_json::to_string(&item.tags).unwrap_or_default();
-        
+
         conn.execute(
             "INSERT INTO knowledge (id, title, content, tags, created_at, updated_at, vault_path)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
@@ -1463,8 +1526,11 @@ impl crate::core::traits::database::DatabasePort for Database {
             ],
         )?;
 
-        conn.execute("DELETE FROM knowledge_fts WHERE id = ?1", params![item.id.to_string()])
-            .ok();
+        conn.execute(
+            "DELETE FROM knowledge_fts WHERE id = ?1",
+            params![item.id.to_string()],
+        )
+        .ok();
         conn.execute(
             "INSERT INTO knowledge_fts (id, title, content, tags) VALUES (?1, ?2, ?3, ?4)",
             params![item.id.to_string(), item.title, item.content, tags_json],
@@ -1477,10 +1543,10 @@ impl crate::core::traits::database::DatabasePort for Database {
         let conn = self.conn.lock().unwrap();
         // Use GROUP BY title to deduplicate entries with the same title
         let mut stmt = conn.prepare("SELECT id, title, content, tags, created_at, updated_at, vault_path FROM knowledge GROUP BY title ORDER BY updated_at DESC")?;
-        
+
         let mut rows = stmt.query(params![])?;
         let mut items = Vec::new();
-        
+
         while let Some(row) = rows.next()? {
             let row: &rusqlite::Row = row;
             let id_str: String = row.get(0)?;
@@ -1488,7 +1554,8 @@ impl crate::core::traits::database::DatabasePort for Database {
             let title = row.get::<usize, String>(1)?;
             let content = row.get::<usize, String>(2)?;
             let tags_str = row.get::<usize, String>(3)?;
-            let tags: Vec<crate::knowledge::core::Tag> = serde_json::from_str(&tags_str).unwrap_or_default();
+            let tags: Vec<crate::knowledge::core::Tag> =
+                serde_json::from_str(&tags_str).unwrap_or_default();
             let created_at_str = row.get::<usize, String>(4)?;
             let created_at = chrono::DateTime::parse_from_rfc3339(&created_at_str)
                 .map(|dt| dt.with_timezone(&chrono::Utc))
@@ -1497,9 +1564,9 @@ impl crate::core::traits::database::DatabasePort for Database {
             let updated_at = chrono::DateTime::parse_from_rfc3339(&updated_at_str)
                 .map(|dt| dt.with_timezone(&chrono::Utc))
                 .unwrap_or_else(|_| chrono::Utc::now());
-            
+
             let vault_path = row.get::<usize, String>(6).ok();
-            
+
             items.push(KnowledgeItem {
                 id,
                 title,
@@ -1509,11 +1576,9 @@ impl crate::core::traits::database::DatabasePort for Database {
                 created_at,
                 updated_at,
                 vault_path,
-                
-                
             });
         }
-        
+
         Ok(items)
     }
 
@@ -1543,7 +1608,7 @@ impl crate::core::traits::database::DatabasePort for Database {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare("SELECT value FROM app_settings WHERE key LIKE 'workspace_%' ORDER BY updated_at DESC LIMIT 5")?;
         let iter = stmt.query_map([], |row: &rusqlite::Row| row.get(0))?;
-        
+
         let mut workspaces = Vec::new();
         for w in iter.flatten() {
             if !workspaces.contains(&w) {
@@ -1560,21 +1625,25 @@ impl crate::core::traits::database::DatabasePort for Database {
             "SELECT id, title, content, tags, created_at, updated_at
              FROM knowledge 
              WHERE content LIKE ?1 OR title LIKE ?1
-             LIMIT 5"
+             LIMIT 5",
         )?;
-        
+
         let search_pattern = format!("%{}%", query);
         let rows = stmt.query_map(params![search_pattern], |row: &rusqlite::Row| {
             let tags_str = row.get::<usize, String>(3)?;
             let tags = serde_json::from_str(&tags_str).unwrap_or_default();
-            
+
             Ok(KnowledgeItem {
                 id: uuid::Uuid::parse_str(&row.get::<usize, String>(0)?).unwrap_or_default(),
                 title: row.get::<usize, String>(1)?,
                 content: row.get::<usize, String>(2)?,
                 tags,
-                created_at: chrono::DateTime::parse_from_rfc3339(&row.get::<usize, String>(4)?).unwrap().into(),
-                updated_at: chrono::DateTime::parse_from_rfc3339(&row.get::<usize, String>(5)?).unwrap().into(),
+                created_at: chrono::DateTime::parse_from_rfc3339(&row.get::<usize, String>(4)?)
+                    .unwrap()
+                    .into(),
+                updated_at: chrono::DateTime::parse_from_rfc3339(&row.get::<usize, String>(5)?)
+                    .unwrap()
+                    .into(),
                 retention_policy: crate::knowledge::core::RetentionPolicy::KeepForever,
                 vault_path: None,
             })
@@ -1626,17 +1695,17 @@ impl crate::core::traits::database::DatabasePort for Database {
     ) -> Result<()> {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
-        
+
         tx.execute(
             "DELETE FROM knowledge_chunks WHERE document_id = ?1",
             rusqlite::params![document_id],
         )?;
-        
+
         let mut stmt = tx.prepare(
             "INSERT INTO knowledge_chunks (id, document_id, chunk_index, content, embedding)
-             VALUES (?1, ?2, ?3, ?4, ?5)"
+             VALUES (?1, ?2, ?3, ?4, ?5)",
         )?;
-        
+
         for (index, content, embedding) in chunks {
             let chunk_id = uuid::Uuid::new_v4().to_string();
             let embedding_json = serde_json::to_string(&embedding).unwrap_or_default();
@@ -1648,31 +1717,35 @@ impl crate::core::traits::database::DatabasePort for Database {
                 embedding_json,
             ])?;
         }
-        
+
         drop(stmt);
         tx.commit()?;
-        
+
         Ok(())
     }
 
-    fn search_similar_chunks(&self, query_embedding: &[f32], limit: usize) -> Result<Vec<(String, String, f32)>> {
+    fn search_similar_chunks(
+        &self,
+        query_embedding: &[f32],
+        limit: usize,
+    ) -> Result<Vec<(String, String, f32)>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT k.title, c.content, c.embedding 
              FROM knowledge_chunks c 
-             JOIN knowledge k ON c.document_id = k.id"
+             JOIN knowledge k ON c.document_id = k.id",
         )?;
-        
+
         let mut rows = stmt.query(params![])?;
         let mut results = Vec::new();
-        
+
         while let Some(row) = rows.next()? {
             let row: &rusqlite::Row = row;
             let title = row.get::<usize, String>(0)?;
             let content = row.get::<usize, String>(1)?;
             let embedding_json = row.get::<usize, String>(2)?;
             let doc_embedding: Vec<f32> = serde_json::from_str(&embedding_json).unwrap_or_default();
-            
+
             if doc_embedding.len() == query_embedding.len() {
                 let mut dot_product = 0.0;
                 let mut norm_a = 0.0;
@@ -1690,10 +1763,10 @@ impl crate::core::traits::database::DatabasePort for Database {
                 results.push((title, content, similarity));
             }
         }
-        
+
         results.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
         results.truncate(limit);
-        
+
         Ok(results)
     }
 
@@ -1761,10 +1834,7 @@ impl crate::core::traits::database::DatabasePort for Database {
 
     fn delete_workflow(&self, workflow_id: &str) -> Result<()> {
         let conn = self.conn.lock().unwrap();
-        conn.execute(
-            "DELETE FROM workflows WHERE id = ?1",
-            params![workflow_id],
-        )?;
+        conn.execute("DELETE FROM workflows WHERE id = ?1", params![workflow_id])?;
         // Also clean up workflow states
         conn.execute(
             "DELETE FROM workflow_states WHERE workflow_id = ?1",
@@ -1773,7 +1843,10 @@ impl crate::core::traits::database::DatabasePort for Database {
         Ok(())
     }
 
-    fn save_workflow_state(&self, state: &crate::application::iflow_engine::engine::WorkflowState) -> Result<()> {
+    fn save_workflow_state(
+        &self,
+        state: &crate::application::iflow_engine::engine::WorkflowState,
+    ) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         let now = chrono::Utc::now().to_rfc3339();
         let state_json = serde_json::to_string(state)?;
@@ -1785,11 +1858,13 @@ impl crate::core::traits::database::DatabasePort for Database {
         Ok(())
     }
 
-    fn load_workflow_state(&self, execution_id: &str) -> Result<Option<crate::application::iflow_engine::engine::WorkflowState>> {
+    fn load_workflow_state(
+        &self,
+        execution_id: &str,
+    ) -> Result<Option<crate::application::iflow_engine::engine::WorkflowState>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT state_json FROM workflow_states WHERE execution_id = ?1 LIMIT 1"
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT state_json FROM workflow_states WHERE execution_id = ?1 LIMIT 1")?;
         let mut rows = stmt.query(params![execution_id])?;
         if let Some(row) = rows.next()? {
             let row: &rusqlite::Row = row;
@@ -1801,7 +1876,10 @@ impl crate::core::traits::database::DatabasePort for Database {
         }
     }
 
-    fn insert_audit_log(&self, event: &crate::infrastructure::security::audit::AuditEvent) -> Result<()> {
+    fn insert_audit_log(
+        &self,
+        event: &crate::infrastructure::security::audit::AuditEvent,
+    ) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         let id = uuid::Uuid::new_v4().to_string();
         conn.execute(
@@ -1873,7 +1951,10 @@ impl crate::core::traits::database::DatabasePort for Database {
         Ok(())
     }
 
-    fn get_mcp_tool(&self, id: &str) -> Result<Option<crate::infrastructure::mcp::registry::McpTool>> {
+    fn get_mcp_tool(
+        &self,
+        id: &str,
+    ) -> Result<Option<crate::infrastructure::mcp::registry::McpTool>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare("SELECT id, name, description, version, command, args, input_schema, is_active FROM mcp_tools WHERE id = ?1")?;
         let mut rows = stmt.query(rusqlite::params![id])?;
@@ -1925,11 +2006,14 @@ impl crate::core::traits::database::DatabasePort for Database {
         Ok(())
     }
 
-    fn upsert_knowledge_entry(&self, entry: &crate::core::models::knowledge::KnowledgeEntry) -> Result<()> {
+    fn upsert_knowledge_entry(
+        &self,
+        entry: &crate::core::models::knowledge::KnowledgeEntry,
+    ) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         let tags_json = serde_json::to_string(&entry.tags).unwrap_or_else(|_| "[]".to_string());
         let created_at_str = entry.created_at.to_rfc3339();
-        
+
         conn.execute(
             "INSERT INTO knowledge_entries (id, agent_id, session_id, title, content, tags, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
@@ -1939,15 +2023,26 @@ impl crate::core::traits::database::DatabasePort for Database {
                 entry.id, entry.agent_id, entry.session_id, entry.title, entry.content, tags_json, created_at_str
             ],
         )?;
-        conn.execute("DELETE FROM knowledge_entries_fts WHERE id = ?1", rusqlite::params![entry.id])?;
+        conn.execute(
+            "DELETE FROM knowledge_entries_fts WHERE id = ?1",
+            rusqlite::params![entry.id],
+        )?;
         conn.execute(
             "INSERT INTO knowledge_entries_fts (id, title, content, tags) VALUES (?1, ?2, ?3, ?4)",
-            rusqlite::params![entry.id, entry.title, entry.content, serde_json::to_string(&entry.tags).unwrap_or_else(|_| "[]".to_string())],
+            rusqlite::params![
+                entry.id,
+                entry.title,
+                entry.content,
+                serde_json::to_string(&entry.tags).unwrap_or_else(|_| "[]".to_string())
+            ],
         )?;
         Ok(())
     }
 
-    fn get_knowledge_entry(&self, id: &str) -> Result<Option<crate::core::models::knowledge::KnowledgeEntry>> {
+    fn get_knowledge_entry(
+        &self,
+        id: &str,
+    ) -> Result<Option<crate::core::models::knowledge::KnowledgeEntry>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare("SELECT id, agent_id, session_id, title, content, tags, created_at FROM knowledge_entries WHERE id = ?1")?;
         let mut rows = stmt.query(rusqlite::params![id])?;
@@ -1958,7 +2053,7 @@ impl crate::core::traits::database::DatabasePort for Database {
             let created_at = chrono::DateTime::parse_from_rfc3339(&created_at_str)
                 .map(|dt| dt.with_timezone(&chrono::Utc))
                 .unwrap_or_else(|_| chrono::Utc::now());
-            
+
             Ok(Some(crate::core::models::knowledge::KnowledgeEntry {
                 id: row.get(0)?,
                 agent_id: row.get(1)?,
@@ -1973,7 +2068,11 @@ impl crate::core::traits::database::DatabasePort for Database {
         }
     }
 
-    fn search_knowledge_entries_fts(&self, query: &str, limit: u32) -> Result<Vec<crate::core::models::knowledge::KnowledgeEntry>> {
+    fn search_knowledge_entries_fts(
+        &self,
+        query: &str,
+        limit: u32,
+    ) -> Result<Vec<crate::core::models::knowledge::KnowledgeEntry>> {
         let conn = self.conn.lock().unwrap();
         // Use FTS5 for search
         let mut stmt = conn.prepare(
@@ -1982,13 +2081,13 @@ impl crate::core::traits::database::DatabasePort for Database {
              JOIN knowledge_entries_fts fts ON e.id = fts.id
              WHERE knowledge_entries_fts MATCH ?1
              ORDER BY rank
-             LIMIT ?2"
+             LIMIT ?2",
         )?;
-        
-        // SQLite FTS5 requires query formatting, but for simplicity, just pass the raw query if it's safe, 
+
+        // SQLite FTS5 requires query formatting, but for simplicity, just pass the raw query if it's safe,
         // or wrap it in quotes. A better way is to clean the query.
         let fts_query = format!("\"{}\"", query.replace("\"", ""));
-        
+
         let entry_iter = stmt.query_map(rusqlite::params![fts_query, limit], |row| {
             let tags_json: String = row.get(5)?;
             let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
@@ -1996,7 +2095,7 @@ impl crate::core::traits::database::DatabasePort for Database {
             let created_at = chrono::DateTime::parse_from_rfc3339(&created_at_str)
                 .map(|dt| dt.with_timezone(&chrono::Utc))
                 .unwrap_or_else(|_| chrono::Utc::now());
-                
+
             Ok(crate::core::models::knowledge::KnowledgeEntry {
                 id: row.get(0)?,
                 agent_id: row.get(1)?,
@@ -2007,7 +2106,7 @@ impl crate::core::traits::database::DatabasePort for Database {
                 created_at,
             })
         })?;
-        
+
         let mut entries = Vec::new();
         for entry in entry_iter {
             entries.push(entry?);
@@ -2049,7 +2148,10 @@ impl crate::core::traits::database::DatabasePort for Database {
         Ok(())
     }
 
-    fn insert_cross_team_case_event(&self, event: &crate::core::models::CrossTeamCaseEventRecord) -> Result<()> {
+    fn insert_cross_team_case_event(
+        &self,
+        event: &crate::core::models::CrossTeamCaseEventRecord,
+    ) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT INTO cross_team_case_events
@@ -2070,7 +2172,11 @@ impl crate::core::traits::database::DatabasePort for Database {
         Ok(())
     }
 
-    fn list_cross_team_cases(&self, instance_id: &str, limit: u32) -> Result<Vec<crate::core::models::CrossTeamCaseRecord>> {
+    fn list_cross_team_cases(
+        &self,
+        instance_id: &str,
+        limit: u32,
+    ) -> Result<Vec<crate::core::models::CrossTeamCaseRecord>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT correlation_id, owner_instance_id, target_instance_id, latest_event_type, summary, created_at, updated_at
@@ -2097,7 +2203,11 @@ impl crate::core::traits::database::DatabasePort for Database {
         Ok(cases)
     }
 
-    fn list_cross_team_case_events(&self, correlation_id: &str, limit: u32) -> Result<Vec<crate::core::models::CrossTeamCaseEventRecord>> {
+    fn list_cross_team_case_events(
+        &self,
+        correlation_id: &str,
+        limit: u32,
+    ) -> Result<Vec<crate::core::models::CrossTeamCaseEventRecord>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT id, correlation_id, from_instance_id, reply_to_instance_id, event_type, summary, payload, created_at

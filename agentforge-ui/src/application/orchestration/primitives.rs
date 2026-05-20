@@ -1,10 +1,10 @@
-use uuid::Uuid;
-use tokio::sync::{mpsc, oneshot, broadcast, RwLock, Mutex};
-use std::sync::Arc;
-use std::collections::{HashMap, BinaryHeap};
-use chrono::{DateTime, Utc};
-use serde::{Serialize, Deserialize};
 use anyhow::Result;
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use std::collections::{BinaryHeap, HashMap};
+use std::sync::Arc;
+use tokio::sync::{broadcast, mpsc, oneshot, Mutex, RwLock};
+use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TaskPriority {
@@ -108,10 +108,10 @@ impl AgentManager {
 
         let status_tx_clone = status_tx.clone();
         let outputs_clone = self.outputs.clone();
-        
+
         tokio::spawn(async move {
             let _ = status_tx_clone.send(AgentStatus::Running);
-            
+
             loop {
                 tokio::select! {
                     msg = msg_rx.recv() => {
@@ -142,7 +142,11 @@ impl AgentManager {
                 payload,
                 timestamp: Utc::now(),
             };
-            agent.message_tx.send(msg).await.map_err(|_| anyhow::anyhow!("Failed to send message"))?;
+            agent
+                .message_tx
+                .send(msg)
+                .await
+                .map_err(|_| anyhow::anyhow!("Failed to send message"))?;
             Ok(())
         } else {
             Err(anyhow::anyhow!("Agent not found"))
@@ -163,9 +167,9 @@ impl AgentManager {
         let mut rx = rx;
         loop {
             match rx.recv().await {
-                Ok(status @ AgentStatus::Completed) | 
-                Ok(status @ AgentStatus::Failed(_)) | 
-                Ok(status @ AgentStatus::Cancelled) => {
+                Ok(status @ AgentStatus::Completed)
+                | Ok(status @ AgentStatus::Failed(_))
+                | Ok(status @ AgentStatus::Cancelled) => {
                     return Ok(status);
                 }
                 Ok(_) => continue,
@@ -188,7 +192,11 @@ impl AgentManager {
     // 3.23: agent_output_collection
     pub async fn collect_outputs(&self, agent_id: Uuid) -> Vec<AgentOutput> {
         let outputs = self.outputs.read().await;
-        outputs.iter().filter(|o| o.agent_id == agent_id).cloned().collect()
+        outputs
+            .iter()
+            .filter(|o| o.agent_id == agent_id)
+            .cloned()
+            .collect()
     }
 
     // 3.24: agent_status_monitoring
@@ -213,7 +221,7 @@ impl AgentManager {
         self.task_queue.lock().await.push(task);
         id
     }
-    
+
     pub async fn dequeue_highest_priority_task(&self) -> Option<TaskItem> {
         self.task_queue.lock().await.pop()
     }

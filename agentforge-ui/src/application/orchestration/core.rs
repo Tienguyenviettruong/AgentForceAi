@@ -1,5 +1,5 @@
-use std::collections::{HashMap, HashSet, VecDeque};
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 /// Task 3.05: Orchestration State Machine Enum
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -53,7 +53,11 @@ impl OrchestrationStateMachine {
         }
     }
 
-    pub fn transition_to(&mut self, new_state: OrchestrationState, reason: &str) -> Result<(), String> {
+    pub fn transition_to(
+        &mut self,
+        new_state: OrchestrationState,
+        reason: &str,
+    ) -> Result<(), String> {
         if !self.can_transition_to(new_state) {
             return Err(format!(
                 "Invalid state transition from {:?} to {:?}",
@@ -107,7 +111,10 @@ impl DependencyResolver {
                 if !in_degree.contains_key(dep) {
                     return Err(format!("Dependency {} not found for task {}", dep, task.id));
                 }
-                adj_list.entry(dep.clone()).or_default().push(task.id.clone());
+                adj_list
+                    .entry(dep.clone())
+                    .or_default()
+                    .push(task.id.clone());
                 *in_degree.get_mut(&task.id).unwrap() += 1;
             }
         }
@@ -159,7 +166,7 @@ impl Orchestrator {
 
     /// Task 3.02: Task decomposition algorithm (LLM-based)
     /// Decomposes a high-level goal into a DAG of tasks using the LLM provider.
-pub async fn decompose_goal(
+    pub async fn decompose_goal(
         &mut self,
         goal: &str,
         db: std::sync::Arc<dyn crate::core::traits::database::DatabasePort>,
@@ -171,7 +178,9 @@ pub async fn decompose_goal(
             return Err("Can only decompose tasks in Planning state".to_string());
         }
 
-        let role_mapping = db.get_instance_agent_name_mapping(instance_id).unwrap_or_default();
+        let role_mapping = db
+            .get_instance_agent_name_mapping(instance_id)
+            .unwrap_or_default();
         let available_roles: Vec<String> = role_mapping.keys().cloned().collect();
         let roles_str = if available_roles.is_empty() {
             "No specific roles available, leave assignee_id as null".to_string()
@@ -195,25 +204,47 @@ CRITICAL: Design tasks to run in PARALLEL whenever possible. If two tasks do not
 DO NOT include any markdown formatting like ```json, just return the raw JSON array.
 ", roles_str);
 
-        chat_history.insert(0, crate::providers::ChatMessage { role: "system".into(), content: system_prompt.into(), agent_name: None });
+        chat_history.insert(
+            0,
+            crate::providers::ChatMessage {
+                role: "system".into(),
+                content: system_prompt.into(),
+                agent_name: None,
+            },
+        );
 
-        chat_history.push(crate::providers::ChatMessage { role: "user".into(), content: format!("Please decompose the following goal into tasks:
+        chat_history.push(crate::providers::ChatMessage {
+            role: "user".into(),
+            content: format!(
+                "Please decompose the following goal into tasks:
 
-{}", goal).into(), agent_name: None
+{}",
+                goal
+            )
+            .into(),
+            agent_name: None,
         });
 
         use crate::providers::BaseProviderAdapter;
         let response_text = if provider_config.provider_name == "openrouter" {
             let mut adapter = crate::providers::openrouter::OpenRouterAdapter::new();
             if adapter.initialize(&provider_config).is_ok() {
-                adapter.send_message(chat_history).await.map(|r| r.content.to_string()).map_err(|e| e.to_string())?
+                adapter
+                    .send_message(chat_history)
+                    .await
+                    .map(|r| r.content.to_string())
+                    .map_err(|e| e.to_string())?
             } else {
                 return Err("Failed to init OpenRouter adapter".to_string());
             }
         } else {
             let mut adapter = crate::providers::claude::ClaudeAdapter::new();
             if adapter.initialize(&provider_config).is_ok() {
-                adapter.send_message(chat_history).await.map(|r| r.content.to_string()).map_err(|e| e.to_string())?
+                adapter
+                    .send_message(chat_history)
+                    .await
+                    .map(|r| r.content.to_string())
+                    .map_err(|e| e.to_string())?
             } else {
                 return Err("Failed to init Claude adapter".to_string());
             }
@@ -230,9 +261,13 @@ DO NOT include any markdown formatting like ```json, just return the raw JSON ar
             .unwrap_or(response_text.trim())
             .trim();
 
-        let tasks: Vec<DagTask> = serde_json::from_str(cleaned_json)
-            .map_err(|e| format!("Failed to parse JSON: {} 
-Response: {}", e, cleaned_json))?;
+        let tasks: Vec<DagTask> = serde_json::from_str(cleaned_json).map_err(|e| {
+            format!(
+                "Failed to parse JSON: {} 
+Response: {}",
+                e, cleaned_json
+            )
+        })?;
 
         Ok(tasks)
     }
@@ -244,7 +279,7 @@ Response: {}", e, cleaned_json))?;
 
         // Validate and resolve dependencies
         let sorted = DependencyResolver::resolve(&dag_tasks)?;
-        
+
         self.tasks.clear();
         for task in dag_tasks {
             self.tasks.insert(task.id.clone(), task);
@@ -255,17 +290,20 @@ Response: {}", e, cleaned_json))?;
     }
 
     pub fn start_execution(&mut self) -> Result<(), String> {
-        self.state_machine.transition_to(OrchestrationState::Executing, "Starting execution")?;
+        self.state_machine
+            .transition_to(OrchestrationState::Executing, "Starting execution")?;
         Ok(())
     }
 
     pub fn pause_execution(&mut self, reason: &str) -> Result<(), String> {
-        self.state_machine.transition_to(OrchestrationState::Paused, reason)?;
+        self.state_machine
+            .transition_to(OrchestrationState::Paused, reason)?;
         Ok(())
     }
 
     pub fn resume_execution(&mut self) -> Result<(), String> {
-        self.state_machine.transition_to(OrchestrationState::Executing, "Resuming execution")?;
+        self.state_machine
+            .transition_to(OrchestrationState::Executing, "Resuming execution")?;
         Ok(())
     }
 
@@ -282,7 +320,10 @@ Response: {}", e, cleaned_json))?;
             }
 
             let task = self.tasks.get(task_id).unwrap();
-            let all_deps_met = task.dependencies.iter().all(|dep| self.completed_tasks.contains(dep));
+            let all_deps_met = task
+                .dependencies
+                .iter()
+                .all(|dep| self.completed_tasks.contains(dep));
 
             if all_deps_met {
                 available.push(task.clone());
@@ -291,14 +332,14 @@ Response: {}", e, cleaned_json))?;
 
         // Sort by priority (higher first), then by deadline if any
         available.sort_by(|a, b| {
-            b.priority.cmp(&a.priority).then_with(|| {
-                match (&a.deadline, &b.deadline) {
+            b.priority
+                .cmp(&a.priority)
+                .then_with(|| match (&a.deadline, &b.deadline) {
                     (Some(d1), Some(d2)) => d1.cmp(d2),
                     (Some(_), None) => std::cmp::Ordering::Less,
                     (None, Some(_)) => std::cmp::Ordering::Greater,
                     (None, None) => std::cmp::Ordering::Equal,
-                }
-            })
+                })
         });
 
         available
@@ -321,13 +362,18 @@ Response: {}", e, cleaned_json))?;
         self.failed_tasks.insert(task_id.to_string());
 
         // Simple fail-fast for the orchestrator
-        let _ = self.state_machine.transition_to(OrchestrationState::Failed, &format!("Task {} failed", task_id));
+        let _ = self.state_machine.transition_to(
+            OrchestrationState::Failed,
+            &format!("Task {} failed", task_id),
+        );
         Ok(())
     }
 
     fn check_overall_status(&mut self) {
         if self.completed_tasks.len() == self.tasks.len() {
-            let _ = self.state_machine.transition_to(OrchestrationState::Completed, "All tasks completed");
+            let _ = self
+                .state_machine
+                .transition_to(OrchestrationState::Completed, "All tasks completed");
         }
     }
 }

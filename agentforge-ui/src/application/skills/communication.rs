@@ -17,7 +17,10 @@ impl Skill for SummarizeSkill {
 
     async fn execute(&self, input: SkillInput) -> SkillOutput {
         let text = input.parameters.get("text").cloned().unwrap_or_default();
-        let result = format!("Summary of {} characters: It discusses important concepts.", text.len());
+        let result = format!(
+            "Summary of {} characters: It discusses important concepts.",
+            text.len()
+        );
         SkillOutput {
             result,
             success: true,
@@ -42,8 +45,16 @@ impl Skill for TranslateSkill {
 
     async fn execute(&self, input: SkillInput) -> SkillOutput {
         let text = input.parameters.get("text").cloned().unwrap_or_default();
-        let target_lang = input.parameters.get("target_lang").cloned().unwrap_or_else(|| "English".to_string());
-        let result = format!("Translated to {}: [Translation of {}]", target_lang, text.chars().take(10).collect::<String>());
+        let target_lang = input
+            .parameters
+            .get("target_lang")
+            .cloned()
+            .unwrap_or_else(|| "English".to_string());
+        let result = format!(
+            "Translated to {}: [Translation of {}]",
+            target_lang,
+            text.chars().take(10).collect::<String>()
+        );
         SkillOutput {
             result,
             success: true,
@@ -68,7 +79,10 @@ impl Skill for ExplainSkill {
 
     async fn execute(&self, input: SkillInput) -> SkillOutput {
         let concept = input.parameters.get("concept").cloned().unwrap_or_default();
-        let result = format!("Explanation of '{}': It is a fundamental mechanism.", concept);
+        let result = format!(
+            "Explanation of '{}': It is a fundamental mechanism.",
+            concept
+        );
         SkillOutput {
             result,
             success: true,

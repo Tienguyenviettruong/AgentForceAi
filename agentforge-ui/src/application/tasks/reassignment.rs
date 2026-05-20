@@ -1,5 +1,5 @@
-use rusqlite::{params, Connection, Result};
 use chrono::Utc;
+use rusqlite::{params, Connection, Result};
 
 pub struct ReassignmentManager<'a> {
     conn: &'a Connection,
@@ -13,8 +13,8 @@ impl<'a> ReassignmentManager<'a> {
     /// Task 2.19: Build task reassignment and escalation workflow
     pub fn reassign_task(&self, task_id: &str, new_agent_id: &str, _reason: &str) -> Result<()> {
         let now = Utc::now().to_rfc3339();
-        
-        // Log the reassignment reason somewhere if history table exists, 
+
+        // Log the reassignment reason somewhere if history table exists,
         // here we just update the task assignment
         self.conn.execute(
             "UPDATE tasks 
@@ -30,7 +30,7 @@ impl<'a> ReassignmentManager<'a> {
     /// Escalate task priority (e.g. from medium to high)
     pub fn escalate_task(&self, task_id: &str) -> Result<()> {
         let now = Utc::now().to_rfc3339();
-        
+
         self.conn.execute(
             "UPDATE tasks 
              SET priority = CASE 

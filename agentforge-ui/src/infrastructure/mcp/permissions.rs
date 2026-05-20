@@ -26,7 +26,8 @@ impl RateLimiter {
     fn check_and_record(&mut self) -> bool {
         let now = Instant::now();
         // Remove requests outside the window
-        self.requests.retain(|&time| now.duration_since(time) < self.window);
+        self.requests
+            .retain(|&time| now.duration_since(time) < self.window);
 
         if self.requests.len() >= self.max_requests as usize {
             false
@@ -60,22 +61,33 @@ impl McpPermissionManager {
 
     pub fn set_agent_permissions(&self, agent_id: &str, config: PermissionConfig) {
         let max_req = config.max_requests_per_minute;
-        self.configs.write().unwrap().insert(agent_id.to_string(), config);
-        self.rate_limiters.write().unwrap().insert(
-            agent_id.to_string(),
-            RateLimiter::new(max_req)
-        );
+        self.configs
+            .write()
+            .unwrap()
+            .insert(agent_id.to_string(), config);
+        self.rate_limiters
+            .write()
+            .unwrap()
+            .insert(agent_id.to_string(), RateLimiter::new(max_req));
     }
 
     pub fn can_execute(&self, agent_id: &str, tool_name: &str) -> Result<(), String> {
         let configs = self.configs.read().unwrap();
         if let Some(config) = configs.get(agent_id) {
-            if !config.allowed_tools.contains(&tool_name.to_string()) && !config.allowed_tools.contains(&"*".to_string()) {
-                return Err(format!("Agent {} is not permitted to use tool {}", agent_id, tool_name));
+            if !config.allowed_tools.contains(&tool_name.to_string())
+                && !config.allowed_tools.contains(&"*".to_string())
+            {
+                return Err(format!(
+                    "Agent {} is not permitted to use tool {}",
+                    agent_id, tool_name
+                ));
             }
         } else {
             // Default deny
-            return Err(format!("No permission configuration found for agent {}", agent_id));
+            return Err(format!(
+                "No permission configuration found for agent {}",
+                agent_id
+            ));
         }
 
         let mut limiters = self.rate_limiters.write().unwrap();

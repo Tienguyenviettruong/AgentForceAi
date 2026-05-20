@@ -66,14 +66,16 @@ impl FailoverRouter {
 
     /// Selects the best provider based on status, priority, load, and cost
     pub fn select_provider(&self) -> Option<ProviderConfig> {
-        let mut available: Vec<&ProviderConfig> = self.providers
+        let mut available: Vec<&ProviderConfig> = self
+            .providers
             .values()
             .filter(|p| p.status == ProviderStatus::Healthy && p.load < 0.9)
             .collect();
 
         if available.is_empty() {
             // Fallback to degraded if no healthy options
-            available = self.providers
+            available = self
+                .providers
                 .values()
                 .filter(|p| p.status == ProviderStatus::Degraded)
                 .collect();
@@ -85,7 +87,8 @@ impl FailoverRouter {
 
         // Sort by priority (higher is better), then cost (lower is better), then load
         available.sort_by(|a, b| {
-            b.priority.cmp(&a.priority)
+            b.priority
+                .cmp(&a.priority)
                 .then_with(|| a.cost_per_token.partial_cmp(&b.cost_per_token).unwrap())
                 .then_with(|| a.load.partial_cmp(&b.load).unwrap())
         });

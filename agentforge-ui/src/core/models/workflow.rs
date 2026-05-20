@@ -7,4 +7,3 @@ pub struct WorkflowRecord {
     pub created_at: String,
     pub updated_at: String,
 }
-

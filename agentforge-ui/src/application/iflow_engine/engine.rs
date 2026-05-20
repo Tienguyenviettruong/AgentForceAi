@@ -1,9 +1,9 @@
 use super::nodes::{Node, NodeType, WorkflowData};
+use crate::core::traits::database::DatabasePort;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
-use crate::core::traits::database::DatabasePort;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Workflow {
@@ -123,7 +123,10 @@ impl WorkflowEngine {
             data.set("team_id", serde_json::Value::String(team_id.clone()));
         }
         if let Some(instance_id) = &workflow.instance_id {
-            data.set("instance_id", serde_json::Value::String(instance_id.clone()));
+            data.set(
+                "instance_id",
+                serde_json::Value::String(instance_id.clone()),
+            );
         }
 
         let state = WorkflowState {
@@ -269,30 +272,40 @@ impl WorkflowEngine {
                 }
 
                 if let Some(ctx) = &self.execution_context {
-                    let instance_id = ctx.team_instance_id.clone().unwrap_or_else(|| "sdg-instance-123".to_string());
-                    
+                    let instance_id = ctx
+                        .team_instance_id
+                        .clone()
+                        .unwrap_or_else(|| "sdg-instance-123".to_string());
+
                     let msg = crate::infrastructure::message_bus::routing::TeamMessage {
                         id: uuid::Uuid::new_v4().to_string(),
                         team_instance_id: instance_id,
                         sender_member_id: "system".to_string(),
                         recipient_member_id: Some(agent_id.clone()),
                         recipient_role: None,
-                        message_type: crate::infrastructure::message_bus::routing::MessageType::Direct,
+                        message_type:
+                            crate::infrastructure::message_bus::routing::MessageType::Direct,
                         content: prompt,
-                        metadata: Some(format!("iflow_dispatch:{}:{}", state.execution_id, node_id)),
+                        metadata: Some(format!(
+                            "iflow_dispatch:{}:{}",
+                            state.execution_id, node_id
+                        )),
                         delivery_status: "delivered".to_string(),
                         created_at: chrono::Utc::now().to_rfc3339(),
                     };
-                    
+
                     let _ = ctx.team_bus.route_message(msg).await;
-                    
+
                     state.status = WorkflowStatus::Paused;
                     state.pending_agent_tasks.insert(node_id.to_string());
                 } else {
                     state.current_nodes.extend(node.next_nodes.clone());
                 }
             }
-            NodeType::SystemCommand { command, output_var } => {
+            NodeType::SystemCommand {
+                command,
+                output_var,
+            } => {
                 if let Some(_ctx) = &self.execution_context {
                     let output = tokio::process::Command::new("bash")
                         .arg("-lc")
@@ -306,7 +319,9 @@ impl WorkflowEngine {
                         text.push_str(&format!("\n{}", err));
                     }
                     if let Some(out_var) = output_var {
-                        state.data.set(out_var.clone(), serde_json::Value::String(text));
+                        state
+                            .data
+                            .set(out_var.clone(), serde_json::Value::String(text));
                     }
                     state.current_nodes.extend(node.next_nodes.clone());
                 } else {
@@ -336,7 +351,9 @@ impl WorkflowEngine {
                     let resp = req.send().await.map_err(|e| e.to_string())?;
                     let text = resp.text().await.map_err(|e| e.to_string())?;
                     if let Some(out_var) = output_var {
-                        state.data.set(out_var.clone(), serde_json::Value::String(text));
+                        state
+                            .data
+                            .set(out_var.clone(), serde_json::Value::String(text));
                     }
                     state.current_nodes.extend(node.next_nodes.clone());
                 } else {
@@ -395,7 +412,9 @@ impl WorkflowEngine {
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_millis() as u64;
-                state.pending_delays.insert(node_id.to_string(), now_ms + *duration_ms);
+                state
+                    .pending_delays
+                    .insert(node_id.to_string(), now_ms + *duration_ms);
             }
         }
 
@@ -448,7 +467,7 @@ impl WorkflowEngine {
             if state.pending_agent_tasks.is_empty() {
                 state.status = WorkflowStatus::Running;
             }
-            
+
             self.persist_state(&state)?;
             Ok(state)
         } else {

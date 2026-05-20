@@ -1,7 +1,7 @@
-use std::sync::Arc;
 use anyhow::Result;
 use futures::future::join_all;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 use crate::docs::engine::{DocumentEngine, DocumentRequest, DocumentResult};
 
@@ -28,7 +28,8 @@ impl BatchProcessor {
     }
 
     pub async fn process_batch(&self, batch_request: BatchRequest) -> Result<BatchResult> {
-        let mut futures: Vec<tokio::task::JoinHandle<Result<DocumentResult, anyhow::Error>>> = Vec::new();
+        let mut futures: Vec<tokio::task::JoinHandle<Result<DocumentResult, anyhow::Error>>> =
+            Vec::new();
 
         for req in batch_request.requests {
             let engine_clone = self.engine.clone();
@@ -38,7 +39,7 @@ impl BatchProcessor {
         }
 
         let completed_jobs = join_all(futures).await;
-        
+
         let mut results = Vec::new();
         for job_result in completed_jobs {
             match job_result {

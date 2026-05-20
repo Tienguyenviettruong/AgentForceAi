@@ -9,7 +9,8 @@ impl Skill for WebSearchSkill {
         SkillMetadata {
             id: "research.web_search".to_string(),
             name: "Web Search".to_string(),
-            description: "Searches the web for up-to-date information using DuckDuckGo.".to_string(),
+            description: "Searches the web for up-to-date information using DuckDuckGo."
+                .to_string(),
             version: "2.0".to_string(),
             category: "Research".to_string(),
         }
@@ -25,16 +26,24 @@ impl Skill for WebSearchSkill {
             };
         }
 
-        let url = format!("https://html.duckduckgo.com/html/?q={}", urlencoding::encode(&query));
+        let url = format!(
+            "https://html.duckduckgo.com/html/?q={}",
+            urlencoding::encode(&query)
+        );
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(15))
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
 
-        match client.get(&url)
-            .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+        match client
+            .get(&url)
+            .header(
+                "User-Agent",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            )
             .send()
-            .await {
+            .await
+        {
             Ok(resp) => {
                 if let Ok(text) = resp.text().await {
                     let mut results = Vec::new();
@@ -45,9 +54,17 @@ impl Skill for WebSearchSkill {
                             let mut in_tag = false;
                             let mut clean = String::new();
                             for c in segment.chars().take(500) {
-                                if c == '<' { in_tag = true; continue; }
-                                if c == '>' { in_tag = false; continue; }
-                                if !in_tag { clean.push(c); }
+                                if c == '<' {
+                                    in_tag = true;
+                                    continue;
+                                }
+                                if c == '>' {
+                                    in_tag = false;
+                                    continue;
+                                }
+                                if !in_tag {
+                                    clean.push(c);
+                                }
                             }
                             let clean = clean.trim().to_string();
                             if !clean.is_empty() && clean.len() > 20 {
@@ -62,21 +79,39 @@ impl Skill for WebSearchSkill {
                         let mut in_tag = false;
                         let mut stripped = String::new();
                         for c in text.chars() {
-                            if c == '<' { in_tag = true; continue; }
-                            if c == '>' { in_tag = false; stripped.push(' '); continue; }
-                            if !in_tag { stripped.push(c); }
+                            if c == '<' {
+                                in_tag = true;
+                                continue;
+                            }
+                            if c == '>' {
+                                in_tag = false;
+                                stripped.push(' ');
+                                continue;
+                            }
+                            if !in_tag {
+                                stripped.push(c);
+                            }
                         }
-                        let truncated: String = stripped.split_whitespace().collect::<Vec<_>>().join(" ");
+                        let truncated: String =
+                            stripped.split_whitespace().collect::<Vec<_>>().join(" ");
                         let limit = std::cmp::min(3000, truncated.len());
                         return SkillOutput {
-                            result: format!("Search results for '{}':\n{}", query, &truncated[..limit]),
+                            result: format!(
+                                "Search results for '{}':\n{}",
+                                query,
+                                &truncated[..limit]
+                            ),
                             success: true,
                             error_message: None,
                         };
                     }
 
                     SkillOutput {
-                        result: format!("Search results for '{}':\n{}", query, results.join("\n\n")),
+                        result: format!(
+                            "Search results for '{}':\n{}",
+                            query,
+                            results.join("\n\n")
+                        ),
                         success: true,
                         error_message: None,
                     }
@@ -88,13 +123,11 @@ impl Skill for WebSearchSkill {
                     }
                 }
             }
-            Err(e) => {
-                SkillOutput {
-                    result: String::new(),
-                    success: false,
-                    error_message: Some(format!("Web search failed: {}", e)),
-                }
-            }
+            Err(e) => SkillOutput {
+                result: String::new(),
+                success: false,
+                error_message: Some(format!("Web search failed: {}", e)),
+            },
         }
     }
 }
@@ -201,7 +234,10 @@ impl Skill for DataExtractionSkill {
         // Extract numbers
         let numbers: Vec<&str> = text
             .split_whitespace()
-            .filter(|w| w.chars().all(|c| c.is_ascii_digit() || c == '.' || c == ','))
+            .filter(|w| {
+                w.chars()
+                    .all(|c| c.is_ascii_digit() || c == '.' || c == ',')
+            })
             .filter(|w| !w.is_empty() && w.chars().any(|c| c.is_ascii_digit()))
             .collect();
 

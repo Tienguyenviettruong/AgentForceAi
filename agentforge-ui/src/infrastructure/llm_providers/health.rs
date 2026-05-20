@@ -35,11 +35,11 @@ impl HealthMonitor {
                     if self.reconnect_attempts > self.max_retries {
                         return Err(anyhow::anyhow!("Max reconnection attempts reached"));
                     }
-                    
+
                     // Exponential backoff
                     let delay = self.base_delay_ms * (2_u64.pow(self.reconnect_attempts - 1));
                     sleep(Duration::from_millis(delay)).await;
-                    
+
                     // Attempt reconnect logic...
                     // In a real system, we might re-initialize the adapter here.
                 }

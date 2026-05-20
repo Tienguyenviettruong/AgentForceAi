@@ -59,20 +59,16 @@ impl Render for OrchestrationPanel {
                     .child(self.render_tab("Governance", cx))
                     .child(self.render_tab("Mode Transition", cx)),
             )
-            .child(
-                v_flex()
-                    .flex_1()
-                    .w_full()
-                    .overflow_hidden()
-                    .child(match self.active_tab.as_str() {
-                        "Dashboard" => self.render_dashboard(cx).into_any_element(),
-                        "Tracking" => self.render_tracking(cx).into_any_element(),
-                        "Logs" => self.render_logs(cx).into_any_element(),
-                        "Governance" => self.render_governance(cx).into_any_element(),
-                        "Mode Transition" => self.render_mode_transition(cx).into_any_element(),
-                        _ => div().child("Unknown Tab").into_any_element(),
-                    }),
-            )
+            .child(v_flex().flex_1().w_full().overflow_hidden().child(
+                match self.active_tab.as_str() {
+                    "Dashboard" => self.render_dashboard(cx).into_any_element(),
+                    "Tracking" => self.render_tracking(cx).into_any_element(),
+                    "Logs" => self.render_logs(cx).into_any_element(),
+                    "Governance" => self.render_governance(cx).into_any_element(),
+                    "Mode Transition" => self.render_mode_transition(cx).into_any_element(),
+                    _ => div().child("Unknown Tab").into_any_element(),
+                },
+            ))
     }
 }
 
@@ -80,7 +76,7 @@ impl OrchestrationPanel {
     fn render_tab(&self, name: &'static str, cx: &mut Context<Self>) -> impl IntoElement {
         let is_active = self.active_tab == name;
         let tab_name = name.to_string();
-        
+
         Button::new(name)
             .label(name.to_string())
             .when(is_active, |b| b.primary())
@@ -93,39 +89,105 @@ impl OrchestrationPanel {
 
     fn render_dashboard(&self, cx: &Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
-        
+
         v_flex()
             .size_full()
             .gap_4()
-            .child(div().text_xl().font_weight(gpui::FontWeight::SEMIBOLD).child("Orchestration Dashboard"))
+            .child(
+                div()
+                    .text_xl()
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .child("Orchestration Dashboard"),
+            )
             .child(
                 h_flex()
                     .gap_4()
                     .child(
-                        v_flex().p_4().rounded_md().bg(theme.secondary).flex_1()
-                            .child(div().text_sm().text_color(theme.muted_foreground).child("Active Runs"))
-                            .child(div().text_2xl().font_weight(gpui::FontWeight::BOLD).child("0"))
+                        v_flex()
+                            .p_4()
+                            .rounded_md()
+                            .bg(theme.secondary)
+                            .flex_1()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(theme.muted_foreground)
+                                    .child("Active Runs"),
+                            )
+                            .child(
+                                div()
+                                    .text_2xl()
+                                    .font_weight(gpui::FontWeight::BOLD)
+                                    .child("0"),
+                            ),
                     )
                     .child(
-                        v_flex().p_4().rounded_md().bg(theme.secondary).flex_1()
-                            .child(div().text_sm().text_color(theme.muted_foreground).child("Success Rate"))
-                            .child(div().text_2xl().font_weight(gpui::FontWeight::BOLD).child("0%"))
+                        v_flex()
+                            .p_4()
+                            .rounded_md()
+                            .bg(theme.secondary)
+                            .flex_1()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(theme.muted_foreground)
+                                    .child("Success Rate"),
+                            )
+                            .child(
+                                div()
+                                    .text_2xl()
+                                    .font_weight(gpui::FontWeight::BOLD)
+                                    .child("0%"),
+                            ),
                     )
                     .child(
-                        v_flex().p_4().rounded_md().bg(theme.secondary).flex_1()
-                            .child(div().text_sm().text_color(theme.muted_foreground).child("Agents Utilized"))
-                            .child(div().text_2xl().font_weight(gpui::FontWeight::BOLD).child("0"))
+                        v_flex()
+                            .p_4()
+                            .rounded_md()
+                            .bg(theme.secondary)
+                            .flex_1()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(theme.muted_foreground)
+                                    .child("Agents Utilized"),
+                            )
+                            .child(
+                                div()
+                                    .text_2xl()
+                                    .font_weight(gpui::FontWeight::BOLD)
+                                    .child("0"),
+                            ),
                     )
                     .child(
-                        v_flex().p_4().rounded_md().bg(theme.secondary).flex_1()
-                            .child(div().text_sm().text_color(theme.muted_foreground).child("Tasks Processed"))
-                            .child(div().text_2xl().font_weight(gpui::FontWeight::BOLD).child("0"))
-                    )
+                        v_flex()
+                            .p_4()
+                            .rounded_md()
+                            .bg(theme.secondary)
+                            .flex_1()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(theme.muted_foreground)
+                                    .child("Tasks Processed"),
+                            )
+                            .child(
+                                div()
+                                    .text_2xl()
+                                    .font_weight(gpui::FontWeight::BOLD)
+                                    .child("0"),
+                            ),
+                    ),
             )
-            .child(div().text_lg().font_weight(gpui::FontWeight::SEMIBOLD).mt_4().child("Recent Orchestration Runs"))
             .child(
-                v_flex().gap_2().children(vec![
-                ].into_iter().map(|(name, mode, status, time): (&str, &str, &str, &str)| {
+                div()
+                    .text_lg()
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .mt_4()
+                    .child("Recent Orchestration Runs"),
+            )
+            .child(v_flex().gap_2().children(vec![].into_iter().map(
+                |(name, mode, status, time): (&str, &str, &str, &str)| {
                     h_flex()
                         .justify_between()
                         .p_3()
@@ -135,44 +197,82 @@ impl OrchestrationPanel {
                         .child(
                             v_flex()
                                 .child(div().font_weight(gpui::FontWeight::SEMIBOLD).child(name))
-                                .child(div().text_sm().text_color(theme.muted_foreground).child(mode))
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(theme.muted_foreground)
+                                        .child(mode),
+                                ),
                         )
                         .child(
-                            v_flex().items_end()
-                                .child(div().child(status))
-                                .child(div().text_sm().text_color(theme.muted_foreground).child(time))
+                            v_flex().items_end().child(div().child(status)).child(
+                                div()
+                                    .text_sm()
+                                    .text_color(theme.muted_foreground)
+                                    .child(time),
+                            ),
                         )
                         .into_any_element()
-                }))
-            )
+                },
+            )))
     }
 
     fn render_tracking(&self, cx: &Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
-        
-        v_flex()
-            .size_full()
-            .gap_4()
-            .child(
-                v_flex()
-                    .flex_1()
-                    .p_4()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(theme.border)
-                    .bg(theme.secondary.opacity(0.3))
-                    .gap_3()
-                    .child(
-                        h_flex().gap_4().p_2().border_b_1().border_color(theme.border)
-                            .child(div().w(px(200.)).font_weight(gpui::FontWeight::BOLD).child("Task Name"))
-                            .child(div().w(px(100.)).font_weight(gpui::FontWeight::BOLD).child("Agent"))
-                            .child(div().w(px(100.)).font_weight(gpui::FontWeight::BOLD).child("Status"))
-                            .child(div().flex_1().font_weight(gpui::FontWeight::BOLD).child("Timeline / Progress"))
-                    )
-            )
+
+        v_flex().size_full().gap_4().child(
+            v_flex()
+                .flex_1()
+                .p_4()
+                .rounded_md()
+                .border_1()
+                .border_color(theme.border)
+                .bg(theme.secondary.opacity(0.3))
+                .gap_3()
+                .child(
+                    h_flex()
+                        .gap_4()
+                        .p_2()
+                        .border_b_1()
+                        .border_color(theme.border)
+                        .child(
+                            div()
+                                .w(px(200.))
+                                .font_weight(gpui::FontWeight::BOLD)
+                                .child("Task Name"),
+                        )
+                        .child(
+                            div()
+                                .w(px(100.))
+                                .font_weight(gpui::FontWeight::BOLD)
+                                .child("Agent"),
+                        )
+                        .child(
+                            div()
+                                .w(px(100.))
+                                .font_weight(gpui::FontWeight::BOLD)
+                                .child("Status"),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .font_weight(gpui::FontWeight::BOLD)
+                                .child("Timeline / Progress"),
+                        ),
+                ),
+        )
     }
 
-    fn render_gantt_row(&self, task: &str, agent: &str, status: &str, start_pct: f32, width_pct: f32, color: gpui::Hsla, cx: &Context<Self>) -> impl IntoElement {
+    fn render_gantt_row(
+        &self,
+        task: &str,
+        agent: &str,
+        status: &str,
+        start_pct: f32,
+        width_pct: f32,
+        color: gpui::Hsla,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
         let theme = cx.theme().clone();
         h_flex()
             .gap_4()
@@ -196,14 +296,14 @@ impl OrchestrationPanel {
                             .left(gpui::relative(start_pct))
                             .w(gpui::relative(width_pct))
                             .rounded_sm()
-                            .bg(color)
-                    )
+                            .bg(color),
+                    ),
             )
     }
 
     fn render_logs(&self, cx: &Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
-        
+
         v_flex()
             .size_full()
             .gap_4()
@@ -216,52 +316,55 @@ impl OrchestrationPanel {
                     .border_color(theme.border)
                     .bg(theme.background)
                     .gap_1()
-                    .children(vec![
-                    ].into_iter().map(|(msg, color): (&str, gpui::Hsla)| {
-                        div().text_sm().font_family("Courier New").text_color(color).child(msg.to_string())
-                    }))
+                    .children(vec![].into_iter().map(|(msg, color): (&str, gpui::Hsla)| {
+                        div()
+                            .text_sm()
+                            .font_family("Courier New")
+                            .text_color(color)
+                            .child(msg.to_string())
+                    })),
             )
             .child(
-                h_flex().justify_end().gap_2()
+                h_flex()
+                    .justify_end()
+                    .gap_2()
                     .child(Button::new("export-logs").label("Export Logs").ghost())
-                    .child(Button::new("clear-logs").label("Clear Logs"))
+                    .child(Button::new("clear-logs").label("Clear Logs")),
             )
     }
 
     fn render_governance(&self, cx: &Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
-        
-        v_flex()
-            .size_full()
-            .gap_4()
-            .child(
-                v_flex()
-                    .flex_1()
-                    .gap_4()
-                    .children(vec![
-                    ].into_iter().map(|(title, desc, enabled): (&str, &str, bool)| {
-                        h_flex()
-                            .p_4()
-                            .rounded_md()
-                            .border_1()
-                            .border_color(theme.border)
-                            .bg(theme.secondary)
-                            .justify_between()
-                            .items_center()
-                            .child(
-                                v_flex()
-                                    .child(div().font_weight(gpui::FontWeight::SEMIBOLD).child(title))
-                                    .child(div().text_sm().text_color(theme.muted_foreground).child(desc))
-                            )
-                            .child(
-                                div()
-                                    .w(px(40.))
-                                    .h(px(20.))
-                                    .rounded_full()
-                                    .bg(if enabled { theme.primary } else { theme.muted_foreground })
-                            )
-                    }))
-            )
+
+        v_flex().size_full().gap_4().child(
+            v_flex().flex_1().gap_4().children(vec![].into_iter().map(
+                |(title, desc, enabled): (&str, &str, bool)| {
+                    h_flex()
+                        .p_4()
+                        .rounded_md()
+                        .border_1()
+                        .border_color(theme.border)
+                        .bg(theme.secondary)
+                        .justify_between()
+                        .items_center()
+                        .child(
+                            v_flex()
+                                .child(div().font_weight(gpui::FontWeight::SEMIBOLD).child(title))
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(theme.muted_foreground)
+                                        .child(desc),
+                                ),
+                        )
+                        .child(div().w(px(40.)).h(px(20.)).rounded_full().bg(if enabled {
+                            theme.primary
+                        } else {
+                            theme.muted_foreground
+                        }))
+                },
+            )),
+        )
     }
 
     fn render_setting_row(&self, label: &str, value: &str, cx: &Context<Self>) -> impl IntoElement {
@@ -273,32 +376,42 @@ impl OrchestrationPanel {
             .border_b_1()
             .border_color(theme.border)
             .child(div().child(label.to_string()))
-            .child(div().font_weight(gpui::FontWeight::SEMIBOLD).text_color(theme.primary).child(value.to_string()))
+            .child(
+                div()
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_color(theme.primary)
+                    .child(value.to_string()),
+            )
     }
 
     fn render_mode_transition(&self, cx: &Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
-        
-        v_flex()
-            .size_full()
-            .gap_4()
-            .child(
-                v_flex()
-                    .flex_1()
-                    .gap_4()
-                    .p_4()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(theme.border)
-                    .bg(theme.background)
-                    .child(
-                        h_flex().justify_between().items_center()
-                            .child(div().font_weight(gpui::FontWeight::SEMIBOLD).child("Trigger Manual Transition"))
-                    )
-            )
+
+        v_flex().size_full().gap_4().child(
+            v_flex()
+                .flex_1()
+                .gap_4()
+                .p_4()
+                .rounded_md()
+                .border_1()
+                .border_color(theme.border)
+                .bg(theme.background)
+                .child(
+                    h_flex().justify_between().items_center().child(
+                        div()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child("Trigger Manual Transition"),
+                    ),
+                ),
+        )
     }
 
-    fn open_transition_dialog(&self, target_mode: &str, window: &mut Window, cx: &mut Context<Self>) {
+    fn open_transition_dialog(
+        &self,
+        target_mode: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let view = cx.entity().clone();
         let target_mode_owned = target_mode.to_string();
 

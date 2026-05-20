@@ -425,7 +425,6 @@
 
 <body>
 
-    <!-- Sidebar -->
     <div id="sidebar">
         <div id="ui-layer">
             <div class="panel-header"><span class="panel-title">Agent Workspace</span></div>
@@ -444,13 +443,11 @@
         </div>
     </div>
 
-    <!-- Main area -->
     <div id="right-col">
         <div id="canvas-wrap">
             <canvas id="gameCanvas"></canvas>
         </div>
 
-        <!-- Chat panel -->
         <div id="chat-panel">
             <div id="chat-agents"></div>
             <div id="chat-window">
@@ -495,18 +492,16 @@
         window.addEventListener('resize', resize);
         resize();
 
-        // ── Palette (upgraded dark version) ──
+        // ── Palette (upgraded dark version with flat colors for areas) ──
         const COLORS = {
             bg: '#0a0a12',
             wallTop: '#1a1a2e',
             wallFront: '#13131f',
             wallAccent: '#252540',
-            floorWood1: '#2a1f17',
-            floorWood2: '#231a12',
-            floorBlue1: '#0f1e35',
-            floorBlue2: '#0c1a2e',
-            floorCheck1: '#1c1c2e',
-            floorCheck2: '#171724',
+            floorDevRoom: '#1e191b',
+            floorLounge: '#0c1a2e',
+            floorManager: '#131321',
+            floorKitchen: '#16161f',
             deskTop: '#5c3d2a',
             deskBase: '#3d2b1f',
             deskEdge: '#7a5238',
@@ -531,29 +526,33 @@
             shelfWood: '#3d2a18',
         };
 
-        // ── Map (identical to original) ──
+        // ── Map (Sửa lại ma trận để giới hạn tường không bị thò ra rìa ngoài) ──
         const map = [];
         for (let y = 0; y < MAP_ROWS; y++) {
             map[y] = [];
             for (let x = 0; x < MAP_COLS; x++) {
-                if (y === 1 || y === MAP_ROWS - 2 || x === 1 || x === MAP_COLS - 2) {
+                // Chỉ đặt tường (1) nằm gọn trong khoảng từ index 1 đến MAP_COLS - 2 và MAP_ROWS - 2
+                if ((y === 1 || y === MAP_ROWS - 2) && (x >= 1 && x <= MAP_COLS - 2)) {
+                    map[y][x] = 1;
+                } else if ((x === 1 || x === MAP_COLS - 2) && (y >= 1 && y <= MAP_ROWS - 2)) {
                     map[y][x] = 1;
                 } else if (x === 12 || x === 22) {
                     if (y >= 6 && y <= 9) map[y][x] = (x < 15) ? 2 : 3;
-                    else map[y][x] = 1;
-                } else if (x > 1 && x < 12) {
+                    else if (y > 1 && y < MAP_ROWS - 2) map[y][x] = 1; // Tường trong không vượt biên trên/dưới
+                    else map[y][x] = 0;
+                } else if (x > 1 && x < 12 && y > 1 && y < MAP_ROWS - 2) {
                     map[y][x] = 2;
-                } else if (x > 12 && x < 22) {
+                } else if (x > 12 && x < 22 && y > 1 && y < MAP_ROWS - 2) {
                     map[y][x] = (y > 9) ? 4 : 3;
-                } else if (x > 22 && x < MAP_COLS - 2) {
+                } else if (x > 22 && x < MAP_COLS - 2 && y > 1 && y < MAP_ROWS - 2) {
                     map[y][x] = 3;
                 } else {
-                    map[y][x] = 0;
+                    map[y][x] = 0; // Không gian bên ngoài rìa ngoài hoàn toàn trống (màu nền tối)
                 }
             }
         }
 
-        // ── Props (identical to original) ──
+        // ── Props ──
         const props = [
             { type: 'bookshelf', x: 4, y: 2, w: 3, h: 1 },
             { type: 'bookshelf', x: 8, y: 2, w: 3, h: 1 },
@@ -591,38 +590,28 @@
                 for (let x = 0; x < MAP_COLS; x++) {
                     const t = map[y][x];
                     const px = x * TILE_SIZE, py = y * TILE_SIZE;
-                    const even = (x + y) % 2 === 0;
 
                     if (t === 1) {
+                        // TƯỜNG PHẲNG KHÔNG KẺ Ô: Đã loại bỏ vạch kẻ dọc trắng mờ (px, py, 1, TILE_SIZE)
                         ctx.fillStyle = COLORS.wallTop;
                         ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE * 0.55);
                         ctx.fillStyle = COLORS.wallFront;
                         ctx.fillRect(px, py + TILE_SIZE * 0.55, TILE_SIZE, TILE_SIZE * 0.45);
                         ctx.fillStyle = COLORS.wallAccent;
                         ctx.fillRect(px, py + TILE_SIZE * 0.52, TILE_SIZE, 3);
-                        ctx.fillStyle = 'rgba(255,255,255,0.02)';
-                        ctx.fillRect(px, py, 1, TILE_SIZE);
                     } else if (t === 2) {
-                        ctx.fillStyle = even ? COLORS.floorWood1 : COLORS.floorWood2;
+                        ctx.fillStyle = COLORS.floorDevRoom;
                         ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
-                        ctx.strokeStyle = 'rgba(100,60,20,0.3)';
-                        ctx.lineWidth = 1; ctx.globalAlpha = 0.35;
-                        ctx.beginPath();
-                        ctx.moveTo(px + 4, py); ctx.lineTo(px + 4, py + TILE_SIZE);
-                        ctx.moveTo(px + 18, py); ctx.lineTo(px + 18, py + TILE_SIZE);
-                        ctx.stroke(); ctx.globalAlpha = 1;
                     } else if (t === 3) {
-                        ctx.fillStyle = even ? COLORS.floorBlue1 : COLORS.floorBlue2;
+                        if (x > 22) {
+                            ctx.fillStyle = COLORS.floorManager;
+                        } else {
+                            ctx.fillStyle = COLORS.floorLounge;
+                        }
                         ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
-                        ctx.strokeStyle = 'rgba(100,140,255,0.06)';
-                        ctx.lineWidth = 1;
-                        ctx.strokeRect(px + 0.5, py + 0.5, TILE_SIZE - 1, TILE_SIZE - 1);
                     } else if (t === 4) {
-                        ctx.fillStyle = even ? COLORS.floorCheck1 : COLORS.floorCheck2;
+                        ctx.fillStyle = COLORS.floorKitchen;
                         ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
-                        ctx.strokeStyle = 'rgba(150,150,255,0.06)';
-                        ctx.lineWidth = 1;
-                        ctx.strokeRect(px + 0.5, py + 0.5, TILE_SIZE - 1, TILE_SIZE - 1);
                     }
                 }
             }
@@ -771,13 +760,11 @@
             const time = Date.now() / 1000;
 
             agents.forEach(a => {
-                // Smooth lerp (original)
                 a.x += (a.tx - a.x) * 0.1;
                 a.y += (a.ty - a.y) * 0.1;
 
                 const px = a.x * TILE_SIZE, py = a.y * TILE_SIZE;
 
-                // Bob (original)
                 let bob = 0;
                 if (a.status === 'coding') bob = Math.sin(time * 10) * 2;
                 else if (a.status === 'communicating') bob = Math.sin(time * 3) * 3;
@@ -787,45 +774,33 @@
                 const bx = px + 20, by = py + 20 + bob;
                 const sc = getStatusColor(a.status);
 
-                // Shadow
                 ctx.fillStyle = 'rgba(0,0,0,0.3)';
                 ctx.beginPath(); ctx.ellipse(bx, py + 38, 12, 4, 0, 0, Math.PI * 2); ctx.fill();
 
-                // Aura
                 ctx.fillStyle = sc + '14';
                 ctx.beginPath(); ctx.ellipse(bx, by + 6, 17, 21, 0, 0, Math.PI * 2); ctx.fill();
 
-                // Legs
                 ctx.fillStyle = '#1a1a2e';
                 ctx.fillRect(bx - 7, by + 10, 5, 11); ctx.fillRect(bx + 2, by + 10, 5, 11);
-                // Shoes
                 ctx.fillStyle = a.color;
                 ctx.fillRect(bx - 9, by + 19, 7, 4); ctx.fillRect(bx + 2, by + 19, 7, 4);
-                // Body
                 ctx.fillStyle = a.color + 'cc'; ctx.fillRect(bx - 9, by - 2, 18, 12);
                 ctx.fillStyle = 'rgba(255,255,255,0.1)'; ctx.fillRect(bx - 7, by, 14, 3);
-                // Arms
                 ctx.fillStyle = a.color + 'aa';
                 ctx.fillRect(bx - 13, by, 5, 9); ctx.fillRect(bx + 8, by, 5, 9);
                 ctx.fillStyle = '#fde8d0';
                 ctx.fillRect(bx - 13, by + 8, 5, 4); ctx.fillRect(bx + 8, by + 8, 5, 4);
-                // Neck
                 ctx.fillStyle = '#fde8d0'; ctx.fillRect(bx - 3, by - 6, 6, 5);
-                // Head
                 ctx.fillStyle = '#fde8d0'; ctx.fillRect(bx - 9, by - 20, 18, 15);
-                // Hair
                 ctx.fillStyle = a.color;
                 ctx.fillRect(bx - 11, by - 24, 22, 10);
                 ctx.fillRect(bx - 11, by - 14, 4, 7); ctx.fillRect(bx + 7, by - 14, 4, 7);
-                // Eyes
                 ctx.fillStyle = '#0a0a14';
                 ctx.fillRect(bx - 6, by - 16, 4, 4); ctx.fillRect(bx + 2, by - 16, 4, 4);
                 ctx.fillStyle = 'rgba(255,255,255,0.7)';
                 ctx.fillRect(bx - 5, by - 15, 2, 2); ctx.fillRect(bx + 3, by - 15, 2, 2);
-                // Mouth
                 ctx.fillStyle = '#c0706a'; ctx.fillRect(bx - 2, by - 10, 4, 2);
 
-                // ── Name tag ──
                 const tagY = py - 6 + bob * 0.4;
                 ctx.font = 'bold 9px "Space Mono"'; ctx.textAlign = 'center';
                 const nw = ctx.measureText(a.name).width;
@@ -844,18 +819,15 @@
                 ctx.strokeStyle = sc + '44'; ctx.lineWidth = 1; ctx.stroke();
                 ctx.fillStyle = sc; ctx.fillText(a.status, bx, tagY + 12);
 
-                // ── Chat bubble (original logic) ──
                 if (a.message && a.messageTimer && Date.now() < a.messageTimer) {
                     ctx.font = '11px "Space Mono"';
                     let msg = a.message.length > 28 ? a.message.substring(0, 25) + '...' : a.message;
                     const mw = ctx.measureText(msg).width + 18;
 
-                    // Bubble
                     ctx.fillStyle = 'rgba(8,8,18,0.92)';
                     roundRect(ctx, bx - mw / 2, tagY - 36, mw, 22, 6); ctx.fill();
                     ctx.strokeStyle = a.color + '66'; ctx.lineWidth = 1; ctx.stroke();
 
-                    // Tail
                     ctx.fillStyle = 'rgba(8,8,18,0.92)';
                     ctx.beginPath();
                     ctx.moveTo(bx - 5, tagY - 14); ctx.lineTo(bx, tagY - 8); ctx.lineTo(bx + 5, tagY - 14);
@@ -865,7 +837,6 @@
                     ctx.moveTo(bx - 5, tagY - 14); ctx.lineTo(bx, tagY - 8); ctx.lineTo(bx + 5, tagY - 14);
                     ctx.stroke();
 
-                    // Text
                     ctx.fillStyle = a.color;
                     ctx.fillText(msg, bx, tagY - 20);
                 }
@@ -892,7 +863,6 @@
                 list.appendChild(li);
             });
 
-            // Rebuild chat agent buttons (guard: only if chat system ready)
             if (typeof initChatAgents === 'function') initChatAgents();
         }
 
@@ -911,9 +881,7 @@
             drawAgents();
         }
 
-        // ─────────────────────────────────────────────
-        // ORIGINAL IPC — kept exactly as-is
-        // ─────────────────────────────────────────────
+        // ── ORIGINAL IPC ──
         window.updateAgents = function (agentsJson) {
             try {
                 const parsed = typeof agentsJson === 'string' ? JSON.parse(agentsJson) : agentsJson;
@@ -935,7 +903,6 @@
                         } else {
                             existing.status = incoming.status || 'idle';
                             if (incoming.name) existing.name = incoming.name;
-                            // Note: real messages come via window.pushChatMessage, not here
                         }
                     });
                     agents = agents.filter(a => parsed.some(p => p.id === a.id));
@@ -944,11 +911,10 @@
             } catch (e) { console.error('Error parsing agents data:', e); }
         };
 
-        // Initialize
         updateUI();
         loop();
 
-        // ── Drag & Drop (original) ──
+        // ── Drag & Drop ──
         let draggedAgent = null;
         canvas.addEventListener('mousedown', e => {
             const rect = canvas.getBoundingClientRect();
@@ -968,10 +934,7 @@
         });
         canvas.addEventListener('mouseup', () => draggedAgent = null);
 
-        // ─────────────────────────────────────────────
-        // CHAT SYSTEM — driven by real Rust data
-        // ─────────────────────────────────────────────
-
+        // ── CHAT SYSTEM ──
         function getChatHistory(id) {
             if (!chatHistories[id]) chatHistories[id] = [];
             return chatHistories[id];
@@ -1021,10 +984,7 @@
             const el = document.createElement('div');
             el.className = 'chat-msg' + (msg.self ? ' self' : '');
             if (!animate) el.style.animation = 'none';
-            // Show agent name label for non-self messages
-            const nameLabel = (!msg.self && msg.agentName)
-                ? `<div class="chat-msg-agent">${msg.agentName}</div>`
-                : '';
+            const nameLabel = (!msg.self && msg.agentName) ? `<div class="chat-msg-agent">${msg.agentName}</div>` : '';
             el.innerHTML = `<div class="chat-bubble">${nameLabel}${msg.text}<div class="chat-msg-time">${msg.time}</div></div>`;
             box.appendChild(el);
             box.scrollTop = box.scrollHeight;
@@ -1040,27 +1000,17 @@
             if (chatSelectedId === agentId) appendBubble(msg, true);
         }
 
-        // ── IPC: Called from Rust to push a real chat message ──
-        // agentId   : agent's ID (used to route into per-agent history)
-        // text      : message content
-        // isSelf    : true = user message (right bubble), false = agent reply (left bubble)
-        // agentName : display name shown above agent bubble
         window.pushChatMessage = function (agentId, text, isSelf, agentName) {
             try {
-                // If agentId is unknown (e.g. "user" message), route to first agent
-                const targetId = agents.find(a => a.id === agentId)
-                    ? agentId
-                    : (agents[0] ? agents[0].id : null);
+                const targetId = agents.find(a => a.id === agentId) ? agentId : (agents[0] ? agents[0].id : null);
                 if (!targetId) return;
 
-                // Show typing indicator for agent replies
                 if (!isSelf && chatSelectedId === targetId) {
                     document.getElementById('chat-typing').textContent = '';
                 }
 
                 addChatMessage(targetId, text, !!isSelf, agentName || '');
 
-                // Update bubble on canvas briefly
                 const a = agents.find(x => x.id === targetId);
                 if (a && !isSelf) {
                     a.message = text;
@@ -1092,8 +1042,6 @@
             }
         });
         document.getElementById('chat-send').addEventListener('click', () => sendOfficeChat());
-        document.getElementById('chat-input').placeholder = 'Message agent...';
-        document.getElementById('chat-send').style.opacity = '1';
     </script>
 </body>
 

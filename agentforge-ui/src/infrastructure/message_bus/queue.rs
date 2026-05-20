@@ -43,7 +43,7 @@ impl MessageQueue {
         if *size >= self.config.max_size {
             return Err("Queue is full. Backpressure applied.".to_string());
         }
-        
+
         match self.sender.send(message).await {
             Ok(_) => {
                 *size += 1;
@@ -74,7 +74,7 @@ impl MessageQueue {
         while let Some(msg) = self.dequeue().await {
             let mut attempt = 0;
             let mut success = false;
-            
+
             while attempt < self.config.retry_limit {
                 match processor(msg.clone()).await {
                     Ok(_) => {
@@ -88,9 +88,12 @@ impl MessageQueue {
                     }
                 }
             }
-            
+
             if !success {
-                eprintln!("Message {} failed after {} attempts.", msg.id, self.config.retry_limit);
+                eprintln!(
+                    "Message {} failed after {} attempts.",
+                    msg.id, self.config.retry_limit
+                );
                 // In a real system, we'd send this to a dead letter queue (DLQ)
             }
         }

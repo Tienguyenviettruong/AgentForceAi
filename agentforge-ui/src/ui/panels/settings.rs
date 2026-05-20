@@ -7,9 +7,33 @@ use gpui_component::{
     dock::{Panel, PanelEvent, TitleStyle},
     group_box::GroupBoxVariant,
     setting::{SettingField, SettingGroup, SettingItem, SettingPage, Settings as GpuiSettings},
-    theme::{ActiveTheme, ThemeMode},
-    Sizable, Size,
+    theme::ActiveTheme,
+    Sizable, Size, ThemeRegistry,
 };
+
+fn setting_or_env(cx: &App, key: &str, env_key: &str, default: &str) -> SharedString {
+    AppState::global(cx)
+        .db
+        .get_setting(key)
+        .unwrap_or_default()
+        .filter(|v| !v.trim().is_empty())
+        .or_else(|| std::env::var(env_key).ok().filter(|v| !v.trim().is_empty()))
+        .unwrap_or_else(|| default.to_string())
+        .into()
+}
+
+fn setting_only(cx: &App, key: &str) -> SharedString {
+    AppState::global(cx)
+        .db
+        .get_setting(key)
+        .unwrap_or_default()
+        .unwrap_or_default()
+        .into()
+}
+
+fn save_setting(cx: &mut App, key: &str, value: SharedString) {
+    let _ = AppState::global(cx).db.set_setting(key, value.as_ref());
+}
 
 pub struct SettingsPanel {
     focus_handle: gpui::FocusHandle,
@@ -20,9 +44,10 @@ pub struct SettingsPanel {
 impl SettingsPanel {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let custom_provider = cx.new(|cx| CustomProviderSection::new(window, cx));
-        
+
         let db = AppState::global(cx).db.clone();
-        let vault_path = db.get_setting("obsidian_vault_path")
+        let vault_path = db
+            .get_setting("obsidian_vault_path")
             .unwrap_or_default()
             .unwrap_or_else(|| "~/Documents/Obsidian/AgentForge".to_string())
             .into();
@@ -130,43 +155,184 @@ impl Render for SettingsPanel {
                             ])
                     ]),
 
+                SettingPage::new("Output Tools")
+                    .groups(vec![
+                        SettingGroup::new()
+                            .title("External Output Services")
+                            .items(vec![
+                                SettingItem::new(
+                                    "Image Service URL",
+                                    SettingField::input(
+                                        |cx: &App| {
+                                            setting_or_env(
+                                                cx,
+                                                "output_image_endpoint",
+                                                "AGENTFORGE_IMAGE_OUTPUT_URL",
+                                                "https://api.openai.com/v1/images/generations",
+                                            )
+                                        },
+                                        |val: SharedString, cx: &mut App| {
+                                            save_setting(cx, "output_image_endpoint", val);
+                                        },
+                                    )
+                                )
+                                .description("OpenAI Images/DALL-E-compatible endpoint or a custom image service."),
+
+                                SettingItem::new(
+                                    "Image Model",
+                                    SettingField::input(
+                                        |cx: &App| {
+                                            setting_or_env(
+                                                cx,
+                                                "output_image_model",
+                                                "AGENTFORGE_IMAGE_OUTPUT_MODEL",
+                                                "gpt-image-1",
+                                            )
+                                        },
+                                        |val: SharedString, cx: &mut App| {
+                                            save_setting(cx, "output_image_model", val);
+                                        },
+                                    )
+                                )
+                                .description("Default model sent by the generate_image tool."),
+
+                                SettingItem::new(
+                                    "Image API Key",
+                                    SettingField::input(
+                                        |cx: &App| setting_only(cx, "output_image_api_key"),
+                                        |val: SharedString, cx: &mut App| {
+                                            save_setting(cx, "output_image_api_key", val);
+                                        },
+                                    )
+                                )
+                                .description("Optional. If empty, generate_image also checks AGENTFORGE_IMAGE_OUTPUT_API_KEY and OPENAI_API_KEY."),
+
+                                SettingItem::new(
+                                    "PDF Service URL",
+                                    SettingField::input(
+                                        |cx: &App| {
+                                            setting_or_env(
+                                                cx,
+                                                "output_pdf_endpoint",
+                                                "AGENTFORGE_PDF_OUTPUT_URL",
+                                                "",
+                                            )
+                                        },
+                                        |val: SharedString, cx: &mut App| {
+                                            save_setting(cx, "output_pdf_endpoint", val);
+                                        },
+                                    )
+                                )
+                                .description("External PDF renderer endpoint, for example a pdfkit service."),
+
+                                SettingItem::new(
+                                    "PDF API Key",
+                                    SettingField::input(
+                                        |cx: &App| setting_only(cx, "output_pdf_api_key"),
+                                        |val: SharedString, cx: &mut App| {
+                                            save_setting(cx, "output_pdf_api_key", val);
+                                        },
+                                    )
+                                )
+                                .description("Optional bearer token for the PDF service."),
+
+                                SettingItem::new(
+                                    "Video Service URL",
+                                    SettingField::input(
+                                        |cx: &App| {
+                                            setting_or_env(
+                                                cx,
+                                                "output_video_endpoint",
+                                                "AGENTFORGE_VIDEO_OUTPUT_URL",
+                                                "",
+                                            )
+                                        },
+                                        |val: SharedString, cx: &mut App| {
+                                            save_setting(cx, "output_video_endpoint", val);
+                                        },
+                                    )
+                                )
+                                .description("External video renderer endpoint."),
+
+                                SettingItem::new(
+                                    "Video API Key",
+                                    SettingField::input(
+                                        |cx: &App| setting_only(cx, "output_video_api_key"),
+                                        |val: SharedString, cx: &mut App| {
+                                            save_setting(cx, "output_video_api_key", val);
+                                        },
+                                    )
+                                )
+                                .description("Optional bearer token for the video service."),
+
+                                SettingItem::new(
+                                    "Output Directory",
+                                    SettingField::input(
+                                        |cx: &App| {
+                                            setting_or_env(
+                                                cx,
+                                                "output_tools_dir",
+                                                "AGENTFORGE_OUTPUT_TOOLS_DIR",
+                                                "outputs",
+                                            )
+                                        },
+                                        |val: SharedString, cx: &mut App| {
+                                            save_setting(cx, "output_tools_dir", val);
+                                        },
+                                    )
+                                )
+                                .description("Relative paths are stored under the selected workspace."),
+                            ])
+                    ]),
+
                 SettingPage::new("User Preferences")
                     .groups(vec![
                         SettingGroup::new()
                             .title("Appearance & UI")
                             .items(vec![
                                 SettingItem::new(
-                                    "Theme Mode",
+                                    "Theme",
                                     SettingField::dropdown(
-                                        vec![
-                                            ("system".into(), "System".into()),
-                                            ("dark".into(), "Dark".into()),
-                                            ("light".into(), "Light".into()),
-                                        ],
+                                        {
+                                            let registry = ThemeRegistry::global(_cx);
+                                            let mut theme_names: Vec<SharedString> =
+                                                registry.themes().keys().cloned().collect();
+                                            theme_names.sort();
+                                            theme_names
+                                                .into_iter()
+                                                .map(|name| (name.clone(), name))
+                                                .collect()
+                                        },
                                         |cx: &App| {
-                                            if cx.theme().mode.is_dark() {
-                                                "dark".into()
-                                            } else {
-                                                "light".into()
-                                            }
+                                            crate::AppState::global(cx)
+                                                .db
+                                                .get_setting("theme")
+                                                .unwrap_or_default()
+                                                .map(SharedString::from)
+                                                .unwrap_or_else(|| cx.theme().theme_name().clone())
                                         },
                                         |val: SharedString, cx: &mut App| {
-                                            let mode = match val.as_ref() {
-                                                "dark" => ThemeMode::Dark,
-                                                "light" => ThemeMode::Light,
-                                                _ => ThemeMode::Light,
-                                            };
-                                            gpui_component::Theme::change(mode, None, cx);
-                                            
-                                            // Also save the mode itself to ensure it's persisted correctly
-                                            let mode_str = match mode {
-                                                ThemeMode::Light => "light",
-                                                ThemeMode::Dark => "dark",
-                                            };
-                                            if let Err(e) = crate::AppState::global(cx).db.set_setting("theme_mode", mode_str) {
-                                                eprintln!("Failed to save theme mode string to DB from settings: {}", e);
+                                            if let Some(theme_config) =
+                                                ThemeRegistry::global(cx).themes().get(&val).cloned()
+                                            {
+                                                gpui_component::Theme::global_mut(cx)
+                                                    .apply_config(&theme_config);
+
+                                                let db = &crate::AppState::global(cx).db;
+                                                if let Err(e) = db.set_setting("theme", val.as_ref()) {
+                                                    eprintln!("Failed to save theme from settings: {}", e);
+                                                }
+
+                                                let mode_str = if theme_config.mode.is_dark() {
+                                                    "dark"
+                                                } else {
+                                                    "light"
+                                                };
+                                                if let Err(e) = db.set_setting("theme_mode", mode_str) {
+                                                    eprintln!("Failed to save theme mode from settings: {}", e);
+                                                }
                                             }
-                                            
+
                                             cx.refresh_windows();
                                         },
                                     )

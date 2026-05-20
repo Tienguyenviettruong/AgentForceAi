@@ -46,18 +46,20 @@ impl<'a> DependencyManager<'a> {
         let mut stmt = self.conn.prepare(
             "SELECT COUNT(*) FROM task_dependencies td
              JOIN tasks t ON td.depends_on_task_id = t.id
-             WHERE td.task_id = ?1 AND t.status != 'completed'"
+             WHERE td.task_id = ?1 AND t.status != 'completed'",
         )?;
-        
+
         let pending_deps: i64 = stmt.query_row(params![task_id], |row| row.get(0))?;
         Ok(pending_deps == 0)
     }
 
     /// Get all tasks that depend on the given task
     pub fn get_dependent_tasks(&self, task_id: &str) -> Result<Vec<String>> {
-        let mut stmt = self.conn.prepare("SELECT task_id FROM task_dependencies WHERE depends_on_task_id = ?1")?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT task_id FROM task_dependencies WHERE depends_on_task_id = ?1")?;
         let iter = stmt.query_map(params![task_id], |row| row.get(0))?;
-        
+
         let mut tasks = Vec::new();
         for t in iter {
             tasks.push(t?);

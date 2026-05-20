@@ -1,13 +1,14 @@
 use crate::core::traits::database::DatabasePort;
+use crate::db::Agent;
 use gpui::{
-    div, px, App, Context, EventEmitter, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, ParentElement, Render, Styled, Window, StatefulInteractiveElement,
+    div, px, App, Context, EventEmitter, FocusHandle, Focusable, InteractiveElement, IntoElement,
+    ParentElement, Render, StatefulInteractiveElement, Styled, Window,
 };
 use gpui_component::{
+    button::{Button, ButtonVariants},
     dock::{Panel, PanelEvent, TitleStyle},
-    ActiveTheme as _, button::{Button, ButtonVariants}, IconName, h_flex, v_flex,
+    h_flex, v_flex, ActiveTheme as _, IconName,
 };
-use crate::db::Agent;
 
 pub struct AgentsPanel {
     focus_handle: FocusHandle,
@@ -32,7 +33,6 @@ impl AgentsPanel {
         }
         cx.notify();
     }
-
 }
 
 impl Panel for AgentsPanel {
@@ -74,8 +74,14 @@ impl Render for AgentsPanel {
                     .label("Create Agent")
                     .on_click(cx.listener(|_this, _, window, cx| {
                         let db = crate::AppState::global(cx).db.clone();
-                        crate::ui::components::dialogs::open_new_agent_dialog(db, cx.entity().clone(), window, cx, |view: &mut AgentsPanel, cx: &mut Context<AgentsPanel>| view.reload(cx));
-                    }))
+                        crate::ui::components::dialogs::open_new_agent_dialog(
+                            db,
+                            cx.entity().clone(),
+                            window,
+                            cx,
+                            |view: &mut AgentsPanel, cx: &mut Context<AgentsPanel>| view.reload(cx),
+                        );
+                    })),
             );
 
         if self.agents.is_empty() {
@@ -99,9 +105,14 @@ impl Render for AgentsPanel {
                                 .items_center()
                                 .justify_center()
                                 .text_color(theme.muted_foreground)
-                                .child(IconName::Bot)
+                                .child(IconName::Bot),
                         )
-                        .child(div().text_size(px(16.)).text_color(theme.muted_foreground).child("No agents exist."))
+                        .child(
+                            div()
+                                .text_size(px(16.))
+                                .text_color(theme.muted_foreground)
+                                .child("No agents exist."),
+                        )
                         .child(
                             Button::new("create-agent-empty")
                                 .primary()
@@ -109,9 +120,17 @@ impl Render for AgentsPanel {
                                 .label("Create Agent")
                                 .on_click(cx.listener(|_this, _, window, cx| {
                                     let db = crate::AppState::global(cx).db.clone();
-                                    crate::ui::components::dialogs::open_new_agent_dialog(db, cx.entity().clone(), window, cx, |view: &mut AgentsPanel, cx: &mut Context<AgentsPanel>| view.reload(cx));
-                                }))
-                        )
+                                    crate::ui::components::dialogs::open_new_agent_dialog(
+                                        db,
+                                        cx.entity().clone(),
+                                        window,
+                                        cx,
+                                        |view: &mut AgentsPanel, cx: &mut Context<AgentsPanel>| {
+                                            view.reload(cx)
+                                        },
+                                    );
+                                })),
+                        ),
                 )
         } else {
             v_flex()

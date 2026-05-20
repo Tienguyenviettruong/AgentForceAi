@@ -48,7 +48,7 @@ impl Profiler {
     pub async fn get_average_duration(&self, name: &str) -> Option<Duration> {
         let records = self.records.lock().ok()?;
         let traces = records.get(name)?;
-        
+
         let valid_traces: Vec<_> = traces.iter().filter_map(|r| r.duration).collect();
         if valid_traces.is_empty() {
             return None;

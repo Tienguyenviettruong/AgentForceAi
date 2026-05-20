@@ -1,4 +1,6 @@
-use gpui::{div, InteractiveElement, IntoElement, RenderOnce, ParentElement, Window, App, SharedString};
+use gpui::{
+    div, App, InteractiveElement, IntoElement, ParentElement, RenderOnce, SharedString, Window,
+};
 
 pub trait AccessibleExt: IntoElement + Sized {
     fn aria_label(self, label: impl Into<String>) -> AccessibleElement {
@@ -30,7 +32,10 @@ impl AccessibleElement {
 impl RenderOnce for AccessibleElement {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
         if let Some(label) = self.label {
-            div().id(SharedString::from(label)).child(self.child).into_any_element()
+            div()
+                .id(SharedString::from(label))
+                .child(self.child)
+                .into_any_element()
         } else {
             div().child(self.child).into_any_element()
         }

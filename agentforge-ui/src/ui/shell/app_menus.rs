@@ -14,12 +14,10 @@ pub fn init(
 
     cx.set_menus(build_menus(title.clone(), cx));
 
-    
-
     AppMenuBar::new(window, cx)
 }
 
-fn build_menus(title: impl Into<SharedString>, cx: &App) -> Vec<Menu> {
+pub fn build_theme_menu_items(cx: &App) -> Vec<MenuItem> {
     // Collect available themes from the registry
     let registry = ThemeRegistry::global(cx);
     let mut theme_items: Vec<MenuItem> = Vec::new();
@@ -44,21 +42,25 @@ fn build_menus(title: impl Into<SharedString>, cx: &App) -> Vec<Menu> {
         theme_items.push(MenuItem::action(name.to_string(), SwitchTheme(action_name)));
     }
 
+    theme_items
+}
+
+pub fn build_app_menu_items(cx: &App) -> Vec<MenuItem> {
     vec![
-        Menu {
-            name: title.into(),
-            items: vec![
-                MenuItem::action("About AgentForgeAI", About),
-                MenuItem::Separator,
-                MenuItem::action("Open...", Open),
-                MenuItem::Separator,
-                MenuItem::action("Quit AgentForgeAI", Quit),
-                MenuItem::Submenu(Menu {
-                    name: "Themes".into(),
-                    items: theme_items,
-                }),
-            ],
-        },
+        MenuItem::action("About AgentForgeAI", About),
+        MenuItem::Separator,
+        MenuItem::action("Open...", Open),
+        MenuItem::Separator,
+        MenuItem::action("Quit AgentForgeAI", Quit),
+        MenuItem::Submenu(Menu {
+            name: "Themes".into(),
+            items: build_theme_menu_items(cx),
+        }),
+    ]
+}
+
+fn build_menus(_title: impl Into<SharedString>, _cx: &App) -> Vec<Menu> {
+    vec![
         Menu {
             name: "Edit".into(),
             items: vec![

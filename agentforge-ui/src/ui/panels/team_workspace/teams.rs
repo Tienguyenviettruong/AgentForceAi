@@ -9,6 +9,36 @@ use gpui_component::{h_flex, ActiveTheme as _, IconName};
 use super::TeamWorkspacePanel;
 
 impl TeamWorkspacePanel {
+    fn template_avatar_initials(name: &str) -> String {
+        let mut words = name.split_whitespace().filter(|word| !word.is_empty());
+        let first = words.next().and_then(|word| word.chars().next());
+        let second = words.next().and_then(|word| word.chars().next());
+
+        match (first, second) {
+            (Some(a), Some(b)) => format!("{}{}", a, b).to_uppercase(),
+            (Some(_), None) => name.chars().take(2).collect::<String>().to_uppercase(),
+            _ => "?".to_string(),
+        }
+    }
+
+    fn template_avatar_color(seed: &str) -> gpui::Hsla {
+        let palette = [
+            gpui::blue(),
+            gpui::green(),
+            gpui::red(),
+            gpui::yellow(),
+            gpui::Hsla::from(gpui::rgb(0x8b5cf6)),
+            gpui::Hsla::from(gpui::rgb(0x0ea5e9)),
+            gpui::Hsla::from(gpui::rgb(0x14b8a6)),
+            gpui::Hsla::from(gpui::rgb(0xf97316)),
+        ];
+        let idx = seed
+            .bytes()
+            .fold(0usize, |acc, byte| acc.wrapping_add(byte as usize))
+            % palette.len();
+        palette[idx]
+    }
+
     pub(crate) fn render_template_view(&self, cx: &Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
 
@@ -22,7 +52,9 @@ impl TeamWorkspacePanel {
             .unwrap_or_else(|| "Select a template".to_string());
 
         let agents = if let Some(team) = team {
-            self.team_service.get_team_agents(&team.id).unwrap_or_default()
+            self.team_service
+                .get_team_agents(&team.id)
+                .unwrap_or_default()
         } else {
             vec![]
         };
@@ -351,6 +383,34 @@ impl TeamWorkspacePanel {
     ) -> impl IntoElement {
         let id_str = team.id.clone();
         let is_selected = self.selected_team_id.as_deref() == Some(id_str.as_str());
+        let agents = self
+            .team_service
+            .get_team_agents(&team.id)
+            .unwrap_or_default();
+        let visible_agents: Vec<_> = agents.iter().take(3).collect();
+        let overflow_count = agents.len().saturating_sub(visible_agents.len());
+
+        let mut avatar_stack = h_flex().items_center();
+        for (idx, agent) in visible_agents.iter().enumerate() {
+            let color = Self::template_avatar_color(&agent.id);
+            avatar_stack = avatar_stack.child(
+                div()
+                    .w(px(18.))
+                    .h(px(18.))
+                    .rounded_full()
+                    .border(px(1.))
+                    .border_color(theme.background)
+                    .bg(color.opacity(0.22))
+                    .text_color(color)
+                    .text_size(px(9.))
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .when(idx > 0, |d| d.ml(px(-5.)))
+                    .child(Self::template_avatar_initials(&agent.name)),
+            );
+        }
 
         div()
             .id(SharedString::from(id_str.clone()))
@@ -396,39 +456,25 @@ impl TeamWorkspacePanel {
                     )
                     .child(
                         h_flex()
-                            .child(
-                                h_flex()
-                                    .child(
-                                        div()
-                                            .w(px(12.))
-                                            .h(px(12.))
-                                            .rounded_full()
-                                            .bg(gpui::blue()),
-                                    )
-                                    .child(
-                                        div()
-                                            .w(px(12.))
-                                            .h(px(12.))
-                                            .rounded_full()
-                                            .bg(gpui::green())
-                                            .ml(px(-4.)),
-                                    )
-                                    .child(
-                                        div()
-                                            .w(px(12.))
-                                            .h(px(12.))
-                                            .rounded_full()
-                                            .bg(gpui::Hsla::from(gpui::rgb(0xffa500)))
-                                            .ml(px(-4.)),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(12.))
-                                    .text_color(theme.muted_foreground)
-                                    .child("+1")
-                                    .ml(px(4.)),
-                            ),
+                            .items_center()
+                            .child(avatar_stack)
+                            .when(overflow_count > 0, |d| {
+                                d.child(
+                                    div()
+                                        .text_size(px(12.))
+                                        .text_color(theme.muted_foreground)
+                                        .child(format!("+{}", overflow_count))
+                                        .ml(px(4.)),
+                                )
+                            })
+                            .when(agents.is_empty(), |d| {
+                                d.child(
+                                    div()
+                                        .text_size(px(12.))
+                                        .text_color(theme.muted_foreground)
+                                        .child("0"),
+                                )
+                            }),
                     ),
             )
             .when(team.description.is_some(), |d| {

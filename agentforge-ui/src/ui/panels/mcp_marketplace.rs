@@ -1,19 +1,19 @@
-use gpui::EventEmitter;
-use gpui::{div, px, App, AppContext, Context, Focusable, IntoElement, ParentElement, Render, Styled, Window};
 use gpui::prelude::FluentBuilder;
+use gpui::EventEmitter;
+use gpui::{
+    div, px, App, AppContext, Context, Focusable, IntoElement, ParentElement, Render, Styled,
+    Window,
+};
 use gpui_component::dock::PanelEvent;
 use gpui_component::dock::{Panel, TitleStyle};
 use gpui_component::{
-    h_flex,
-    input::{Input, InputState},
     button::Button,
     button::ButtonVariants,
     form::{field, v_form},
-    v_flex,
+    h_flex,
+    input::{Input, InputState},
     theme::ActiveTheme,
-    WindowExt,
-    Sizable,
-    Disableable,
+    v_flex, Disableable, Sizable, WindowExt,
 };
 use std::collections::HashMap;
 use std::process::Stdio;
@@ -139,7 +139,7 @@ impl Render for McpMarketplacePanel {
         let bg = theme.background;
         let db = crate::AppState::global(cx).db.clone();
         let tools = db.list_mcp_tools().unwrap_or_default();
-        
+
         v_flex()
             .size_full()
             .bg(theme.background)

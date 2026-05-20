@@ -1,11 +1,11 @@
 use anyhow::Result;
-use fastembed::{TextEmbedding, InitOptions, EmbeddingModel};
-use std::sync::Mutex;
+use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use once_cell::sync::Lazy;
+use std::sync::Mutex;
 
 static GLOBAL_MODEL: Lazy<Mutex<TextEmbedding>> = Lazy::new(|| {
     let model = TextEmbedding::try_new(
-        InitOptions::new(EmbeddingModel::AllMiniLML6V2).with_show_download_progress(true)
+        InitOptions::new(EmbeddingModel::AllMiniLML6V2).with_show_download_progress(true),
     )
     .expect("Failed to initialize fastembed model");
     Mutex::new(model)
@@ -37,16 +37,18 @@ impl EmbeddingProvider {
                     .lock()
                     .map_err(|e| anyhow::anyhow!("Mutex poisoned: {}", e))
                     .and_then(|mut model| {
-                        model.embed(vec![text], None)
+                        model
+                            .embed(vec![text], None)
                             .map_err(|e| anyhow::anyhow!("Embedding failed: {}", e))
                     });
                 let _ = tx.send(result);
             })
             .map_err(|e| anyhow::anyhow!("Failed to spawn embedding thread: {}", e))?;
 
-        let embeddings = rx.await
+        let embeddings = rx
+            .await
             .map_err(|_| anyhow::anyhow!("Embedding thread dropped sender"))??;
-        
+
         if let Some(embedding) = embeddings.into_iter().next() {
             Ok(embedding)
         } else {

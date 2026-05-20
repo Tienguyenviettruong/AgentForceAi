@@ -172,6 +172,7 @@ const PANEL_RESEARCH_NOTEBOOK: &str = "ResearchNotebook";
 pub fn init(cx: &mut App) {
     // 1. Initialize gpui-component (THE required first call)
     gpui_component::init(cx);
+    crate::ui::text::init(cx);
 
     // 2. Initialize global state
     AppState::init(cx);
@@ -182,13 +183,15 @@ pub fn init(cx: &mut App) {
     if let Err(e) = AppState::global(cx).db.seed_sdg_team() {
         eprintln!("Failed to seed SDG team: {}", e);
     }
-    let _ = AppState::global(cx).db.create_role(&crate::teams::role::Role {
-        id: "admin-role-123".to_string(),
-        team_id: "sdg-team-123".to_string(),
-        name: "Admin".to_string(),
-        permissions: Some("[\"all\"]".to_string()),
-        capabilities: Some("[\"all\"]".to_string()),
-    });
+    let _ = AppState::global(cx)
+        .db
+        .create_role(&crate::teams::role::Role {
+            id: "admin-role-123".to_string(),
+            team_id: "sdg-team-123".to_string(),
+            name: "Admin".to_string(),
+            permissions: Some("[\"all\"]".to_string()),
+            capabilities: Some("[\"all\"]".to_string()),
+        });
 
     let vault_path = std::env::var("AGENTFORGE_OBSIDIAN_VAULT").ok().or_else(|| {
         AppState::global(cx)
@@ -222,7 +225,10 @@ pub fn init(cx: &mut App) {
 
         // Start Worker Manager
         let worker_manager = std::sync::Arc::new(
-            crate::application::orchestration::worker::WorkerManager::new(state.db.clone(), state.team_bus.clone())
+            crate::application::orchestration::worker::WorkerManager::new(
+                state.db.clone(),
+                state.team_bus.clone(),
+            ),
         );
         let wm_clone = worker_manager.clone();
         state.tokio_runtime.spawn(async move {
@@ -273,6 +279,16 @@ pub fn init(cx: &mut App) {
     // 5. Register key bindings
     cx.bind_keys([
         KeyBinding::new("/", ToggleSearch, None),
+        KeyBinding::new(
+            "ctrl-enter",
+            gpui_component::input::Enter { secondary: true },
+            Some("Input"),
+        ),
+        KeyBinding::new(
+            "shift-enter",
+            gpui_component::input::Enter { secondary: true },
+            Some("Input"),
+        ),
         KeyBinding::new("cmd-n", NewTeam, None),
         KeyBinding::new("cmd-shift-n", NewAgent, None),
         #[cfg(target_os = "macos")]
@@ -299,10 +315,19 @@ pub fn init(cx: &mut App) {
             .cloned()
         {
             gpui_component::Theme::global_mut(cx).apply_config(&theme_config);
-            
+
             // Save selected theme to DB
-            if let Err(e) = AppState::global(cx).db.set_setting("theme", name.as_ref()) {
+            let db = &AppState::global(cx).db;
+            if let Err(e) = db.set_setting("theme", name.as_ref()) {
                 eprintln!("Failed to save theme to DB: {}", e);
+            }
+            let mode_str = if theme_config.mode.is_dark() {
+                "dark"
+            } else {
+                "light"
+            };
+            if let Err(e) = db.set_setting("theme_mode", mode_str) {
+                eprintln!("Failed to save theme mode string to DB: {}", e);
             }
         }
         cx.refresh_windows();
@@ -310,7 +335,7 @@ pub fn init(cx: &mut App) {
 
     cx.on_action(|switch: &SwitchThemeMode, cx: &mut App| {
         gpui_component::Theme::change(switch.0, None, cx);
-        
+
         // Also save the mode itself to ensure it's persisted correctly
         let mode_str = match switch.0 {
             gpui_component::ThemeMode::Light => "light",
@@ -319,7 +344,7 @@ pub fn init(cx: &mut App) {
         if let Err(e) = AppState::global(cx).db.set_setting("theme_mode", mode_str) {
             eprintln!("Failed to save theme mode string to DB: {}", e);
         }
-        
+
         cx.refresh_windows();
     });
 }
@@ -685,7 +710,7 @@ impl Render for MainWindow {
                                             .left(px(0.))
                                             .right(px(0.))
                                             .bottom(px(0.))
-                                            .child(dock.clone())
+                                            .child(dock.clone()),
                                     )
                                     .into_any_element()
                             } else {

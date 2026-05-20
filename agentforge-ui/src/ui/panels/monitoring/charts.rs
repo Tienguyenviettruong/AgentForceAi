@@ -21,25 +21,21 @@ impl BarChart {
 
     pub fn render(self, cx: &App) -> impl IntoElement {
         let theme = cx.theme();
-        
-        let max_val = self
-            .data
-            .iter()
-            .map(|d| d.value)
-            .fold(0.0f32, f32::max);
-        
+
+        let max_val = self.data.iter().map(|d| d.value).fold(0.0f32, f32::max);
+
         let mut bars = div().flex().items_end().gap_2().h(gpui::px(150.0)).w_full();
-        
+
         for item in &self.data {
             let height_pct = if max_val > 0.0 {
                 item.value / max_val
             } else {
                 0.0
             };
-            
+
             // Map height pct to pixel height (max 150px)
             let height_px = height_pct * 150.0;
-            
+
             bars = bars.child(
                 div()
                     .flex()
@@ -53,9 +49,8 @@ impl BarChart {
                             .w_full()
                             .h(gpui::px(height_px))
                             .bg(theme.accent)
-                            .rounded_t_sm()
-                            // tooltips need an ID to track state, but for a simple render we skip it or use gpui_component::tooltip if we can
-                    )
+                            .rounded_t_sm(), // tooltips need an ID to track state, but for a simple render we skip it or use gpui_component::tooltip if we can
+                    ),
             );
         }
 
@@ -73,7 +68,7 @@ impl BarChart {
                     .text_size(gpui::px(16.0))
                     .font_weight(gpui::FontWeight::BOLD)
                     .mb_4()
-                    .child(self.title.clone())
+                    .child(self.title.clone()),
             )
             .child(bars)
     }

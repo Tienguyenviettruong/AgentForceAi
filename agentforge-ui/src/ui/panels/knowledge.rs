@@ -1,16 +1,16 @@
-use gpui::EventEmitter;
 use crate::core::traits::database::DatabasePort;
-use gpui::{StatefulInteractiveElement, Entity, 
-    canvas, div, px, App, AppContext, Context, Focusable, InteractiveElement, IntoElement, ParentElement, Render,
-    Styled, Window,
+use crate::ui::text::TextView;
+use gpui::EventEmitter;
+use gpui::{
+    canvas, div, px, App, AppContext, Context, Entity, Focusable, InteractiveElement, IntoElement,
+    ParentElement, Render, StatefulInteractiveElement, Styled, Window,
 };
 use gpui_component::dock::PanelEvent;
 use gpui_component::dock::{Panel, TitleStyle};
-use gpui_component::{ActiveTheme as _, Icon, IconName, Placement, WindowExt as _, scroll::ScrollableElement, v_flex};
-use gpui_component::text::TextView;
+use gpui_component::{scroll::ScrollableElement as _, v_flex, ActiveTheme as _, Icon, IconName};
+use std::collections::HashSet;
 use std::sync::Arc;
 use urlencoding::encode;
-use std::collections::HashSet;
 
 pub struct KnowledgePanel {
     focus_handle: gpui::FocusHandle,
@@ -45,16 +45,21 @@ struct TreeNode {
 }
 
 impl TreeNode {
-    fn render(&self, panel: &KnowledgePanel, depth: usize, current_path: &str, cx: &Context<KnowledgePanel>) -> gpui::AnyElement {
+    fn render(
+        &self,
+        panel: &KnowledgePanel,
+        depth: usize,
+        current_path: &str,
+        cx: &Context<KnowledgePanel>,
+    ) -> gpui::AnyElement {
         use gpui::IntoElement;
-        
-        
-        
+
         let mut container = gpui::div().flex_col();
-        
+
         if self.is_file {
             if let Some(id) = self.item_id {
-                container = container.child(panel.render_tree_file(self.name.clone(), id, depth, cx));
+                container =
+                    container.child(panel.render_tree_file(self.name.clone(), id, depth, cx));
             }
         } else {
             if depth > 0 {
@@ -72,7 +77,7 @@ impl TreeNode {
                 }
             }
         }
-        
+
         // Render children
         let next_depth = if self.is_file { depth } else { depth + 1 };
         for child in self.children.values() {
@@ -83,16 +88,27 @@ impl TreeNode {
             };
             container = container.child(child.render(panel, next_depth, &child_path, cx));
         }
-        
+
         container.into_any_element()
     }
 }
 
 impl KnowledgePanel {
     fn preprocess_obsidian_markdown(input: &str) -> String {
+        let normalized = input
+            .replace("0\u{fe0f}\u{20e3}", "0.")
+            .replace("1\u{fe0f}\u{20e3}", "1.")
+            .replace("2\u{fe0f}\u{20e3}", "2.")
+            .replace("3\u{fe0f}\u{20e3}", "3.")
+            .replace("4\u{fe0f}\u{20e3}", "4.")
+            .replace("5\u{fe0f}\u{20e3}", "5.")
+            .replace("6\u{fe0f}\u{20e3}", "6.")
+            .replace("7\u{fe0f}\u{20e3}", "7.")
+            .replace("8\u{fe0f}\u{20e3}", "8.")
+            .replace("9\u{fe0f}\u{20e3}", "9.");
         let mut out = String::new();
         let mut in_code = false;
-        for line in input.replace('\r', "").split('\n') {
+        for line in normalized.replace('\r', "").split('\n') {
             if line.trim_start().starts_with("```") {
                 in_code = !in_code;
                 out.push_str(line);
@@ -179,135 +195,153 @@ impl KnowledgePanel {
         }
 
         let obsidian_watcher = Arc::new(std::sync::Mutex::new(None));
-        
+
         if !initial_vault.is_empty() {
-            if let Ok(watcher) = crate::infrastructure::fs::obsidian_adapter::ObsidianWatcher::start_sync(
-                db.clone(),
-                std::path::PathBuf::from(initial_vault),
-                tokio_runtime.clone(),
-            ) {
+            if let Ok(watcher) =
+                crate::infrastructure::fs::obsidian_adapter::ObsidianWatcher::start_sync(
+                    db.clone(),
+                    std::path::PathBuf::from(initial_vault),
+                    tokio_runtime.clone(),
+                )
+            {
                 *obsidian_watcher.lock().unwrap() = Some(watcher);
             }
         }
 
         // Auto-refresh background task
-        cx.spawn(async move |view, cx| {
-            loop {
-                cx.background_executor().timer(std::time::Duration::from_secs(3)).await;
-                if crate::ui::framework::reentrancy::office_webview_init_in_progress() {
-                    continue;
-                }
-                if cx.update(|cx| {
+        cx.spawn(async move |view, cx| loop {
+            cx.background_executor()
+                .timer(std::time::Duration::from_secs(3))
+                .await;
+            if crate::ui::framework::reentrancy::office_webview_init_in_progress() {
+                continue;
+            }
+            if cx
+                .update(|cx| {
                     let _ = view.update(cx, |this: &mut Self, cx| {
                         this.reload_items(cx);
                     });
-                }).is_err() {
-                    break;
-                }
+                })
+                .is_err()
+            {
+                break;
             }
-        }).detach();
+        })
+        .detach();
 
         // Physics tick
         cx.spawn(async move |view, cx| {
             loop {
-                cx.background_executor().timer(std::time::Duration::from_millis(16)).await;
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(16))
+                    .await;
                 if crate::ui::framework::reentrancy::office_webview_init_in_progress() {
                     continue;
                 }
-                if cx.update(|cx| {
-                    let _ = view.update(cx, |this: &mut Self, cx| {
-                        if this.node_positions.is_empty() { return; }
-                        
-                        let n = this.items.len();
-                        if this.node_positions.len() != n || this.node_velocities.len() != n {
-                            return; // Length mismatch, wait for render to re-initialize
-                        }
-                        let mut edges = Vec::new();
-                        for (i, item) in this.items.iter().enumerate() {
-                            let content = &item.content;
-                            for (j, other_item) in this.items.iter().enumerate() {
-                                if i != j {
-                                    let link_str = format!("[[{}]]", other_item.title);
-                                    if content.contains(&link_str) {
-                                        edges.push((i, j));
+                if cx
+                    .update(|cx| {
+                        let _ = view.update(cx, |this: &mut Self, cx| {
+                            if this.node_positions.is_empty() {
+                                return;
+                            }
+
+                            let n = this.items.len();
+                            if this.node_positions.len() != n || this.node_velocities.len() != n {
+                                return; // Length mismatch, wait for render to re-initialize
+                            }
+                            let mut edges = Vec::new();
+                            for (i, item) in this.items.iter().enumerate() {
+                                let content = &item.content;
+                                for (j, other_item) in this.items.iter().enumerate() {
+                                    if i != j {
+                                        let link_str = format!("[[{}]]", other_item.title);
+                                        if content.contains(&link_str) {
+                                            edges.push((i, j));
+                                        }
                                     }
                                 }
                             }
-                        }
-                        
-                        let k = 100.0; // Optimal distance
-                        let c = 0.1;   // Repulsion constant
-                        let dt = 0.05; // Time step
-                        let damping = 0.85; // Damping
-                        
-                        for i in 0..n {
-                            let mut fx = 0.0;
-                            let mut fy = 0.0;
-                            
-                            let p1 = this.node_positions[i];
-                            
-                            // Repulsion from all other nodes
-                            for j in 0..n {
-                                if i == j { continue; }
+
+                            let k = 100.0; // Optimal distance
+                            let c = 0.1; // Repulsion constant
+                            let dt = 0.05; // Time step
+                            let damping = 0.85; // Damping
+
+                            for i in 0..n {
+                                let mut fx = 0.0;
+                                let mut fy = 0.0;
+
+                                let p1 = this.node_positions[i];
+
+                                // Repulsion from all other nodes
+                                for j in 0..n {
+                                    if i == j {
+                                        continue;
+                                    }
+                                    let p2 = this.node_positions[j];
+                                    let dx = p1.x - p2.x;
+                                    let dy = p1.y - p2.y;
+                                    let dist_sq = dx * dx + dy * dy;
+                                    let dist = dist_sq.sqrt().max(1.0);
+
+                                    let force = c * (k * k) / dist;
+                                    fx += force * (dx / dist);
+                                    fy += force * (dy / dist);
+                                }
+
+                                // Attraction to center
+                                fx -= p1.x * 0.05;
+                                fy -= p1.y * 0.05;
+
+                                this.node_velocities[i].x += fx * dt;
+                                this.node_velocities[i].y += fy * dt;
+                            }
+
+                            // Attraction along edges
+                            for (i, j) in edges {
+                                let p1 = this.node_positions[i];
                                 let p2 = this.node_positions[j];
-                                let dx = p1.x - p2.x;
-                                let dy = p1.y - p2.y;
-                                let dist_sq = dx * dx + dy * dy;
-                                let dist = dist_sq.sqrt().max(1.0);
-                                
-                                let force = c * (k * k) / dist;
-                                fx += force * (dx / dist);
-                                fy += force * (dy / dist);
+                                let dx = p2.x - p1.x;
+                                let dy = p2.y - p1.y;
+                                let dist = (dx * dx + dy * dy).sqrt().max(1.0);
+
+                                let force = (dist * dist) / k;
+                                let fx = force * (dx / dist) * 0.05;
+                                let fy = force * (dy / dist) * 0.05;
+
+                                this.node_velocities[i].x += fx * dt;
+                                this.node_velocities[i].y += fy * dt;
+                                this.node_velocities[j].x -= fx * dt;
+                                this.node_velocities[j].y -= fy * dt;
                             }
-                            
-                            // Attraction to center
-                            fx -= p1.x * 0.05;
-                            fy -= p1.y * 0.05;
-                            
-                            this.node_velocities[i].x += fx * dt;
-                            this.node_velocities[i].y += fy * dt;
-                        }
-                        
-                        // Attraction along edges
-                        for (i, j) in edges {
-                            let p1 = this.node_positions[i];
-                            let p2 = this.node_positions[j];
-                            let dx = p2.x - p1.x;
-                            let dy = p2.y - p1.y;
-                            let dist = (dx * dx + dy * dy).sqrt().max(1.0);
-                            
-                            let force = (dist * dist) / k;
-                            let fx = force * (dx / dist) * 0.05;
-                            let fy = force * (dy / dist) * 0.05;
-                            
-                            this.node_velocities[i].x += fx * dt;
-                            this.node_velocities[i].y += fy * dt;
-                            this.node_velocities[j].x -= fx * dt;
-                            this.node_velocities[j].y -= fy * dt;
-                        }
-                        
-                        let mut moved = false;
-                        for i in 0..n {
-                            this.node_velocities[i].x *= damping;
-                            this.node_velocities[i].y *= damping;
-                            
-                            if this.node_velocities[i].x.abs() > 0.1 || this.node_velocities[i].y.abs() > 0.1 {
-                                moved = true;
+
+                            let mut moved = false;
+                            for i in 0..n {
+                                this.node_velocities[i].x *= damping;
+                                this.node_velocities[i].y *= damping;
+
+                                if this.node_velocities[i].x.abs() > 0.1
+                                    || this.node_velocities[i].y.abs() > 0.1
+                                {
+                                    moved = true;
+                                }
+
+                                this.node_positions[i].x += this.node_velocities[i].x * dt;
+                                this.node_positions[i].y += this.node_velocities[i].y * dt;
                             }
-                            
-                            this.node_positions[i].x += this.node_velocities[i].x * dt;
-                            this.node_positions[i].y += this.node_velocities[i].y * dt;
-                        }
-                        
-                        if moved {
-                            cx.notify();
-                        }
-                    });
-                }).is_err() {
+
+                            if moved {
+                                cx.notify();
+                            }
+                        });
+                    })
+                    .is_err()
+                {
                     break;
                 }
             }
-        }).detach();
+        })
+        .detach();
 
         Self {
             focus_handle: cx.focus_handle(),
@@ -335,7 +369,7 @@ impl KnowledgePanel {
             },
         }
     }
-    
+
     pub fn reload_items(&mut self, cx: &mut Context<Self>) {
         if let Ok(items) = self.knowledge_service.get_all_knowledge_items() {
             self.items = items;
@@ -363,14 +397,17 @@ impl KnowledgePanel {
             .rounded_md()
             .hover(|s| s.bg(theme.secondary))
             .cursor_pointer()
-            .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, _event, _window, cx| {
-                if this.expanded_dirs.contains(&dir_key) {
-                    this.expanded_dirs.remove(&dir_key);
-                } else {
-                    this.expanded_dirs.insert(dir_key.clone());
-                }
-                cx.notify();
-            }))
+            .on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(move |this, _event, _window, cx| {
+                    if this.expanded_dirs.contains(&dir_key) {
+                        this.expanded_dirs.remove(&dir_key);
+                    } else {
+                        this.expanded_dirs.insert(dir_key.clone());
+                    }
+                    cx.notify();
+                }),
+            )
             .child(
                 div()
                     .flex()
@@ -393,12 +430,22 @@ impl KnowledgePanel {
         self.expanded_dirs.contains(dir_key)
     }
 
-    fn render_tree_file(&self, label: String, item_id: uuid::Uuid, depth: usize, cx: &Context<Self>) -> impl IntoElement {
+    fn render_tree_file(
+        &self,
+        label: String,
+        item_id: uuid::Uuid,
+        depth: usize,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
         let theme = cx.theme();
-        
+
         let is_selected = self.selected_item.as_ref().is_some_and(|i| i.id == item_id);
-        let bg_color = if is_selected { theme.secondary } else { gpui::transparent_black() };
-        
+        let bg_color = if is_selected {
+            theme.secondary
+        } else {
+            gpui::transparent_black()
+        };
+
         div()
             .id(gpui::ElementId::Name(format!("file-{}", item_id).into()))
             .flex()
@@ -411,35 +458,16 @@ impl KnowledgePanel {
             .bg(bg_color)
             .hover(|s| s.bg(theme.secondary))
             .cursor_pointer()
-            .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, _event, window, cx| {
-                if let Some(item) = this.items.iter().find(|i| i.id == item_id) {
-                    this.selected_item = Some(item.clone());
-                    
-                    let title = item.title.clone();
-                    let content_text = gpui::SharedString::from(Self::preprocess_obsidian_markdown(&item.content));
-                    
-                    window.open_sheet_at(Placement::Right, cx, move |sheet, window, cx| {
-                        sheet.title(title.clone()).size(px(800.)).child(
-                            gpui::div()
-                                .flex_1()
-                                .w_full()
-                                .overflow_y_scrollbar()
-                                .child(
-                                    TextView::markdown(
-                                        ("knowledge-sheet", 0usize),
-                                        content_text.clone(),
-                                        window,
-                                        cx,
-                                    )
-                                    .p_6()
-                                    .selectable(true),
-                                )
-                        )
-                    });
-                    
-                    cx.notify();
-                }
-            }))
+            .on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(move |this, _event, _window, cx| {
+                    if let Some(item) = this.items.iter().find(|i| i.id == item_id) {
+                        this.selected_item = Some(item.clone());
+                        this.selected_node_idx = this.items.iter().position(|i| i.id == item_id);
+                        cx.notify();
+                    }
+                }),
+            )
             .child(
                 Icon::new(IconName::File)
                     .size(px(14.))
@@ -470,22 +498,44 @@ impl KnowledgePanel {
                     .flex()
                     .flex_col()
                     .gap_2()
-                    .child(div().text_xs().text_color(theme.muted_foreground).child("Obsidian Vault"))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child("Obsidian Vault"),
+                    )
                     .child(div().text_xs().child(display_path))
-                    .child(div().text_xs().text_color(theme.muted_foreground).child("(Configure in Settings)"))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child("(Configure in Settings)"),
+                    ),
             )
             .child({
                 let mut file_list = div()
                     .flex_1()
                     .p_2()
-                    .id("scroll-sheet").overflow_y_scroll()
+                    .id("scroll-sheet")
+                    .overflow_y_scroll()
                     .flex_col()
                     .gap_1()
-                    .child(self.render_tree_item(IconName::Folder, "Vault Root".to_string(), self.is_dir_expanded(""), 0, "".to_string(), cx));
-                    
+                    .child(self.render_tree_item(
+                        IconName::Folder,
+                        "Vault Root".to_string(),
+                        self.is_dir_expanded(""),
+                        0,
+                        "".to_string(),
+                        cx,
+                    ));
+
                 if self.items.is_empty() {
                     file_list = file_list.child(
-                        div().text_sm().text_color(theme.muted_foreground).p_2().child("No documents synced yet.")
+                        div()
+                            .text_sm()
+                            .text_color(theme.muted_foreground)
+                            .p_2()
+                            .child("No documents synced yet."),
                     );
                 } else {
                     let mut root = TreeNode::default();
@@ -495,7 +545,7 @@ impl KnowledgePanel {
                     if let Ok(p) = vault_root_path.canonicalize() {
                         vault_root_path = p;
                     }
-                    
+
                     for item in &self.items {
                         let rel_path = if let Some(abs_path_str) = &item.vault_path {
                             let mut abs_path = std::path::PathBuf::from(abs_path_str);
@@ -519,24 +569,29 @@ impl KnowledgePanel {
                         } else {
                             std::path::PathBuf::from(format!("{}.md", item.title))
                         };
-                        
-                        let components: Vec<_> = rel_path.components()
+
+                        let components: Vec<_> = rel_path
+                            .components()
                             .map(|c| c.as_os_str().to_string_lossy().to_string())
                             .collect();
-                            
+
                         let mut current = &mut root;
                         for (i, comp) in components.iter().enumerate() {
                             let is_last = i == components.len() - 1;
-                            let node = current.children.entry(comp.clone()).or_insert_with(|| TreeNode {
-                                name: comp.clone(),
-                                is_file: is_last,
-                                item_id: if is_last { Some(item.id) } else { None },
-                                children: BTreeMap::new(),
-                            });
+                            let node =
+                                current
+                                    .children
+                                    .entry(comp.clone())
+                                    .or_insert_with(|| TreeNode {
+                                        name: comp.clone(),
+                                        is_file: is_last,
+                                        item_id: if is_last { Some(item.id) } else { None },
+                                        children: BTreeMap::new(),
+                                    });
                             current = node;
                         }
                     }
-                    
+
                     for child in root.children.values() {
                         if self.is_dir_expanded("") {
                             let child_path = child.name.clone();
@@ -544,31 +599,31 @@ impl KnowledgePanel {
                         }
                     }
                 }
-                
+
                 file_list
             })
     }
 
-            fn render_graph_visualization(&mut self, cx: &Context<Self>) -> impl IntoElement {
+    fn render_graph_visualization(&mut self, cx: &Context<Self>) -> impl IntoElement {
         use gpui::{canvas, point};
-        
+
         let theme = cx.theme();
         let border_color = theme.border;
         let base_node_color = gpui::hsla(0.0, 0.0, 0.5, 1.0); // Gray color
         let highlight_node_color = theme.accent;
         let text_color = theme.foreground;
         let muted_text_color = theme.muted_foreground;
-        
+
         // Build graph data
         let mut nodes = Vec::new();
         let mut edges = Vec::new();
-        
+
         for item in &self.items {
             nodes.push((item.id, item.title.clone()));
         }
-        
+
         let n = nodes.len();
-        
+
         // Very basic link extraction [[Link]]
         for (i, item) in self.items.iter().enumerate() {
             let content = &item.content;
@@ -581,11 +636,11 @@ impl KnowledgePanel {
                 }
             }
         }
-        
+
         let pan = self.graph_pan;
         let zoom = self.graph_zoom;
         let hovered_idx = self.hovered_node;
-        
+
         // Use physics positions
         if self.node_positions.len() != n {
             let mut pos = Vec::with_capacity(n);
@@ -622,7 +677,7 @@ impl KnowledgePanel {
         }
 
         let node_positions = self.node_positions.clone();
-        
+
         // We want the graph centered.
         let center_offset_x = 400.0;
         let center_offset_y = 300.0;
@@ -787,29 +842,11 @@ impl KnowledgePanel {
                                             .bg(color)
                                             .cursor_pointer()
                                             .hover(|s| s.bg(highlight_node_color))
-                                            .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, e: &gpui::MouseDownEvent, window, cx| {
+                                            .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, e: &gpui::MouseDownEvent, _window, cx| {
                                                 if e.click_count == 2 {
                                                     if let Some(item) = this.items.iter().find(|it| it.id == item_id) {
-                                                        let sheet_title = item.title.clone();
-                                                        let content_text = Self::preprocess_obsidian_markdown(&item.content);
-                                                        window.open_sheet_at(Placement::Right, cx, move |sheet, window, cx| {
-                                                            sheet.title(sheet_title.clone()).size(px(800.)).child(
-                                                                div()
-                                                                    .id(("knowledge-sheet", 0usize))
-                                                                    .w_full()
-                                                                    .overflow_y_scrollbar()
-                                                                    .child(
-                                                                        TextView::markdown(
-                                                                            ("knowledge-sheet", 0usize),
-                                                                            gpui::SharedString::from(content_text.clone()),
-                                                                            window,
-                                                                            cx,
-                                                                        )
-                                                                        .p_6()
-                                                                        .selectable(true),
-                                                                    )
-                                                            )
-                                                        });
+                                                        this.selected_item = Some(item.clone());
+                                                        this.selected_node_idx = Some(i);
                                                         cx.notify();
                                                     }
                                                 } else {
@@ -866,12 +903,18 @@ impl KnowledgePanel {
             .border_color(theme.border)
             .rounded_lg()
             .overflow_hidden()
-            .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, e: &gpui::MouseDownEvent, _window, cx| {
-                this.is_panning_minimap = true;
-                let current_pos = gpui::Point { x: e.position.x.into(), y: e.position.y.into() };
-                this.last_mouse_pos = Some(current_pos);
-                cx.notify();
-            }))
+            .on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(|this, e: &gpui::MouseDownEvent, _window, cx| {
+                    this.is_panning_minimap = true;
+                    let current_pos = gpui::Point {
+                        x: e.position.x.into(),
+                        y: e.position.y.into(),
+                    };
+                    this.last_mouse_pos = Some(current_pos);
+                    cx.notify();
+                }),
+            )
             .child(
                 canvas(
                     move |_bounds, _window, _cx| {},
@@ -888,7 +931,10 @@ impl KnowledgePanel {
                             let start_y = bounds.origin.y + cy_offset + gpui::px(pos.y * scale);
 
                             let rect = gpui::Bounds {
-                                origin: gpui::point(start_x - gpui::px(2.0), start_y - gpui::px(2.0)),
+                                origin: gpui::point(
+                                    start_x - gpui::px(2.0),
+                                    start_y - gpui::px(2.0),
+                                ),
                                 size: gpui::size(gpui::px(4.0), gpui::px(4.0)),
                             };
                             window.paint_quad(gpui::fill(rect, gpui::rgba(0x00d4aaff)));
@@ -897,12 +943,13 @@ impl KnowledgePanel {
                         // Viewport rectangle
                         let vp_w = bounds.size.width / zoom;
                         let vp_h = bounds.size.height / zoom;
-                        let vp_x = bounds.origin.x + cx_offset - gpui::px(pan.x * scale) - vp_w / 2.0;
-                        let vp_y = bounds.origin.y + cy_offset - gpui::px(pan.y * scale) - vp_h / 2.0;
+                        let vp_x =
+                            bounds.origin.x + cx_offset - gpui::px(pan.x * scale) - vp_w / 2.0;
+                        let vp_y =
+                            bounds.origin.y + cy_offset - gpui::px(pan.y * scale) - vp_h / 2.0;
 
-                        let mut builder = gpui::PathBuilder::stroke(gpui::px(1.0)).with_style(
-                            gpui::PathStyle::Stroke(gpui::StrokeOptions::default()),
-                        );
+                        let mut builder = gpui::PathBuilder::stroke(gpui::px(1.0))
+                            .with_style(gpui::PathStyle::Stroke(gpui::StrokeOptions::default()));
                         builder.move_to(gpui::point(vp_x, vp_y));
                         builder.line_to(gpui::point(vp_x + vp_w, vp_y));
                         builder.line_to(gpui::point(vp_x + vp_w, vp_y + vp_h));
@@ -1015,6 +1062,89 @@ impl KnowledgePanel {
                     ),
             )
     }
+
+    fn render_markdown_viewer(&self, cx: &Context<Self>) -> gpui::AnyElement {
+        let theme = cx.theme();
+
+        let Some(item) = self.selected_item.as_ref() else {
+            return div().into_any_element();
+        };
+
+        let item_id = item.id;
+        let title = item.title.clone();
+        let content_text =
+            gpui::SharedString::from(Self::preprocess_obsidian_markdown(&item.content));
+
+        div()
+            .w(px(800.))
+            .h_full()
+            .border_l_1()
+            .border_color(theme.border)
+            .bg(theme.background)
+            .flex_col()
+            .min_w(px(0.))
+            .overflow_hidden()
+            .child(
+                div()
+                    .h(px(40.))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .px_4()
+                    .border_b_1()
+                    .border_color(theme.border)
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(theme.foreground)
+                            .child(title),
+                    )
+                    .child(
+                        div()
+                            .p_1()
+                            .rounded_md()
+                            .cursor_pointer()
+                            .hover(|s| s.bg(theme.secondary))
+                            .on_mouse_down(
+                                gpui::MouseButton::Left,
+                                cx.listener(|this, _event, _window, cx| {
+                                    this.selected_item = None;
+                                    this.selected_node_idx = None;
+                                    cx.notify();
+                                }),
+                            )
+                            .child(
+                                Icon::new(IconName::Close)
+                                    .size(px(16.))
+                                    .text_color(theme.muted_foreground),
+                            ),
+                    ),
+            )
+            .child(
+                div()
+                    .id(gpui::ElementId::Name(
+                        format!("knowledge-markdown-scroll-{}", item_id).into(),
+                    ))
+                    .flex_1()
+                    .min_h_0()
+                    .min_w(px(0.))
+                    .overflow_y_scrollbar()
+                    .child(
+                        TextView::markdown(
+                            gpui::ElementId::Name(
+                                format!("knowledge-markdown-preview-{}", item_id).into(),
+                            ),
+                            content_text,
+                        )
+                        .w_full()
+                        .p_6()
+                        .selectable(true),
+                    ),
+            )
+            .into_any_element()
+    }
 }
 
 impl Panel for KnowledgePanel {
@@ -1048,7 +1178,11 @@ impl Render for KnowledgePanel {
             .flex_row()
             .child(self.render_tree_navigation(window, cx))
             .child(self.render_graph_visualization(cx))
-            .child(self.render_analytics_dashboard(cx))
+            .child(if self.selected_item.is_some() {
+                self.render_markdown_viewer(cx)
+            } else {
+                self.render_analytics_dashboard(cx).into_any_element()
+            })
     }
 }
 

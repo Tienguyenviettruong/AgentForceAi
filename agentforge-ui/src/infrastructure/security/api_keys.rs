@@ -1,6 +1,6 @@
+use super::keychain::Keychain;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use super::keychain::Keychain;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiKey {
@@ -34,7 +34,7 @@ impl ApiKeyManager {
     pub async fn delete_key(&self, provider: &str) -> Result<()> {
         self.keychain.delete_secret("api_keys", provider).await
     }
-    
+
     /// Validate an API key structure (basic validation).
     pub async fn validate_key_format(key: &str) -> bool {
         !key.trim().is_empty() && key.len() > 10

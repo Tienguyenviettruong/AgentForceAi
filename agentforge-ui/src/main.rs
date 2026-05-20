@@ -50,7 +50,7 @@ fn main() {
     app.run(move |cx| {
         // Initialize all AgentForgeAI systems (themes, actions, panels, menus)
         init(cx);
-        
+
         // Initialize RoleManager and load roles
         let db = agentforge_ui::AppState::global(cx).db.clone();
         let role_manager = agentforge_ui::application::teams::role::RoleManager::new(db.clone());

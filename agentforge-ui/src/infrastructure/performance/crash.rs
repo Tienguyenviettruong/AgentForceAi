@@ -1,6 +1,6 @@
+use std::panic;
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
-use std::panic;
 
 #[derive(Debug, Clone)]
 pub struct CrashReport {
@@ -23,7 +23,7 @@ impl CrashHandler {
 
     pub fn install_panic_hook(&self) {
         let reports = Arc::clone(&self.reports);
-        
+
         panic::set_hook(Box::new(move |panic_info| {
             let message = if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
                 s.to_string()
@@ -40,7 +40,7 @@ impl CrashHandler {
             };
 
             let full_message = format!("Panic occurred at {}: {}", location, message);
-            
+
             // Note: In a real app we'd capture backtrace using backtrace crate or std::backtrace.
             let backtrace = "Backtrace captured (placeholder)".to_string();
 

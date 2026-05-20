@@ -1,4 +1,4 @@
-use gpui::{div, IntoElement, RenderOnce, ParentElement, Window, App};
+use gpui::{div, App, IntoElement, ParentElement, RenderOnce, Window};
 
 pub struct FadeIn {
     child: gpui::AnyElement,

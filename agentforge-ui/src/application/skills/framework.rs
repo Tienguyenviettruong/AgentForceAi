@@ -1,8 +1,8 @@
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use async_trait::async_trait;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SkillMetadata {
@@ -66,7 +66,10 @@ impl SkillRegistry {
     }
 
     pub async fn execute_skill(&self, id: &str, input: SkillInput) -> Result<SkillOutput, String> {
-        let skill = self.get_skill(id).await.ok_or_else(|| format!("Skill {} not found", id))?;
+        let skill = self
+            .get_skill(id)
+            .await
+            .ok_or_else(|| format!("Skill {} not found", id))?;
         Ok(skill.execute(input).await)
     }
 }

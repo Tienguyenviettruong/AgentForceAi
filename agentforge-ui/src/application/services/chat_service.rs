@@ -34,7 +34,7 @@ impl ChatService {
 
         let mut members_str = String::new();
         let mut my_role = "Agent".to_string();
-        
+
         let conn = self.db.clone();
         if let Ok(agent_ids) = conn.get_instance_agents(instance_id) {
             for aid in agent_ids {
@@ -52,8 +52,9 @@ impl ChatService {
         let agent = self.db.get_agent(agent_id).ok().flatten()?;
         let base_prompt = agent.system_prompt.unwrap_or_default();
 
-        let clean_prompt = base_prompt.replace("SDG team", &format!("{} team", team_name))
-                                      .replace("SDG", &team_name);
+        let clean_prompt = base_prompt
+            .replace("SDG team", &format!("{} team", team_name))
+            .replace("SDG", &team_name);
 
         let dynamic_prompt = format!(
             "--- SYSTEM CONTEXT OVERRIDE ---\n\
@@ -81,7 +82,7 @@ impl ChatService {
     ) -> (Vec<String>, String) {
         let mut files_written = Vec::new();
         let mut current_text = text.to_string();
-        
+
         loop {
             // Handle ```file:<path> — write entire file
             if let Some(start_idx) = current_text.find("```file:") {
@@ -101,7 +102,7 @@ impl ChatService {
                         if std::fs::write(&resolved_path, file_content).is_ok() {
                             files_written.push(resolved_path.to_string_lossy().to_string());
                         }
-                        
+
                         let block_end = start_idx + 8 + newline_idx + 1 + end_idx + 3;
                         current_text = current_text[block_end..].to_string();
                         continue;
@@ -130,9 +131,11 @@ impl ChatService {
 
                             if let Ok(existing_content) = std::fs::read_to_string(&resolved_path) {
                                 if existing_content.contains(find_text) {
-                                    let new_content = existing_content.replacen(find_text, replace_text, 1);
+                                    let new_content =
+                                        existing_content.replacen(find_text, replace_text, 1);
                                     if std::fs::write(&resolved_path, &new_content).is_ok() {
-                                        files_written.push(format!("(edited) {}", resolved_path.display()));
+                                        files_written
+                                            .push(format!("(edited) {}", resolved_path.display()));
                                     }
                                 }
                             }
@@ -146,7 +149,7 @@ impl ChatService {
             }
             break;
         }
-        
+
         (files_written, current_text)
     }
 

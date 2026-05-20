@@ -1,9 +1,9 @@
 use super::{BaseProviderAdapter, ChatMessage, ChatResponse, TokenUsage};
 use anyhow::{anyhow, Result};
+use futures::stream::StreamExt;
 use gpui::SharedString;
 use std::future::Future;
 use std::pin::Pin;
-use futures::stream::StreamExt;
 
 /// OpenCode adapter with configurable command line
 /// (Task 1.25)
@@ -92,7 +92,9 @@ impl BaseProviderAdapter for OpenCodeAdapter {
                 }
 
                 Ok(ChatResponse {
-                    content: SharedString::from(String::from_utf8_lossy(&output.stdout).to_string()),
+                    content: SharedString::from(
+                        String::from_utf8_lossy(&output.stdout).to_string(),
+                    ),
                     token_usage: TokenUsage::default(),
                 })
             };
@@ -114,7 +116,12 @@ impl BaseProviderAdapter for OpenCodeAdapter {
         Box<
             dyn Future<
                     Output = Result<
-                        Box<dyn futures::Stream<Item = Result<crate::providers::StreamChunk, anyhow::Error>> + Send + Unpin>,
+                        Box<
+                            dyn futures::Stream<
+                                    Item = Result<crate::providers::StreamChunk, anyhow::Error>,
+                                > + Send
+                                + Unpin,
+                        >,
                     >,
                 > + Send,
         >,
@@ -138,7 +145,10 @@ impl BaseProviderAdapter for OpenCodeAdapter {
                 {
                     Ok(c) => c,
                     Err(e) => {
-                        let _ = tx.unbounded_send(Err(anyhow!("Failed to spawn opencode command: {}", e)));
+                        let _ = tx.unbounded_send(Err(anyhow!(
+                            "Failed to spawn opencode command: {}",
+                            e
+                        )));
                         return;
                     }
                 };
@@ -151,7 +161,8 @@ impl BaseProviderAdapter for OpenCodeAdapter {
                 let stdout = match child.stdout.take() {
                     Some(s) => s,
                     None => {
-                        let _ = tx.unbounded_send(Err(anyhow!("Failed to capture opencode stdout")));
+                        let _ =
+                            tx.unbounded_send(Err(anyhow!("Failed to capture opencode stdout")));
                         return;
                     }
                 };
@@ -163,19 +174,28 @@ impl BaseProviderAdapter for OpenCodeAdapter {
                         Ok(0) => break,
                         Ok(n) => {
                             let text = String::from_utf8_lossy(&buf[..n]).to_string();
-                            let _ = tx.unbounded_send(Ok(crate::providers::StreamChunk::Text(text)));
+                            let _ =
+                                tx.unbounded_send(Ok(crate::providers::StreamChunk::Text(text)));
                         }
                         Err(e) => {
-                            let _ = tx.unbounded_send(Err(anyhow!("OpenCode stdout read error: {}", e)));
+                            let _ = tx
+                                .unbounded_send(Err(anyhow!("OpenCode stdout read error: {}", e)));
                             break;
                         }
                     }
                 }
 
-                let _ = tx.unbounded_send(Ok(crate::providers::StreamChunk::Done(crate::providers::TokenUsage::default())));
+                let _ = tx.unbounded_send(Ok(crate::providers::StreamChunk::Done(
+                    crate::providers::TokenUsage::default(),
+                )));
             });
 
-            Ok(Box::new(rx) as Box<dyn futures::Stream<Item = Result<crate::providers::StreamChunk, anyhow::Error>> + Send + Unpin>)
+            Ok(Box::new(rx)
+                as Box<
+                    dyn futures::Stream<Item = Result<crate::providers::StreamChunk, anyhow::Error>>
+                        + Send
+                        + Unpin,
+                >)
         })
     }
 

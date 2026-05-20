@@ -20,4 +20,3 @@ pub struct CrossTeamCaseEventRecord {
     pub payload: Option<String>,
     pub created_at: String,
 }
-

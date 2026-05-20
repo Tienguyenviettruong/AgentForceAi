@@ -1,18 +1,22 @@
-use gpui::EventEmitter;
-use gpui::{div, App, AppContext, Context, Entity, Focusable, IntoElement, ParentElement, Render, Styled, Window};
-use gpui_component::dock::PanelEvent;
-use gpui_component::dock::{Panel, TitleStyle};
-use gpui_component::StyledExt;
-use gpui_component::scroll::ScrollableElement;
-use gpui_component::{
-    button::Button,
-    h_flex, v_flex,
-    input::{Input, InputState},
-    theme::ActiveTheme,
-};
-use std::sync::Arc;
 use crate::infrastructure::mcp::ActionRecorder;
 use crate::providers::BaseProviderAdapter;
+use gpui::EventEmitter;
+use gpui::{
+    div, App, AppContext, Context, Entity, Focusable, IntoElement, ParentElement, Render, Styled,
+    Window,
+};
+use gpui_component::dock::PanelEvent;
+use gpui_component::dock::{Panel, TitleStyle};
+use gpui_component::scroll::ScrollableElement;
+use gpui_component::StyledExt;
+use gpui_component::{
+    button::Button,
+    h_flex,
+    input::{Input, InputState},
+    theme::ActiveTheme,
+    v_flex,
+};
+use std::sync::Arc;
 
 pub struct ResearchNotebookPanel {
     focus_handle: gpui::FocusHandle,
@@ -60,10 +64,7 @@ async fn ddg_search(query: &str) -> anyhow::Result<Vec<SearchResult>> {
     let client = reqwest::Client::new();
     let html = client
         .get(&url)
-        .header(
-            "User-Agent",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-        )
+        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
         .send()
         .await?
         .text()
@@ -154,7 +155,7 @@ impl ResearchNotebookPanel {
         let db = crate::AppState::global(cx).db.clone();
         let action_recorder = Arc::new(ActionRecorder::new(db));
         let search_input = cx.new(|cx| InputState::new(_window, cx).placeholder("Search query"));
-        
+
         Self {
             focus_handle: cx.focus_handle(),
             search_query: String::new(),
@@ -202,17 +203,19 @@ impl Render for ResearchNotebookPanel {
             .border_b_1()
             .border_color(theme.border)
             .child(
-                h_flex()
-                    .flex_1()
-                    .child(
-                        div()
-                            .flex_1()
-                            .child(Input::new(&self.search_input).appearance(false)),
-                    ),
+                h_flex().flex_1().child(
+                    div()
+                        .flex_1()
+                        .child(Input::new(&self.search_input).appearance(false)),
+                ),
             )
             .child(
                 Button::new("btn-trigger-search")
-                    .label(if self.is_searching { "Gathering Data..." } else { "Auto-Search via Agent" })
+                    .label(if self.is_searching {
+                        "Gathering Data..."
+                    } else {
+                        "Auto-Search via Agent"
+                    })
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if !this.is_searching {
                             let query = this.search_input.read(cx).text().to_string();
@@ -223,11 +226,11 @@ impl Render for ResearchNotebookPanel {
                             this.is_searching = true;
                             this.search_query = query.clone();
                             cx.notify();
-                            
+
                             let view = cx.entity().clone();
                             let action_recorder = action_recorder.clone();
                             let db = db.clone();
-                            
+
                             cx.spawn(async move |_, cx| {
                                 let results = ddg_search(&query).await.unwrap_or_default();
                                 action_recorder.record_action(
@@ -239,39 +242,48 @@ impl Render for ResearchNotebookPanel {
                                 let provider = db.list_providers().ok().and_then(|ps| {
                                     ps.into_iter().find(|p| p.status == "available")
                                 });
-                                let adapter = provider
-                                    .as_ref()
-                                    .and_then(|p| build_adapter(p));
+                                let adapter = provider.as_ref().and_then(|p| build_adapter(p));
                                 let _ = action_recorder.generate_iflow_and_save(adapter).await;
 
                                 let _ = cx.update(|cx| {
                                     let _ = view.update(cx, |this: &mut Self, cx| {
                                         this.is_searching = false;
                                         this.search_results = results;
-                                        this.scratchpad.push_str("\n\n### Found sources via Agent\n");
+                                        this.scratchpad
+                                            .push_str("\n\n### Found sources via Agent\n");
                                         for r in &this.search_results {
-                                            this.scratchpad.push_str(&format!("- [{}]({}): {}\n", r.title, r.url, r.snippet));
+                                            this.scratchpad.push_str(&format!(
+                                                "- [{}]({}): {}\n",
+                                                r.title, r.url, r.snippet
+                                            ));
                                         }
                                         cx.notify();
                                     });
                                 });
-                            }).detach();
+                            })
+                            .detach();
                         }
-                    }))
+                    })),
             );
 
         let mut results_list = v_flex().w_full().gap_3();
         if self.is_searching {
             results_list = results_list.child(
                 h_flex().w_full().justify_center().py_8().child(
-                    div().text_sm().text_color(theme.muted_foreground).child("Agents are gathering and synthesizing information...")
-                )
+                    div()
+                        .text_sm()
+                        .text_color(theme.muted_foreground)
+                        .child("Agents are gathering and synthesizing information..."),
+                ),
             );
         } else if self.search_results.is_empty() {
             results_list = results_list.child(
                 h_flex().w_full().justify_center().py_8().child(
-                    div().text_sm().text_color(theme.muted_foreground).child("Click 'Auto-Search via Agent' to begin research.")
-                )
+                    div()
+                        .text_sm()
+                        .text_color(theme.muted_foreground)
+                        .child("Click 'Auto-Search via Agent' to begin research."),
+                ),
             );
         } else {
             for result in &self.search_results {
@@ -282,9 +294,27 @@ impl Render for ResearchNotebookPanel {
                         .bg(theme.secondary)
                         .border_1()
                         .border_color(theme.border)
-                        .child(div().text_sm().font_bold().text_color(theme.foreground).child(result.title.clone()))
-                        .child(div().text_xs().text_color(gpui::green()).mt_1().child(result.url.clone()))
-                        .child(div().text_xs().text_color(theme.muted_foreground).mt_2().child(result.snippet.clone()))
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_bold()
+                                .text_color(theme.foreground)
+                                .child(result.title.clone()),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(gpui::green())
+                                .mt_1()
+                                .child(result.url.clone()),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(theme.muted_foreground)
+                                .mt_2()
+                                .child(result.snippet.clone()),
+                        ),
                 );
             }
         }
@@ -296,12 +326,25 @@ impl Render for ResearchNotebookPanel {
             .border_color(theme.border)
             .bg(theme.background)
             .child(
-                v_flex().p_3().border_b_1().border_color(theme.border).bg(theme.secondary).child(
-                    div().text_sm().font_bold().text_color(theme.foreground).child("Web Sources (Intake)")
-                )
+                v_flex()
+                    .p_3()
+                    .border_b_1()
+                    .border_color(theme.border)
+                    .bg(theme.secondary)
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_bold()
+                            .text_color(theme.foreground)
+                            .child("Web Sources (Intake)"),
+                    ),
             )
             .child(
-                div().flex_1().overflow_y_scrollbar().p_4().child(results_list)
+                div()
+                    .flex_1()
+                    .overflow_y_scrollbar()
+                    .p_4()
+                    .child(results_list),
             );
 
         let right_pane = v_flex()
@@ -405,7 +448,11 @@ impl Render for ResearchNotebookPanel {
             .bg(theme.background)
             .child(header)
             .child(
-                h_flex().w_full().flex_1().child(left_pane).child(right_pane)
+                h_flex()
+                    .w_full()
+                    .flex_1()
+                    .child(left_pane)
+                    .child(right_pane),
             )
     }
 }

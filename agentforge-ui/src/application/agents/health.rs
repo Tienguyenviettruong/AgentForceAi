@@ -1,5 +1,5 @@
-use std::time::{Duration, SystemTime};
 use super::lifecycle::{AgentLifecycleManager, AgentStatus};
+use std::time::{Duration, SystemTime};
 
 #[derive(Debug, Clone)]
 pub struct RecoveryPolicy {

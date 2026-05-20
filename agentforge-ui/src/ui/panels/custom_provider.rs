@@ -41,7 +41,7 @@ impl CustomProviderSection {
             .iter()
             .map(|t| SharedString::from(t.label.clone()))
             .collect();
-            
+
         let provider_select = cx.new(|cx| SelectState::new(providers, None, window, cx));
         let model_select =
             cx.new(|cx| SelectState::new(Vec::<SharedString>::new(), None, window, cx));
@@ -71,7 +71,11 @@ impl CustomProviderSection {
                 if let SelectEvent::Confirm(Some(val)) = event {
                     let label = val.as_str();
                     if let Some(template) = provider_templates.iter().find(|t| t.label == label) {
-                        let models: Vec<SharedString> = template.models.iter().map(|m: &String| SharedString::from(m.clone())).collect();
+                        let models: Vec<SharedString> = template
+                            .models
+                            .iter()
+                            .map(|m: &String| SharedString::from(m.clone()))
+                            .collect();
                         let url = sanitize_base_url(&template.default_base_url);
 
                         this.model_select.update(cx, |state, cx| {
@@ -109,7 +113,8 @@ impl CustomProviderSection {
 
         let p_name = provider_name.unwrap().to_string();
         let m_name = model.unwrap().to_string();
-        let adapter = self.provider_templates
+        let adapter = self
+            .provider_templates
             .iter()
             .find(|t| t.label == p_name)
             .map(|t| t.adapter.clone())
@@ -207,7 +212,8 @@ impl Render for CustomProviderSection {
             );
 
             for p in &self.custom_providers {
-                let protocol = self.provider_templates
+                let protocol = self
+                    .provider_templates
                     .iter()
                     .find(|t| t.label == p.provider_name)
                     .map(|t| t.protocol.clone())

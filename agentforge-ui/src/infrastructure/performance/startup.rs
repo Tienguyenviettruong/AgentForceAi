@@ -1,6 +1,6 @@
 use std::future::Future;
-use std::time::Instant;
 use std::sync::Mutex;
+use std::time::Instant;
 
 pub struct StartupOptimizer {
     start_time: Instant,

@@ -1,10 +1,10 @@
 use super::{BaseProviderAdapter, ChatMessage, ChatResponse, TokenUsage};
 use anyhow::{anyhow, Result};
+use futures::stream::StreamExt;
 use gpui::SharedString;
+use std::env;
 use std::future::Future;
 use std::pin::Pin;
-use std::env;
-use futures::stream::StreamExt;
 
 static RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
 
@@ -70,7 +70,7 @@ impl BaseProviderAdapter for ClaudeAdapter {
     ) -> Pin<Box<dyn Future<Output = Result<ChatResponse>> + Send>> {
         let config = self.config.clone();
         let client = self.client.clone();
-        
+
         Box::pin(async move {
             let config = config.ok_or_else(|| anyhow!("Adapter not initialized"))?;
             let api_key = match config.api_key_ref.clone() {
@@ -84,9 +84,12 @@ impl BaseProviderAdapter for ClaudeAdapter {
                     .ok_or_else(|| anyhow!("API key missing (set provider api_key_ref or env ANTHROPIC_AUTH_TOKEN/ANTHROPIC_API_KEY)"))?,
             };
             let model = match config.model.as_str() {
-                "opus" => env::var("ANTHROPIC_DEFAULT_OPUS_MODEL").unwrap_or_else(|_| config.model.clone()),
-                "sonnet" => env::var("ANTHROPIC_DEFAULT_SONNET_MODEL").unwrap_or_else(|_| config.model.clone()),
-                "haiku" => env::var("ANTHROPIC_DEFAULT_HAIKU_MODEL").unwrap_or_else(|_| config.model.clone()),
+                "opus" => env::var("ANTHROPIC_DEFAULT_OPUS_MODEL")
+                    .unwrap_or_else(|_| config.model.clone()),
+                "sonnet" => env::var("ANTHROPIC_DEFAULT_SONNET_MODEL")
+                    .unwrap_or_else(|_| config.model.clone()),
+                "haiku" => env::var("ANTHROPIC_DEFAULT_HAIKU_MODEL")
+                    .unwrap_or_else(|_| config.model.clone()),
                 _ => config.model.clone(),
             };
 
@@ -135,31 +138,26 @@ impl BaseProviderAdapter for ClaudeAdapter {
             let res = req.send().await?;
 
             let body: serde_json::Value = res.json().await?;
-            
+
             if let Some(error) = body.get("error") {
                 return Err(anyhow!("Anthropic API error: {}", error));
             }
 
-            let text = body["content"][0]["text"].as_str().unwrap_or("").to_string();
+            let text = body["content"][0]["text"]
+                .as_str()
+                .unwrap_or("")
+                .to_string();
             let token_usage = body
                 .get("usage")
                 .and_then(|u| u.as_object())
                 .map(|u| TokenUsage {
-                    input_tokens: u
-                        .get("input_tokens")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(0) as usize,
-                    output_tokens: u
-                        .get("output_tokens")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(0) as usize,
-                    total_tokens: u
-                        .get("input_tokens")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(0) as usize
-                        + u.get("output_tokens")
-                            .and_then(|v| v.as_u64())
-                            .unwrap_or(0) as usize,
+                    input_tokens: u.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0)
+                        as usize,
+                    output_tokens: u.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0)
+                        as usize,
+                    total_tokens: u.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0)
+                        as usize
+                        + u.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
                 })
                 .unwrap_or_default();
 
@@ -177,7 +175,12 @@ impl BaseProviderAdapter for ClaudeAdapter {
         Box<
             dyn Future<
                     Output = Result<
-                        Box<dyn futures::Stream<Item = Result<crate::providers::StreamChunk, anyhow::Error>> + Send + Unpin>,
+                        Box<
+                            dyn futures::Stream<
+                                    Item = Result<crate::providers::StreamChunk, anyhow::Error>,
+                                > + Send
+                                + Unpin,
+                        >,
                         anyhow::Error,
                     >,
                 > + Send,
@@ -185,7 +188,7 @@ impl BaseProviderAdapter for ClaudeAdapter {
     > {
         let config = self.config.clone();
         let client = self.client.clone();
-        
+
         Box::pin(async move {
             let config = config.ok_or_else(|| anyhow!("Adapter not initialized"))?;
             let api_key = match config.api_key_ref.clone() {
@@ -199,9 +202,12 @@ impl BaseProviderAdapter for ClaudeAdapter {
                     .ok_or_else(|| anyhow!("API key missing (set provider api_key_ref or env ANTHROPIC_AUTH_TOKEN/ANTHROPIC_API_KEY)"))?,
             };
             let model = match config.model.as_str() {
-                "opus" => env::var("ANTHROPIC_DEFAULT_OPUS_MODEL").unwrap_or_else(|_| config.model.clone()),
-                "sonnet" => env::var("ANTHROPIC_DEFAULT_SONNET_MODEL").unwrap_or_else(|_| config.model.clone()),
-                "haiku" => env::var("ANTHROPIC_DEFAULT_HAIKU_MODEL").unwrap_or_else(|_| config.model.clone()),
+                "opus" => env::var("ANTHROPIC_DEFAULT_OPUS_MODEL")
+                    .unwrap_or_else(|_| config.model.clone()),
+                "sonnet" => env::var("ANTHROPIC_DEFAULT_SONNET_MODEL")
+                    .unwrap_or_else(|_| config.model.clone()),
+                "haiku" => env::var("ANTHROPIC_DEFAULT_HAIKU_MODEL")
+                    .unwrap_or_else(|_| config.model.clone()),
                 _ => config.model.clone(),
             };
 
@@ -257,7 +263,8 @@ impl BaseProviderAdapter for ClaudeAdapter {
                 let mut es = match reqwest_eventsource::EventSource::new(req) {
                     Ok(es) => es,
                     Err(e) => {
-                        let _ = tx.unbounded_send(Err(anyhow!("Failed to create event source: {}", e)));
+                        let _ =
+                            tx.unbounded_send(Err(anyhow!("Failed to create event source: {}", e)));
                         return;
                     }
                 };
@@ -266,7 +273,8 @@ impl BaseProviderAdapter for ClaudeAdapter {
                     match event {
                         Ok(reqwest_eventsource::Event::Open) => continue,
                         Ok(reqwest_eventsource::Event::Message(message)) => {
-                            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&message.data) {
+                            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&message.data)
+                            {
                                 if let Some(type_str) = v["type"].as_str() {
                                     if type_str == "message_start" {
                                         if let Some(u) = v
@@ -277,32 +285,43 @@ impl BaseProviderAdapter for ClaudeAdapter {
                                             usage.input_tokens = u
                                                 .get("input_tokens")
                                                 .and_then(|v| v.as_u64())
-                                                .unwrap_or(0) as usize;
+                                                .unwrap_or(0)
+                                                as usize;
                                             let out = u
                                                 .get("output_tokens")
                                                 .and_then(|v| v.as_u64())
-                                                .unwrap_or(0) as usize;
+                                                .unwrap_or(0)
+                                                as usize;
                                             if out > usage.output_tokens {
                                                 usage.output_tokens = out;
                                             }
                                         }
                                     } else if type_str == "message_delta" {
-                                        if let Some(u) = v.get("usage").and_then(|u| u.as_object()) {
+                                        if let Some(u) = v.get("usage").and_then(|u| u.as_object())
+                                        {
                                             let out = u
                                                 .get("output_tokens")
                                                 .and_then(|v| v.as_u64())
-                                                .unwrap_or(0) as usize;
+                                                .unwrap_or(0)
+                                                as usize;
                                             if out > usage.output_tokens {
                                                 usage.output_tokens = out;
                                             }
                                         }
                                     } else if type_str == "content_block_delta" {
                                         if let Some(text) = v["delta"]["text"].as_str() {
-                                            let _ = tx.unbounded_send(Ok(crate::providers::StreamChunk::Text(text.to_string())));
+                                            let _ = tx.unbounded_send(Ok(
+                                                crate::providers::StreamChunk::Text(
+                                                    text.to_string(),
+                                                ),
+                                            ));
                                         }
                                     } else if type_str == "message_stop" {
-                                        usage.total_tokens = usage.input_tokens + usage.output_tokens;
-                                        let _ = tx.unbounded_send(Ok(crate::providers::StreamChunk::Done(usage)));
+                                        usage.total_tokens =
+                                            usage.input_tokens + usage.output_tokens;
+                                        let _ = tx.unbounded_send(Ok(
+                                            crate::providers::StreamChunk::Done(usage),
+                                        ));
                                         break;
                                     }
                                 }
@@ -317,7 +336,12 @@ impl BaseProviderAdapter for ClaudeAdapter {
                 }
             });
 
-            Ok(Box::new(rx) as Box<dyn futures::Stream<Item = Result<crate::providers::StreamChunk, anyhow::Error>> + Send + Unpin>)
+            Ok(Box::new(rx)
+                as Box<
+                    dyn futures::Stream<Item = Result<crate::providers::StreamChunk, anyhow::Error>>
+                        + Send
+                        + Unpin,
+                >)
         })
     }
 

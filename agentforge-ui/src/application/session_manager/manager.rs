@@ -23,7 +23,10 @@ pub struct SessionManagerV2 {
 }
 
 impl SessionManagerV2 {
-    pub fn new(db: Arc<dyn crate::core::traits::database::DatabasePort>, max_concurrent: usize) -> Self {
+    pub fn new(
+        db: Arc<dyn crate::core::traits::database::DatabasePort>,
+        max_concurrent: usize,
+    ) -> Self {
         Self {
             db,
             active_sessions: Arc::new(RwLock::new(HashMap::new())),
@@ -86,8 +89,7 @@ impl SessionManagerV2 {
     }
 
     pub async fn get_turns(&self, session_id: &str) -> Result<Vec<crate::providers::ChatMessage>> {
-        self
-            .db
+        self.db
             .get_conversation_turns(session_id)
             .map_err(|e| anyhow::anyhow!(e.to_string()))
     }

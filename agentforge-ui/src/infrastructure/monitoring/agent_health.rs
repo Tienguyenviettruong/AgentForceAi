@@ -57,14 +57,14 @@ impl AgentHealthPanel {
                                     .w(gpui::px(8.0))
                                     .h(gpui::px(8.0))
                                     .rounded_full()
-                                    .bg(status_color)
+                                    .bg(status_color),
                             )
                             .child(
                                 div()
                                     .text_color(theme.foreground)
                                     .font_weight(gpui::FontWeight::MEDIUM)
-                                    .child(agent.name.clone())
-                            )
+                                    .child(agent.name.clone()),
+                            ),
                     )
                     .child(
                         div()
@@ -79,7 +79,7 @@ impl AgentHealthPanel {
                                     .items_center()
                                     .gap_1()
                                     .child(IconName::SquareTerminal)
-                                    .child(format!("{:.1}%", agent.cpu_usage))
+                                    .child(format!("{:.1}%", agent.cpu_usage)),
                             )
                             .child(
                                 div()
@@ -87,7 +87,7 @@ impl AgentHealthPanel {
                                     .items_center()
                                     .gap_1()
                                     .child(IconName::Inbox)
-                                    .child(format!("{:.1} MB", agent.memory_usage))
+                                    .child(format!("{:.1} MB", agent.memory_usage)),
                             )
                             .child(
                                 div()
@@ -95,9 +95,9 @@ impl AgentHealthPanel {
                                     .flex()
                                     .justify_end()
                                     .text_color(status_color)
-                                    .child(status_text)
-                            )
-                    )
+                                    .child(status_text),
+                            ),
+                    ),
             );
         }
 
@@ -115,7 +115,7 @@ impl AgentHealthPanel {
                     .text_size(gpui::px(16.0))
                     .font_weight(gpui::FontWeight::BOLD)
                     .mb_4()
-                    .child("Agent Health")
+                    .child("Agent Health"),
             )
             .child(list)
     }

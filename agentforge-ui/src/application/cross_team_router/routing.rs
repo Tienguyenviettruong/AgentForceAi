@@ -31,7 +31,7 @@ impl MessageRouter {
     pub fn route_message(&self, message: InterTeamMessage) -> Result<()> {
         let mut queues = self.queues.lock().unwrap();
         let queue = queues.entry(message.target_team.clone()).or_default();
-        
+
         // Simple priority queueing: insert high priority at front, low at back
         if message.priority > 5 {
             queue.push_front(message);

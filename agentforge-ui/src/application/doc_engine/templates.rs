@@ -44,9 +44,17 @@ impl Template for PrdTemplate {
     }
 
     fn render(&self, data: &serde_json::Value) -> Result<String> {
-        let project_name = data.get("project_name").and_then(|v| v.as_str()).unwrap_or("Unknown Project");
-        let background = data.get("background").and_then(|v| v.as_str()).unwrap_or("No background provided.");
-        let features = data.get("features").and_then(|v| v.as_array())
+        let project_name = data
+            .get("project_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Unknown Project");
+        let background = data
+            .get("background")
+            .and_then(|v| v.as_str())
+            .unwrap_or("No background provided.");
+        let features = data
+            .get("features")
+            .and_then(|v| v.as_array())
             .map(|arr| {
                 arr.iter()
                     .filter_map(|v| v.as_str())
@@ -55,7 +63,10 @@ impl Template for PrdTemplate {
                     .join("\n")
             })
             .unwrap_or_else(|| "No features listed.".to_string());
-        let target_audience = data.get("target_audience").and_then(|v| v.as_str()).unwrap_or("General");
+        let target_audience = data
+            .get("target_audience")
+            .and_then(|v| v.as_str())
+            .unwrap_or("General");
 
         let content = format!(
             "# Product Requirements Document (PRD)\n\n\
@@ -78,13 +89,11 @@ pub struct SrsTemplate {
 impl Default for SrsTemplate {
     fn default() -> Self {
         Self {
-            custom_fields: vec![
-                CustomField {
-                    name: "system_name".to_string(),
-                    field_type: "string".to_string(),
-                    required: true,
-                },
-            ],
+            custom_fields: vec![CustomField {
+                name: "system_name".to_string(),
+                field_type: "string".to_string(),
+                required: true,
+            }],
         }
     }
 }
@@ -95,9 +104,17 @@ impl Template for SrsTemplate {
     }
 
     fn render(&self, data: &serde_json::Value) -> Result<String> {
-        let system_name = data.get("system_name").and_then(|v| v.as_str()).unwrap_or("Unknown System");
-        let scope = data.get("scope").and_then(|v| v.as_str()).unwrap_or("No scope provided.");
-        let requirements = data.get("requirements").and_then(|v| v.as_array())
+        let system_name = data
+            .get("system_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Unknown System");
+        let scope = data
+            .get("scope")
+            .and_then(|v| v.as_str())
+            .unwrap_or("No scope provided.");
+        let requirements = data
+            .get("requirements")
+            .and_then(|v| v.as_array())
             .map(|arr| {
                 arr.iter()
                     .filter_map(|v| v.as_str())
@@ -134,11 +151,11 @@ impl TemplateManager {
         let mut manager = Self {
             templates: HashMap::new(),
         };
-        
+
         // Register default templates
         manager.register_template(Box::new(PrdTemplate::default()));
         manager.register_template(Box::new(SrsTemplate::default()));
-        
+
         manager
     }
 
@@ -149,7 +166,7 @@ impl TemplateManager {
     pub fn get_template(&self, name: &str) -> Option<&dyn Template> {
         self.templates.get(name).map(|t| t.as_ref())
     }
-    
+
     pub fn list_templates(&self) -> Vec<String> {
         self.templates.keys().cloned().collect()
     }
