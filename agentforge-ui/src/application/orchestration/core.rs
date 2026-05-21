@@ -210,6 +210,7 @@ DO NOT include any markdown formatting like ```json, just return the raw JSON ar
                 role: "system".into(),
                 content: system_prompt.into(),
                 agent_name: None,
+                thought_duration_secs: None,
             },
         );
 
@@ -223,6 +224,7 @@ DO NOT include any markdown formatting like ```json, just return the raw JSON ar
             )
             .into(),
             agent_name: None,
+            thought_duration_secs: None,
         });
 
         use crate::providers::BaseProviderAdapter;

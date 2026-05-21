@@ -50,6 +50,73 @@ impl AgentExecutor {
         }
     }
 
+    async fn fetch_text(url: String, timeout_secs: u64) -> std::result::Result<String, String> {
+        smol::unblock(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| format!("Failed to create Tokio runtime: {}", e))?;
+
+            runtime.block_on(async move {
+                let client = reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(timeout_secs))
+                    .build()
+                    .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
+
+                let resp = client
+                    .get(&url)
+                    .header(
+                        "User-Agent",
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                    )
+                    .send()
+                    .await
+                    .map_err(|e| e.to_string())?;
+
+                resp.text().await.map_err(|e| e.to_string())
+            })
+        })
+        .await
+    }
+
+    async fn run_command_with_timeout(
+        mut command: std::process::Command,
+        timeout_secs: u64,
+    ) -> std::result::Result<std::process::Output, String> {
+        smol::unblock(move || {
+            command.stdout(std::process::Stdio::piped());
+            command.stderr(std::process::Stdio::piped());
+
+            let mut child = command
+                .spawn()
+                .map_err(|e| format!("Failed to execute command: {}", e))?;
+            let started = std::time::Instant::now();
+
+            loop {
+                match child.try_wait() {
+                    Ok(Some(_)) => {
+                        return child
+                            .wait_with_output()
+                            .map_err(|e| format!("Failed to collect command output: {}", e));
+                    }
+                    Ok(None) => {
+                        if started.elapsed() >= std::time::Duration::from_secs(timeout_secs) {
+                            let _ = child.kill();
+                            let _ = child.wait();
+                            return Err(format!(
+                                "Command timed out after {} seconds.",
+                                timeout_secs
+                            ));
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                    }
+                    Err(e) => return Err(format!("Failed to poll command status: {}", e)),
+                }
+            }
+        })
+        .await
+    }
+
     pub async fn execute_task(&self, mut history: Vec<ChatMessage>) -> Result<String> {
         if self
             .cancel_flag
@@ -350,6 +417,7 @@ impl AgentExecutor {
                     role: "system".into(),
                     content: injection.into(),
                     agent_name: None,
+                    thought_duration_secs: None,
                 },
             );
         }
@@ -432,6 +500,7 @@ impl AgentExecutor {
                 role: "assistant".into(),
                 content: response_text.into(),
                 agent_name: None,
+                thought_duration_secs: None,
             });
 
             for tc in tool_calls.clone() {
@@ -457,6 +526,7 @@ impl AgentExecutor {
                     content: format!("Tool result (id={}, name={}):\n{}", tc.id, tc.name, result)
                         .into(),
                     agent_name: Some(tc.name.clone().into()),
+                    thought_duration_secs: None,
                 });
             }
 
@@ -528,6 +598,7 @@ impl AgentExecutor {
                 role: "system".into(),
                 content: truncated.into(),
                 agent_name: None,
+                thought_duration_secs: None,
             });
         }
 
@@ -821,92 +892,96 @@ impl AgentExecutor {
 
         if name == "web_search" {
             let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
-            let url = format!(
-                "https://html.duckduckgo.com/html/?q={}",
-                urlencoding::encode(query)
-            );
-
-            let client = reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(15))
-                .build()
-                .unwrap_or_else(|_| reqwest::Client::new());
-
-            match client
-                .get(&url)
-                .header(
-                    "User-Agent",
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            let direct_url = query.starts_with("http://") || query.starts_with("https://");
+            let url = if direct_url {
+                query.to_string()
+            } else {
+                format!(
+                    "https://html.duckduckgo.com/html/?q={}",
+                    urlencoding::encode(query)
                 )
-                .send()
-                .await
-            {
-                Ok(resp) => {
-                    if let Ok(text) = resp.text().await {
-                        // Extract structured results from DuckDuckGo HTML
-                        let mut results = Vec::new();
-                        let mut result_num = 0;
+            };
 
-                        // Extract result snippets between result__snippet class markers
-                        for segment in text.split("result__snippet") {
-                            if result_num > 0 && result_num <= 8 {
-                                // Strip HTML tags
-                                let mut in_tag = false;
-                                let mut clean = String::new();
-                                for c in segment.chars().take(500) {
-                                    if c == '<' {
-                                        in_tag = true;
-                                        continue;
-                                    }
-                                    if c == '>' {
-                                        in_tag = false;
-                                        continue;
-                                    }
-                                    if !in_tag {
-                                        clean.push(c);
-                                    }
-                                }
-                                let clean = clean.trim().to_string();
-                                if !clean.is_empty() && clean.len() > 20 {
-                                    results.push(format!("{}. {}", result_num, clean));
-                                }
+            match Self::fetch_text(url, 15).await {
+                Ok(text) => {
+                    if direct_url {
+                        let mut in_tag = false;
+                        let mut stripped = String::new();
+                        for c in text.chars() {
+                            if c == '<' {
+                                in_tag = true;
+                                continue;
                             }
-                            result_num += 1;
+                            if c == '>' {
+                                in_tag = false;
+                                stripped.push(' ');
+                                continue;
+                            }
+                            if !in_tag {
+                                stripped.push(c);
+                            }
                         }
+                        let truncated = stripped.split_whitespace().collect::<Vec<_>>().join(" ");
+                        let body: String = truncated.chars().take(6000).collect();
+                        return format!("Fetched content from '{}':\n{}", query, body);
+                    }
 
-                        // Fallback: if structured extraction failed, use raw strip
-                        if results.is_empty() {
+                    // Extract structured results from DuckDuckGo HTML
+                    let mut results = Vec::new();
+                    let mut result_num = 0;
+
+                    // Extract result snippets between result__snippet class markers
+                    for segment in text.split("result__snippet") {
+                        if result_num > 0 && result_num <= 8 {
+                            // Strip HTML tags
                             let mut in_tag = false;
-                            let mut stripped = String::new();
-                            for c in text.chars() {
+                            let mut clean = String::new();
+                            for c in segment.chars().take(500) {
                                 if c == '<' {
                                     in_tag = true;
                                     continue;
                                 }
                                 if c == '>' {
                                     in_tag = false;
-                                    stripped.push(' ');
                                     continue;
                                 }
                                 if !in_tag {
-                                    stripped.push(c);
+                                    clean.push(c);
                                 }
                             }
-                            let truncated: String =
-                                stripped.split_whitespace().collect::<Vec<_>>().join(" ");
-                            let limit = std::cmp::min(4000, truncated.len());
-                            return format!(
-                                "Search results for '{}':\n{}",
-                                query,
-                                &truncated[..limit]
-                            );
+                            let clean = clean.trim().to_string();
+                            if !clean.is_empty() && clean.len() > 20 {
+                                results.push(format!("{}. {}", result_num, clean));
+                            }
                         }
-
-                        return format!(
-                            "Search results for '{}':\n{}",
-                            query,
-                            results.join("\n\n")
-                        );
+                        result_num += 1;
                     }
+
+                    // Fallback: if structured extraction failed, use raw strip
+                    if results.is_empty() {
+                        let mut in_tag = false;
+                        let mut stripped = String::new();
+                        for c in text.chars() {
+                            if c == '<' {
+                                in_tag = true;
+                                continue;
+                            }
+                            if c == '>' {
+                                in_tag = false;
+                                stripped.push(' ');
+                                continue;
+                            }
+                            if !in_tag {
+                                stripped.push(c);
+                            }
+                        }
+                        let truncated: String =
+                            stripped.split_whitespace().collect::<Vec<_>>().join(" ");
+                        let limit = std::cmp::min(4000, truncated.len());
+                        return format!("Search results for '{}':\n{}", query, &truncated[..limit]);
+                    }
+
+                    return format!("Search results for '{}':\n{}", query, results.join("\n\n"));
                 }
                 Err(e) => {
                     return format!("Web search failed: {}", e);
@@ -956,11 +1031,8 @@ impl AgentExecutor {
                 command.current_dir(ws);
             }
 
-            // Timeout: spawn in a thread with a 60-second timeout
-            let output = tokio::task::spawn_blocking(move || command.output());
-
-            match tokio::time::timeout(std::time::Duration::from_secs(60), output).await {
-                Ok(Ok(Ok(out))) => {
+            match Self::run_command_with_timeout(command, 60).await {
+                Ok(out) => {
                     let stdout = String::from_utf8_lossy(&out.stdout);
                     let stderr = String::from_utf8_lossy(&out.stderr);
                     let mut result = String::new();
@@ -978,14 +1050,8 @@ impl AgentExecutor {
                         result
                     };
                 }
-                Ok(Ok(Err(e))) => {
-                    return format!("Failed to execute command: {}", e);
-                }
-                Ok(Err(e)) => {
-                    return format!("Command thread panicked: {}", e);
-                }
-                Err(_) => {
-                    return "Command timed out after 60 seconds.".to_string();
+                Err(e) => {
+                    return e;
                 }
             }
         }

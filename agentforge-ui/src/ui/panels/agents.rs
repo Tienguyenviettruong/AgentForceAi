@@ -7,7 +7,7 @@ use gpui::{
 use gpui_component::{
     button::{Button, ButtonVariants},
     dock::{Panel, PanelEvent, TitleStyle},
-    h_flex, v_flex, ActiveTheme as _, IconName,
+    h_flex, v_flex, ActiveTheme as _, IconName, Sizable,
 };
 
 pub struct AgentsPanel {
@@ -58,15 +58,72 @@ impl Focusable for AgentsPanel {
 impl Render for AgentsPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
+        let total_agents = self.agents.len();
+        let online_agents = self
+            .agents
+            .iter()
+            .filter(|agent| agent.status.to_lowercase() != "offline")
+            .count();
+        let provider_count = self
+            .agents
+            .iter()
+            .map(|agent| agent.provider.clone())
+            .collect::<std::collections::BTreeSet<_>>()
+            .len();
 
         let header = h_flex()
             .w_full()
-            .h(px(56.))
+            .h(px(72.))
             .px(px(24.))
             .items_center()
-            .justify_end()
+            .justify_between()
             .border_b(px(1.))
             .border_color(theme.border)
+            .child(
+                v_flex()
+                    .gap(px(4.))
+                    .child(
+                        div()
+                            .text_size(px(18.))
+                            .font_weight(gpui::FontWeight::BOLD)
+                            .text_color(theme.foreground)
+                            .child("Agent Management"),
+                    )
+                    .child(
+                        h_flex()
+                            .gap(px(8.))
+                            .child(
+                                div()
+                                    .px(px(8.))
+                                    .py(px(2.))
+                                    .rounded(px(4.))
+                                    .bg(theme.secondary)
+                                    .text_size(px(12.))
+                                    .text_color(theme.muted_foreground)
+                                    .child(format!("{} agents", total_agents)),
+                            )
+                            .child(
+                                div()
+                                    .px(px(8.))
+                                    .py(px(2.))
+                                    .rounded(px(4.))
+                                    .bg(gpui::green().opacity(0.12))
+                                    .text_size(px(12.))
+                                    .text_color(gpui::green())
+                                    .child(format!("{} online", online_agents)),
+                            )
+                            .child(
+                                div()
+                                    .px(px(8.))
+                                    .py(px(2.))
+                                    .rounded(px(4.))
+                                    .bg(theme.secondary)
+                                    .text_size(px(12.))
+                                    .text_color(theme.muted_foreground)
+                                    .child(format!("{} providers", provider_count)),
+                            ),
+                    ),
+            )
             .child(
                 Button::new("create-agent")
                     .primary()
@@ -146,95 +203,179 @@ impl Render for AgentsPanel {
                         .flex()
                         .flex_row()
                         .flex_wrap()
+                        .items_start()
+                        .content_start()
                         .gap(px(16.))
                         .children(self.agents.iter().map(|agent| {
                             
                             // Parse config for role and details
                             let mut role = "Unassigned".to_string();
+                            let mut details = "No profile details".to_string();
                             if let Some(config_str) = &agent.config {
                                 if let Ok(val) = serde_json::from_str::<serde_json::Value>(config_str) {
                                     if let Some(r) = val.get("role").and_then(|v| v.as_str()) {
                                         role = r.to_string();
                                     }
+                                    if let Some(d) = val.get("details").and_then(|v| v.as_str()) {
+                                        if !d.trim().is_empty() {
+                                            details = d.trim().to_string();
+                                        }
+                                    }
                                 }
                             }
 
-                            h_flex()
-                                .w(px(360.))
-                                .h(px(128.))
+                            let is_offline = agent.status.to_lowercase() == "offline";
+                            let status_color = if is_offline { gpui::red() } else { gpui::green() };
+
+                            v_flex()
+                                .w(px(336.))
+                                .h(px(156.))
                                 .p(px(16.))
                                 .border(px(1.))
                                 .border_color(theme.border)
-                                .rounded_lg()
-                                .bg(theme.secondary.opacity(0.3))
+                                .rounded(px(8.))
+                                .bg(theme.secondary.opacity(0.22))
+                                .hover(|style| {
+                                    style
+                                        .bg(theme.secondary.opacity(0.34))
+                                        .border_color(theme.primary.opacity(0.45))
+                                })
                                 .justify_between()
                                 .child(
                                     h_flex()
-                                        .gap(px(16.))
+                                        .w_full()
+                                        .items_start()
+                                        .justify_between()
                                         .child(
-                                            div()
-                                                .w(px(48.))
-                                                .h(px(48.))
-                                                .rounded_full()
-                                                .bg(theme.primary.opacity(0.1))
-                                                .text_color(theme.primary)
-                                                .flex()
-                                                .items_center()
-                                                .justify_center()
-                                                .child(IconName::Bot)
-                                        )
-                                        .child(
-                                            v_flex()
-                                                .gap(px(4.))
+                                            h_flex()
+                                                .gap(px(12.))
+                                                .min_w_0()
                                                 .child(
-                                                    h_flex()
-                                                        .gap(px(8.))
-                                                        .child(div().font_weight(gpui::FontWeight::BOLD).text_size(px(16.)).child(agent.name.clone()))
+                                                    div()
+                                                        .w(px(44.))
+                                                        .h(px(44.))
+                                                        .rounded_full()
+                                                        .bg(theme.primary.opacity(0.12))
+                                                        .text_color(theme.primary)
+                                                        .flex()
+                                                        .items_center()
+                                                        .justify_center()
+                                                        .child(IconName::Bot)
+                                                )
+                                                .child(
+                                                    v_flex()
+                                                        .min_w_0()
+                                                        .gap(px(4.))
+                                                        .child(
+                                                            h_flex()
+                                                                .min_w_0()
+                                                                .gap(px(8.))
+                                                                .child(
+                                                                    div()
+                                                                        .min_w_0()
+                                                                        .truncate()
+                                                                        .font_weight(gpui::FontWeight::BOLD)
+                                                                        .text_size(px(15.))
+                                                                        .text_color(theme.foreground)
+                                                                        .child(agent.name.clone())
+                                                                )
+                                                                .child(
+                                                                    div()
+                                                                        .flex_none()
+                                                                        .px(px(7.))
+                                                                        .py(px(2.))
+                                                                        .rounded(px(4.))
+                                                                        .bg(status_color.opacity(0.12))
+                                                                        .text_color(status_color)
+                                                                        .text_size(px(11.))
+                                                                        .child(agent.status.clone())
+                                                                )
+                                                        )
                                                         .child(
                                                             div()
-                                                                .px(px(8.))
-                                                                .py(px(2.))
-                                                                .rounded_full()
-                                                                .bg(if agent.status == "offline" { gpui::red().opacity(0.1) } else { gpui::green().opacity(0.1) })
-                                                                .text_color(if agent.status == "offline" { gpui::red() } else { gpui::green() })
-                                                                .text_size(px(12.))
-                                                                .child(agent.status.clone())
+                                                                .truncate()
+                                                                .text_size(px(13.))
+                                                                .text_color(theme.muted_foreground)
+                                                                .child(role)
                                                         )
                                                 )
-                                                .child(div().text_size(px(13.)).text_color(theme.muted_foreground).child(role))
-                                                .child(div().text_size(px(12.)).text_color(theme.muted_foreground.opacity(0.7)).child(format!("Provider: {}", agent.provider)))
+                                        )
+                                        .child(
+                                            h_flex()
+                                                .flex_none()
+                                                .gap(px(4.))
+                                                .child(Button::new(gpui::SharedString::from(format!("edit-{}", agent.id))).ghost().small().compact().icon(IconName::Settings)
+                                                    .on_click({
+                                                        let agent_clone = agent.clone();
+                                                        let view = cx.entity().clone();
+                                                        cx.listener(move |this, _, window, cx| {
+                                                            let db = crate::AppState::global(cx).db.clone();
+                                                            crate::ui::components::dialogs::open_edit_agent_dialog(
+                                                                db,
+                                                                agent_clone.clone(),
+                                                                view.clone(),
+                                                                window,
+                                                                cx,
+                                                                |this: &mut Self, cx| {
+                                                                    this.reload(cx);
+                                                                },
+                                                            );
+                                                        })
+                                                    }))
+                                                .child(Button::new(gpui::SharedString::from(format!("delete-{}", agent.id))).ghost().small().compact().icon(IconName::Delete)
+                                                    .on_click({
+                                                        let agent_id = agent.id.clone();
+                                                        cx.listener(move |this, _, _, cx| {
+                                                            let db = crate::AppState::global(cx).db.clone();
+                                                            let _ = db.delete_agent(&agent_id);
+                                                            this.reload(cx);
+                                                        })
+                                                    }))
                                         )
                                 )
                                 .child(
-                                    h_flex()
+                                    v_flex()
+                                        .w_full()
                                         .gap(px(8.))
-                                        .child(Button::new(gpui::SharedString::from(format!("edit-{}", agent.id))).ghost().icon(IconName::Settings)
-                                            .on_click({
-                                                let agent_clone = agent.clone();
-                                                let view = cx.entity().clone();
-                                                cx.listener(move |this, _, window, cx| {
-                                                    let db = crate::AppState::global(cx).db.clone();
-                                                    crate::ui::components::dialogs::open_edit_agent_dialog(
-                                                        db,
-                                                        agent_clone.clone(),
-                                                        view.clone(),
-                                                        window,
-                                                        cx,
-                                                        |this: &mut Self, cx| {
-                                                            this.reload(cx);
-                                                        },
-                                                    );
-                                                })
-                                            }))
-                                        .child(Button::new(gpui::SharedString::from(format!("delete-{}", agent.id))).ghost().icon(IconName::Delete)
-                                            .on_click({
-                                                let agent_id = agent.id.clone();
-                                                cx.listener(move |this, _, _, cx| {
-                                                    let db = crate::AppState::global(cx).db.clone();
-                                                    let _ = db.delete_agent(&agent_id);
-                                                    this.reload(cx);
-                                                })
-                                            }))
+                                        .child(
+                                            h_flex()
+                                                .justify_between()
+                                                .gap(px(12.))
+                                                .child(
+                                                    div()
+                                                        .text_size(px(12.))
+                                                        .text_color(theme.muted_foreground)
+                                                        .child("Provider")
+                                                )
+                                                .child(
+                                                    div()
+                                                        .min_w_0()
+                                                        .truncate()
+                                                        .text_size(px(12.))
+                                                        .text_color(theme.foreground)
+                                                        .child(agent.provider.clone())
+                                                )
+                                        )
+                                        .child(div().w_full().h(px(1.)).bg(theme.border.opacity(0.65)))
+                                        .child(
+                                            h_flex()
+                                                .justify_between()
+                                                .gap(px(12.))
+                                                .child(
+                                                    div()
+                                                        .text_size(px(12.))
+                                                        .text_color(theme.muted_foreground)
+                                                        .child("Details")
+                                                )
+                                                .child(
+                                                    div()
+                                                        .min_w_0()
+                                                        .truncate()
+                                                        .text_size(px(12.))
+                                                        .text_color(theme.foreground)
+                                                        .child(details)
+                                                )
+                                        )
                                 )
                         }))
                 )

@@ -5,6 +5,7 @@ pub struct ChatMessage {
     pub role: SharedString,
     pub content: SharedString,
     pub agent_name: Option<SharedString>,
+    pub thought_duration_secs: Option<f64>,
 }
 
 #[derive(Clone, Debug, Default)]

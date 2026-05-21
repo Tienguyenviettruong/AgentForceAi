@@ -351,11 +351,13 @@ impl AgentWorker {
                 role: "system".into(),
                 content: sys_prompt.into(),
                 agent_name: Some(agent.name.clone().into()),
+                thought_duration_secs: None,
             },
             crate::providers::ChatMessage {
                 role: "user".into(),
                 content: format!("{}{}", instructions, task_text).into(),
                 agent_name: None,
+                thought_duration_secs: None,
             },
         ];
 
@@ -606,11 +608,13 @@ impl AgentWorker {
                 role: "system".into(),
                 content: sys.into(),
                 agent_name: Some(agent.name.clone().into()),
+                thought_duration_secs: None,
             },
             crate::providers::ChatMessage {
                 role: "user".into(),
                 content: user_text.into(),
                 agent_name: None,
+                thought_duration_secs: None,
             },
         ];
 
@@ -808,11 +812,13 @@ impl AgentWorker {
                 role: "system".into(),
                 content: sys.into(),
                 agent_name: Some(agent.name.clone().into()),
+                thought_duration_secs: None,
             },
             crate::providers::ChatMessage {
                 role: "user".into(),
                 content: user_text.into(),
                 agent_name: None,
+                thought_duration_secs: None,
             },
         ];
 
@@ -992,12 +998,14 @@ impl AgentWorker {
                 role: "system".into(),
                 content: system_prompt.into(),
                 agent_name: Some(agent.name.clone().into()),
+                thought_duration_secs: None,
             });
         }
         history.push(crate::providers::ChatMessage {
             role: "user".into(),
             content: instruction.clone().into(),
             agent_name: Some(agent.name.clone().into()),
+            thought_duration_secs: None,
         });
 
         // We will send a stream message back

@@ -2,8 +2,10 @@ use crate::core::traits::database::DatabasePort;
 use chrono::Utc;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    div, px, AppContext, Context, InteractiveElement, IntoElement, ParentElement,
-    StatefulInteractiveElement, Styled, Window,
+    div, fill, point, px, quad, App, AppContext, BorderStyle, Bounds, Context, Edges, Element,
+    ElementId, GlobalElementId, HighlightStyle, InspectorElementId, InteractiveElement,
+    IntoElement, LayoutId, ParentElement, Pixels, Point, SharedString, StatefulInteractiveElement,
+    Styled, StyledText, TextRun, UnderlineStyle, Window,
 };
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::scroll::ScrollableElement as _;
@@ -13,8 +15,10 @@ use gpui_component::tab::{Tab, TabBar};
 use gpui_component::IndexPath;
 use gpui_component::WindowExt;
 use gpui_component::{h_flex, ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _};
+use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 
 use super::TeamWorkspacePanel;
 use crate::ui::components::markdown::render_markdown_message;
@@ -42,7 +46,381 @@ fn format_session_label(s: &crate::core::models::session::SessionRecord) -> Stri
     format!("{} - {}", dt, short_id)
 }
 
+const AI_THINKING_LABEL: &str = "Ai thinking";
+
+fn chat_message_metadata(agent_name: &str, thought_duration_secs: Option<f64>) -> String {
+    let mut metadata = serde_json::json!({ "agent_name": agent_name });
+    if let Some(seconds) = thought_duration_secs {
+        metadata["thought_duration_secs"] = serde_json::json!(seconds);
+    }
+    metadata.to_string()
+}
+
+fn format_thought_duration(seconds: f64) -> String {
+    if seconds < 10.0 {
+        format!("{:.1}s", seconds)
+    } else {
+        format!("{:.0}s", seconds)
+    }
+}
+
+fn url_ranges(text: &str) -> Vec<Range<usize>> {
+    let mut ranges = Vec::new();
+    let mut offset = 0;
+
+    for part in text.split_whitespace() {
+        let Some(relative_start) = text[offset..].find(part) else {
+            continue;
+        };
+        let start = offset + relative_start;
+        let mut end = start + part.len();
+
+        while end > start {
+            let Some(ch) = text[..end].chars().next_back() else {
+                break;
+            };
+            if matches!(ch, ',' | '.' | ')' | ']' | '}' | '"' | '\'' | '>' | '<') {
+                end -= ch.len_utf8();
+            } else {
+                break;
+            }
+        }
+
+        let candidate = &text[start..end];
+        if candidate.starts_with("http://") || candidate.starts_with("https://") {
+            ranges.push(start..end);
+        }
+
+        offset = start + part.len();
+    }
+
+    ranges
+}
+
+struct LinkInlineOverlay {
+    id: ElementId,
+    text: SharedString,
+    ranges: Vec<Range<usize>>,
+    styled_text: StyledText,
+}
+
+impl LinkInlineOverlay {
+    fn new(text: impl Into<SharedString>, ranges: Vec<Range<usize>>) -> Self {
+        let text = text.into();
+        Self {
+            id: ElementId::Name("chat-link-inline-overlay".into()),
+            ranges,
+            styled_text: StyledText::new(text.clone()),
+            text,
+        }
+    }
+
+    fn paint_segment(
+        window: &mut Window,
+        cx: &mut App,
+        left: Pixels,
+        right: Pixels,
+        baseline: Pixels,
+    ) {
+        if right <= left {
+            return;
+        }
+
+        window.paint_quad(quad(
+            Bounds::from_corners(point(left, baseline), point(right, baseline + px(1.))),
+            px(0.),
+            cx.theme().link,
+            Edges::default(),
+            gpui::transparent_black(),
+            BorderStyle::default(),
+        ));
+    }
+
+    fn paint_link_icon(window: &mut Window, cx: &mut App, x: Pixels, y: Pixels) {
+        let color = cx.theme().link;
+        let size = px(8.);
+        let stroke = px(1.);
+        let left = x;
+        let top = y;
+
+        window.paint_quad(quad(
+            Bounds::from_corners(
+                point(left + px(1.), top + px(2.)),
+                point(left + size - px(2.), top + px(2.) + stroke),
+            ),
+            px(0.),
+            color,
+            Edges::default(),
+            gpui::transparent_black(),
+            BorderStyle::default(),
+        ));
+        window.paint_quad(quad(
+            Bounds::from_corners(
+                point(left + px(1.), top + px(5.)),
+                point(left + size - px(2.), top + px(5.) + stroke),
+            ),
+            px(0.),
+            color,
+            Edges::default(),
+            gpui::transparent_black(),
+            BorderStyle::default(),
+        ));
+        window.paint_quad(quad(
+            Bounds::from_corners(
+                point(left + px(1.), top + px(2.)),
+                point(left + px(1.) + stroke, top + size - px(1.)),
+            ),
+            px(0.),
+            color,
+            Edges::default(),
+            gpui::transparent_black(),
+            BorderStyle::default(),
+        ));
+        window.paint_quad(quad(
+            Bounds::from_corners(
+                point(left + size - px(2.), top + px(1.)),
+                point(left + size - px(2.) + stroke, top + size - px(2.)),
+            ),
+            px(0.),
+            color,
+            Edges::default(),
+            gpui::transparent_black(),
+            BorderStyle::default(),
+        ));
+    }
+
+    fn range_positions(
+        &self,
+        text_layout: &gpui::TextLayout,
+        range: &Range<usize>,
+        line_height: Pixels,
+    ) -> Option<(Point<Pixels>, Point<Pixels>)> {
+        let start_position = text_layout.position_for_index(range.start)?;
+        let mut last_start = range.start;
+        for (ix, _) in self.text[range.start..range.end].char_indices() {
+            last_start = range.start + ix;
+        }
+
+        let last_position = text_layout.position_for_index(last_start)?;
+        let end_position = text_layout
+            .position_for_index(range.end)
+            .filter(|pos| {
+                pos.y == last_position.y
+                    && pos.x > last_position.x
+                    && pos.x - last_position.x <= line_height
+            })
+            .unwrap_or_else(|| point(last_position.x + line_height * 0.45, last_position.y));
+
+        Some((start_position, end_position))
+    }
+
+    fn paint_link_text(
+        &self,
+        range: &Range<usize>,
+        origin: Point<Pixels>,
+        line_height: Pixels,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let url = &self.text[range.clone()];
+        let text_style = window.text_style();
+        let font_size = text_style.font_size.to_pixels(window.rem_size()) * 0.74;
+        let icon_size = px(8.);
+        let gap = px(3.);
+        let text_origin = origin;
+        let link_run = TextRun {
+            len: url.len(),
+            font: text_style.font(),
+            color: cx.theme().link,
+            background_color: None,
+            underline: Some(UnderlineStyle {
+                thickness: px(1.),
+                color: Some(cx.theme().link),
+                wavy: false,
+            }),
+            strikethrough: None,
+        };
+        let shaped_url = window.text_system().shape_line(
+            url.to_string().into(),
+            font_size,
+            &[link_run.clone()],
+            None,
+        );
+
+        Self::paint_link_icon(
+            window,
+            cx,
+            origin.x - icon_size - gap,
+            origin.y + (line_height - icon_size) * 0.5,
+        );
+        let _ = shaped_url.paint(text_origin, line_height, window, cx);
+    }
+}
+
+impl IntoElement for LinkInlineOverlay {
+    type Element = Self;
+
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+impl Element for LinkInlineOverlay {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<ElementId> {
+        Some(self.id.clone())
+    }
+
+    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        global_element_id: Option<&GlobalElementId>,
+        inspector_id: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, Self::RequestLayoutState) {
+        let base_style = window.text_style();
+        let mut runs = Vec::new();
+        let mut ix = 0;
+        for range in &self.ranges {
+            if ix < range.start {
+                runs.push(base_style.clone().to_run(range.start - ix));
+            }
+
+            runs.push(
+                base_style
+                    .clone()
+                    .highlight(HighlightStyle {
+                        color: Some(cx.theme().link),
+                        ..Default::default()
+                    })
+                    .to_run(range.len()),
+            );
+            ix = range.end;
+        }
+        if ix < self.text.len() {
+            runs.push(base_style.to_run(self.text.len() - ix));
+        }
+
+        self.styled_text = StyledText::new(self.text.clone()).with_runs(runs);
+        let (layout_id, _) =
+            self.styled_text
+                .request_layout(global_element_id, inspector_id, window, cx);
+        (layout_id, ())
+    }
+
+    fn prepaint(
+        &mut self,
+        id: Option<&GlobalElementId>,
+        inspector_id: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _: &mut Self::RequestLayoutState,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Self::PrepaintState {
+        self.styled_text
+            .prepaint(id, inspector_id, bounds, &mut (), window, cx);
+    }
+
+    fn paint(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _: &mut Self::RequestLayoutState,
+        _: &mut Self::PrepaintState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let text_layout = self.styled_text.layout().clone();
+        let line_height = text_layout.line_height();
+
+        for range in &self.ranges {
+            let Some((start_position, end_position)) =
+                self.range_positions(&text_layout, range, line_height)
+            else {
+                continue;
+            };
+
+            let cover = Bounds::from_corners(
+                point(start_position.x - px(2.), start_position.y),
+                point(end_position.x + px(2.), start_position.y + line_height),
+            );
+            window.paint_quad(fill(cover, cx.theme().background));
+
+            if start_position.y == end_position.y {
+                self.paint_link_text(range, start_position, line_height, window, cx);
+            } else {
+                Self::paint_segment(
+                    window,
+                    cx,
+                    start_position.x,
+                    bounds.right(),
+                    start_position.y + line_height - px(2.),
+                );
+
+                let mut y = start_position.y + line_height;
+                while y < end_position.y {
+                    Self::paint_segment(
+                        window,
+                        cx,
+                        bounds.left(),
+                        bounds.right(),
+                        y + line_height - px(2.),
+                    );
+                    y += line_height;
+                }
+
+                Self::paint_segment(
+                    window,
+                    cx,
+                    bounds.left(),
+                    end_position.x,
+                    end_position.y + line_height - px(2.),
+                );
+            }
+        }
+    }
+}
+
 impl TeamWorkspacePanel {
+    fn update_chat_message_content(
+        &mut self,
+        session_id: &str,
+        msg_idx: usize,
+        content: String,
+        thought_duration_secs: Option<f64>,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(history) = self.chat_histories.get_mut(session_id) {
+            if let Some(msg) = history.get_mut(msg_idx) {
+                let is_final = thought_duration_secs.is_some();
+                if is_final || msg.thought_duration_secs.is_none() {
+                    msg.content = content.into();
+                }
+                if let Some(seconds) = thought_duration_secs {
+                    msg.thought_duration_secs = Some(seconds);
+                }
+            }
+        }
+        self.rebuild_chat_display(session_id);
+        if self.selected_session_id.as_deref() == Some(session_id) {
+            let display_len = self
+                .chat_display_rows
+                .get(session_id)
+                .map(|v| v.len())
+                .unwrap_or(0);
+            self.chat_list_state =
+                gpui::ListState::new(display_len, gpui::ListAlignment::Bottom, px(200.));
+        }
+        cx.notify();
+    }
+
     pub(crate) fn render_chat_column(
         &mut self,
         window: &mut Window,
@@ -580,7 +958,7 @@ impl TeamWorkspacePanel {
 
                                                         {
                                                             let history = this.chat_histories.entry(session_id.clone()).or_default();
-                                                            history.push(crate::providers::ChatMessage { role: "user".into(), content: text.clone().into(), agent_name: None });
+                                                            history.push(crate::providers::ChatMessage { role: "user".into(), content: text.clone().into(), agent_name: None, thought_duration_secs: None });
                                                         }
                                                         this.rebuild_chat_display(&session_id);
                                                         let display_len = this.chat_display_rows.get(&session_id).map(|v| v.len()).unwrap_or(0);
@@ -1297,10 +1675,36 @@ impl TeamWorkspacePanel {
                                             .child(div().text_sm().font_weight(gpui::FontWeight::MEDIUM).child(label))
                                     }))
                                     .child(
-                                        div().flex_1().child(
-                                            gpui_component::input::Input::new(&self.chat_input_state)
-                                                .appearance(false)
-                                        )
+                                        {
+                                            let input_text =
+                                                self.chat_input_state.read(cx).text().to_string();
+                                            let ranges = url_ranges(&input_text);
+
+                                            div()
+                                                .relative()
+                                                .flex_1()
+                                                .min_w_0()
+                                                .child(
+                                                    gpui_component::input::Input::new(
+                                                        &self.chat_input_state,
+                                                    )
+                                                    .appearance(false),
+                                                )
+                                                .when(!ranges.is_empty(), |this| {
+                                                    this.child(
+                                                        div()
+                                                            .absolute()
+                                                            .left(px(12.))
+                                                            .right(px(12.))
+                                                            .top(px(8.))
+                                                            .bottom(px(0.))
+                                                            .child(LinkInlineOverlay::new(
+                                                                input_text,
+                                                                ranges,
+                                                            )),
+                                                    )
+                                                })
+                                        }
                                     )
                             )
                         )
@@ -1570,6 +1974,7 @@ impl TeamWorkspacePanel {
                 role: "user".into(),
                 content: text.clone().into(),
                 agent_name: None,
+                thought_duration_secs: None,
             });
         }
         self.rebuild_chat_display(&session_id);
@@ -1790,7 +2195,7 @@ impl TeamWorkspacePanel {
                             let mut task_prompt = Vec::new();
                             let chat_service = crate::application::services::chat_service::ChatService::new(db_clone_agent.clone(), team_bus_clone_agent.clone());
                             if let Some(sys_prompt) = chat_service.build_dynamic_system_prompt(&team_id_clone_agent, &instance_id_clone_agent, &agent_id_clone) {
-                                task_prompt.push(crate::core::models::ChatMessage { role: "system".into(), content: gpui::SharedString::from(sys_prompt), agent_name: None });
+                                task_prompt.push(crate::core::models::ChatMessage { role: "system".into(), content: gpui::SharedString::from(sys_prompt), agent_name: None, thought_duration_secs: None });
                             }
                             
                             // Instruct the LLM to output files if needed
@@ -1818,7 +2223,7 @@ impl TeamWorkspacePanel {
                                 }
                             }
                             
-                            task_prompt.push(crate::providers::ChatMessage { role: "user".into(), content: format!("{}{}", instructions, task_text).into(), agent_name: None });
+                            task_prompt.push(crate::providers::ChatMessage { role: "user".into(), content: format!("{}{}", instructions, task_text).into(), agent_name: None, thought_duration_secs: None });
 
                             let result = if provider_kind(&provider_config) == "openrouter" {
                                 let mut adapter = crate::providers::openrouter::OpenRouterAdapter::new();
@@ -1878,7 +2283,7 @@ impl TeamWorkspacePanel {
                             };
 
                             let agent_name_str = agent.name.clone();
-                            let metadata = serde_json::json!({"agent_name": agent_name_str}).to_string();
+                            let metadata = chat_message_metadata(&agent_name_str, None);
                             
                             let mut msg = crate::teambus::routing::TeamMessage::new_broadcast(
                                 instance_id_clone_agent.clone(),
@@ -1911,7 +2316,8 @@ impl TeamWorkspacePanel {
                                         history.push(crate::providers::ChatMessage {
                                             role: "assistant".into(),
                                             content: status_text.clone().into(),
-                                            agent_name: Some(agent_name_str.into())
+                                            agent_name: Some(agent_name_str.into()),
+                                            thought_duration_secs: None,
                                         });
                                     }
                                     this.rebuild_chat_display(&session_id);
@@ -2048,7 +2454,7 @@ impl TeamWorkspacePanel {
                                         _ => {}
                                     }
                                 }
-                                full_history.insert(0, crate::providers::ChatMessage { role: gpui::SharedString::from("system"), content: gpui::SharedString::from(sys), agent_name: None });
+                                full_history.insert(0, crate::providers::ChatMessage { role: gpui::SharedString::from("system"), content: gpui::SharedString::from(sys), agent_name: None, thought_duration_secs: None });
                             }
 
                             let mut round_result: Option<String> = None;
@@ -2057,7 +2463,7 @@ impl TeamWorkspacePanel {
                                     let mut adapter = crate::providers::openrouter::OpenRouterAdapter::new();
                                     if adapter.initialize(&provider_config).is_ok() {
                                     let agent_name_str = agent.name.clone();
-                                    let metadata = serde_json::json!({"agent_name": agent_name_str}).to_string();
+                                    let metadata = chat_message_metadata(&agent_name_str, None);
                                     let mut office_msg = crate::teambus::routing::TeamMessage::new_broadcast(
                                         instance_id_for_ai.clone(),
                                         "assistant".to_string(),
@@ -2077,7 +2483,8 @@ impl TeamWorkspacePanel {
                                                 history.push(crate::providers::ChatMessage {
                                                     role: "assistant".into(),
                                                     content: "".into(),
-                                                    agent_name: Some(agent.name.clone().into())
+                                                    agent_name: Some(agent.name.clone().into()),
+                                                    thought_duration_secs: None,
                                                 });
                                                 msg_idx = history.len() - 1;
                                             }
@@ -2104,25 +2511,13 @@ impl TeamWorkspacePanel {
                                                 let _ = cx
                                                     .update(|cx| {
                                                         view_stream.update(cx, |this: &mut Self, cx| {
-                                                            if let Some(history) = this.chat_histories.get_mut(&session_id_stream) {
-                                                                if msg_idx_stream < history.len() {
-                                                                    history[msg_idx_stream].content = partial.clone().into();
-                                                                }
-                                                            }
-                                                            this.rebuild_chat_display(&session_id_stream);
-                                                            if this.selected_session_id.as_deref() == Some(session_id_stream.as_str()) {
-                                                                let display_len = this
-                                                                    .chat_display_rows
-                                                                    .get(&session_id_stream)
-                                                                    .map(|v| v.len())
-                                                                    .unwrap_or(0);
-                                                                this.chat_list_state = gpui::ListState::new(
-                                                                    display_len,
-                                                                    gpui::ListAlignment::Bottom,
-                                                                    gpui::px(200.),
-                                                                );
-                                                            }
-                                                            cx.notify();
+                                                            this.update_chat_message_content(
+                                                                &session_id_stream,
+                                                                msg_idx_stream,
+                                                                partial.clone(),
+                                                                None,
+                                                                cx,
+                                                            );
                                                         });
                                                     })
                                                     .ok();
@@ -2147,8 +2542,10 @@ impl TeamWorkspacePanel {
                                             })),
                                         );
                                         
+                                        let response_started_at = Instant::now();
                                         match executor.execute_task(full_history).await {
                                             Ok(full_text) => {
+                                                let thought_duration_secs = response_started_at.elapsed().as_secs_f64();
                                                 let _ = db_clone.update_team_message_content(&office_msg_id, &full_text);
                                             if cancel_flag_for_ai.load(Ordering::SeqCst) {
                                                 let _ = db_clone.update_team_message_delivery_status(&office_msg_id, "cancelled");
@@ -2162,24 +2559,40 @@ impl TeamWorkspacePanel {
                                                     let _ = db_clone.update_team_message_content(&office_msg_id, &clean_text);
                                                 }
                                                 let chosen = if files_written.is_empty() { full_text } else { clean_text };
-                                                round_result = Some(chosen);
+                                                round_result = Some(chosen.clone());
                                                 let _ = db_clone.ensure_session(&session_id_for_ai, &agent.id, Some(&instance_id_for_ai));
-                                                let _ = db_clone.append_conversation_turn(&session_id_for_ai, "assistant", round_result.as_ref().unwrap(), Some(&metadata));
+                                                let final_metadata = chat_message_metadata(&agent_name_str, Some(thought_duration_secs));
+                                                let _ = db_clone.append_conversation_turn(&session_id_for_ai, "assistant", round_result.as_ref().unwrap(), Some(&final_metadata));
                                                 let _ = db_clone.touch_session(&session_id_for_ai);
                                                 
                                                 // Sync AI reply to Office view
                                                 let agent_name_for_office = agent.name.clone();
                                                 let agent_id_for_office = agent.id.clone();
-                                                let chosen_for_office = round_result.clone().unwrap_or_default();
+                                                let chosen_for_office = chosen;
                                                 let _ = cx.update(|cx| view.update(cx, |this: &mut Self, cx| {
+                                                    this.update_chat_message_content(
+                                                        &session_id_for_ai,
+                                                        msg_idx,
+                                                        chosen_for_office.clone(),
+                                                        Some(thought_duration_secs),
+                                                        cx,
+                                                    );
                                                     this.push_office_chat_message(&agent_id_for_office, &chosen_for_office, false, &agent_name_for_office, cx);
-                                                    cx.notify();
                                                 })).ok();
                                             }
                                             Err(e) => {
-                                                let _ = db_clone.update_team_message_content(&office_msg_id, &format!("Error: {}", e));
+                                                let error_text = format!("Error: {}", e);
+                                                let _ = db_clone.update_team_message_content(&office_msg_id, &error_text);
                                                 let _ = db_clone.update_team_message_delivery_status(&office_msg_id, "failed");
-                                                let _ = cx.update(|cx| view.update(cx, |_, cx| cx.notify())).ok();
+                                                let _ = cx.update(|cx| view.update(cx, |this: &mut Self, cx| {
+                                                    this.update_chat_message_content(
+                                                        &session_id_for_ai,
+                                                        msg_idx,
+                                                        error_text.clone(),
+                                                        None,
+                                                        cx,
+                                                    );
+                                                })).ok();
                                             }
                                         }
 
@@ -2189,7 +2602,7 @@ impl TeamWorkspacePanel {
                                     let mut adapter = crate::providers::claude::ClaudeAdapter::new();
                                     if adapter.initialize(&provider_config).is_ok() {
                                     let agent_name_str = agent.name.clone();
-                                    let metadata = serde_json::json!({"agent_name": agent_name_str}).to_string();
+                                    let metadata = chat_message_metadata(&agent_name_str, None);
                                     let mut office_msg = crate::teambus::routing::TeamMessage::new_broadcast(
                                         instance_id_for_ai.clone(),
                                         "assistant".to_string(),
@@ -2209,7 +2622,8 @@ impl TeamWorkspacePanel {
                                                 history.push(crate::providers::ChatMessage {
                                                     role: "assistant".into(),
                                                     content: "".into(),
-                                                    agent_name: Some(agent.name.clone().into())
+                                                    agent_name: Some(agent.name.clone().into()),
+                                                    thought_duration_secs: None,
                                                 });
                                                 msg_idx = history.len() - 1;
                                             }
@@ -2236,25 +2650,13 @@ impl TeamWorkspacePanel {
                                                 let _ = cx
                                                     .update(|cx| {
                                                         view_stream.update(cx, |this: &mut Self, cx| {
-                                                            if let Some(history) = this.chat_histories.get_mut(&session_id_stream) {
-                                                                if msg_idx_stream < history.len() {
-                                                                    history[msg_idx_stream].content = partial.clone().into();
-                                                                }
-                                                            }
-                                                            this.rebuild_chat_display(&session_id_stream);
-                                                            if this.selected_session_id.as_deref() == Some(session_id_stream.as_str()) {
-                                                                let display_len = this
-                                                                    .chat_display_rows
-                                                                    .get(&session_id_stream)
-                                                                    .map(|v| v.len())
-                                                                    .unwrap_or(0);
-                                                                this.chat_list_state = gpui::ListState::new(
-                                                                    display_len,
-                                                                    gpui::ListAlignment::Bottom,
-                                                                    gpui::px(200.),
-                                                                );
-                                                            }
-                                                            cx.notify();
+                                                            this.update_chat_message_content(
+                                                                &session_id_stream,
+                                                                msg_idx_stream,
+                                                                partial.clone(),
+                                                                None,
+                                                                cx,
+                                                            );
                                                         });
                                                     })
                                                     .ok();
@@ -2279,8 +2681,10 @@ impl TeamWorkspacePanel {
                                             })),
                                         );
                                         
+                                        let response_started_at = Instant::now();
                                         match executor.execute_task(full_history).await {
                                             Ok(full_text) => {
+                                                let thought_duration_secs = response_started_at.elapsed().as_secs_f64();
                                                 let _ = db_clone.update_team_message_content(&office_msg_id, &full_text);
                                             if cancel_flag_for_ai.load(Ordering::SeqCst) {
                                                 let _ = db_clone.update_team_message_delivery_status(&office_msg_id, "cancelled");
@@ -2294,30 +2698,39 @@ impl TeamWorkspacePanel {
                                                     let _ = db_clone.update_team_message_content(&office_msg_id, &clean_text);
                                                 }
                                                 let chosen = if files_written.is_empty() { full_text } else { clean_text };
-                                                round_result = Some(chosen);
+                                                round_result = Some(chosen.clone());
                                                 let _ = db_clone.ensure_session(&session_id_for_ai, &agent.id, Some(&instance_id_for_ai));
-                                                let _ = db_clone.append_conversation_turn(&session_id_for_ai, "assistant", round_result.as_ref().unwrap(), Some(&metadata));
+                                                let final_metadata = chat_message_metadata(&agent_name_str, Some(thought_duration_secs));
+                                                let _ = db_clone.append_conversation_turn(&session_id_for_ai, "assistant", round_result.as_ref().unwrap(), Some(&final_metadata));
                                                 let _ = db_clone.touch_session(&session_id_for_ai);
                                                 
                                                 // Sync AI reply to Office view
                                                 let agent_name_for_office = agent.name.clone();
                                                 let agent_id_for_office = agent.id.clone();
-                                                let chosen_for_office = round_result.clone().unwrap_or_default();
+                                                let chosen_for_office = chosen;
                                                 let _ = cx.update(|cx| view.update(cx, |this: &mut Self, cx| {
+                                                    this.update_chat_message_content(
+                                                        &session_id_for_ai,
+                                                        msg_idx,
+                                                        chosen_for_office.clone(),
+                                                        Some(thought_duration_secs),
+                                                        cx,
+                                                    );
                                                     this.push_office_chat_message(&agent_id_for_office, &chosen_for_office, false, &agent_name_for_office, cx);
-                                                    cx.notify();
                                                 })).ok();
                                             }
                                             Err(e) => {
-                                                let _ = db_clone.update_team_message_content(&office_msg_id, &format!("Error: {}", e));
+                                                let error_text = format!("Error: {}", e);
+                                                let _ = db_clone.update_team_message_content(&office_msg_id, &error_text);
                                                 let _ = db_clone.update_team_message_delivery_status(&office_msg_id, "failed");
-                                                // Sync AI reply to Office view
-                                                let agent_name_for_office = agent.name.clone();
-                                                let agent_id_for_office = agent.id.clone();
-                                                let chosen_for_office = round_result.clone().unwrap_or_default();
                                                 let _ = cx.update(|cx| view.update(cx, |this: &mut Self, cx| {
-                                                    this.push_office_chat_message(&agent_id_for_office, &chosen_for_office, false, &agent_name_for_office, cx);
-                                                    cx.notify();
+                                                    this.update_chat_message_content(
+                                                        &session_id_for_ai,
+                                                        msg_idx,
+                                                        error_text.clone(),
+                                                        None,
+                                                        cx,
+                                                    );
                                                 })).ok();
                                             }
                                         }
@@ -2328,7 +2741,7 @@ impl TeamWorkspacePanel {
                                     let mut adapter = crate::providers::gemini::GeminiAdapter::new();
                                     if adapter.initialize(&provider_config).is_ok() {
                                         let agent_name_str = agent.name.clone();
-                                        let metadata = serde_json::json!({"agent_name": agent_name_str}).to_string();
+                                        let metadata = chat_message_metadata(&agent_name_str, None);
                                         let mut office_msg = crate::teambus::routing::TeamMessage::new_broadcast(
                                             instance_id_for_ai.clone(),
                                             "assistant".to_string(),
@@ -2347,7 +2760,8 @@ impl TeamWorkspacePanel {
                                                     history.push(crate::providers::ChatMessage {
                                                         role: "assistant".into(),
                                                         content: "".into(),
-                                                        agent_name: Some(agent.name.clone().into())
+                                                        agent_name: Some(agent.name.clone().into()),
+                                                        thought_duration_secs: None,
                                                     });
                                                     msg_idx = history.len() - 1;
                                                 }
@@ -2374,25 +2788,13 @@ impl TeamWorkspacePanel {
                                                 let _ = cx
                                                     .update(|cx| {
                                                         view_stream.update(cx, |this: &mut Self, cx| {
-                                                            if let Some(history) = this.chat_histories.get_mut(&session_id_stream) {
-                                                                if msg_idx_stream < history.len() {
-                                                                    history[msg_idx_stream].content = partial.clone().into();
-                                                                }
-                                                            }
-                                                            this.rebuild_chat_display(&session_id_stream);
-                                                            if this.selected_session_id.as_deref() == Some(session_id_stream.as_str()) {
-                                                                let display_len = this
-                                                                    .chat_display_rows
-                                                                    .get(&session_id_stream)
-                                                                    .map(|v| v.len())
-                                                                    .unwrap_or(0);
-                                                                this.chat_list_state = gpui::ListState::new(
-                                                                    display_len,
-                                                                    gpui::ListAlignment::Bottom,
-                                                                    gpui::px(200.),
-                                                                );
-                                                            }
-                                                            cx.notify();
+                                                            this.update_chat_message_content(
+                                                                &session_id_stream,
+                                                                msg_idx_stream,
+                                                                partial.clone(),
+                                                                None,
+                                                                cx,
+                                                            );
                                                         });
                                                     })
                                                     .ok();
@@ -2417,8 +2819,10 @@ impl TeamWorkspacePanel {
                                             })),
                                         );
                                         
+                                        let response_started_at = Instant::now();
                                         match executor.execute_task(full_history).await {
                                             Ok(full_text) => {
+                                                let thought_duration_secs = response_started_at.elapsed().as_secs_f64();
                                                 let _ = db_clone.update_team_message_content(&office_msg_id, &full_text);
                                             if cancel_flag_for_ai.load(Ordering::SeqCst) {
                                                 let _ = db_clone.update_team_message_delivery_status(&office_msg_id, "cancelled");
@@ -2432,30 +2836,39 @@ impl TeamWorkspacePanel {
                                                     let _ = db_clone.update_team_message_content(&office_msg_id, &clean_text);
                                                 }
                                                 let chosen = if files_written.is_empty() { full_text } else { clean_text };
-                                                round_result = Some(chosen);
+                                                round_result = Some(chosen.clone());
                                                 let _ = db_clone.ensure_session(&session_id_for_ai, &agent.id, Some(&instance_id_for_ai));
-                                                let _ = db_clone.append_conversation_turn(&session_id_for_ai, "assistant", round_result.as_ref().unwrap(), Some(&metadata));
+                                                let final_metadata = chat_message_metadata(&agent_name_str, Some(thought_duration_secs));
+                                                let _ = db_clone.append_conversation_turn(&session_id_for_ai, "assistant", round_result.as_ref().unwrap(), Some(&final_metadata));
                                                 let _ = db_clone.touch_session(&session_id_for_ai);
                                                 
                                                 // Sync AI reply to Office view
                                                 let agent_name_for_office = agent.name.clone();
                                                 let agent_id_for_office = agent.id.clone();
-                                                let chosen_for_office = round_result.clone().unwrap_or_default();
+                                                let chosen_for_office = chosen;
                                                 let _ = cx.update(|cx| view.update(cx, |this: &mut Self, cx| {
+                                                    this.update_chat_message_content(
+                                                        &session_id_for_ai,
+                                                        msg_idx,
+                                                        chosen_for_office.clone(),
+                                                        Some(thought_duration_secs),
+                                                        cx,
+                                                    );
                                                     this.push_office_chat_message(&agent_id_for_office, &chosen_for_office, false, &agent_name_for_office, cx);
-                                                    cx.notify();
                                                 })).ok();
                                             }
                                             Err(e) => {
-                                                let _ = db_clone.update_team_message_content(&office_msg_id, &format!("Error: {}", e));
+                                                let error_text = format!("Error: {}", e);
+                                                let _ = db_clone.update_team_message_content(&office_msg_id, &error_text);
                                                 let _ = db_clone.update_team_message_delivery_status(&office_msg_id, "failed");
-                                                // Sync AI reply to Office view
-                                                let agent_name_for_office = agent.name.clone();
-                                                let agent_id_for_office = agent.id.clone();
-                                                let chosen_for_office = round_result.clone().unwrap_or_default();
                                                 let _ = cx.update(|cx| view.update(cx, |this: &mut Self, cx| {
-                                                    this.push_office_chat_message(&agent_id_for_office, &chosen_for_office, false, &agent_name_for_office, cx);
-                                                    cx.notify();
+                                                    this.update_chat_message_content(
+                                                        &session_id_for_ai,
+                                                        msg_idx,
+                                                        error_text.clone(),
+                                                        None,
+                                                        cx,
+                                                    );
                                                 })).ok();
                                             }
                                         }
@@ -2466,7 +2879,7 @@ impl TeamWorkspacePanel {
                                     let mut adapter = crate::providers::codex::CodexAdapter::new();
                                     if adapter.initialize(&provider_config).is_ok() {
                                         let agent_name_str = agent.name.clone();
-                                        let metadata = serde_json::json!({"agent_name": agent_name_str}).to_string();
+                                        let metadata = chat_message_metadata(&agent_name_str, None);
                                         let mut office_msg = crate::teambus::routing::TeamMessage::new_broadcast(
                                             instance_id_for_ai.clone(),
                                             "assistant".to_string(),
@@ -2485,7 +2898,8 @@ impl TeamWorkspacePanel {
                                                     history.push(crate::providers::ChatMessage {
                                                         role: "assistant".into(),
                                                         content: "".into(),
-                                                        agent_name: Some(agent.name.clone().into())
+                                                        agent_name: Some(agent.name.clone().into()),
+                                                        thought_duration_secs: None,
                                                     });
                                                     msg_idx = history.len() - 1;
                                                 }
@@ -2512,25 +2926,13 @@ impl TeamWorkspacePanel {
                                                 let _ = cx
                                                     .update(|cx| {
                                                         view_stream.update(cx, |this: &mut Self, cx| {
-                                                            if let Some(history) = this.chat_histories.get_mut(&session_id_stream) {
-                                                                if msg_idx_stream < history.len() {
-                                                                    history[msg_idx_stream].content = partial.clone().into();
-                                                                }
-                                                            }
-                                                            this.rebuild_chat_display(&session_id_stream);
-                                                            if this.selected_session_id.as_deref() == Some(session_id_stream.as_str()) {
-                                                                let display_len = this
-                                                                    .chat_display_rows
-                                                                    .get(&session_id_stream)
-                                                                    .map(|v| v.len())
-                                                                    .unwrap_or(0);
-                                                                this.chat_list_state = gpui::ListState::new(
-                                                                    display_len,
-                                                                    gpui::ListAlignment::Bottom,
-                                                                    gpui::px(200.),
-                                                                );
-                                                            }
-                                                            cx.notify();
+                                                            this.update_chat_message_content(
+                                                                &session_id_stream,
+                                                                msg_idx_stream,
+                                                                partial.clone(),
+                                                                None,
+                                                                cx,
+                                                            );
                                                         });
                                                     })
                                                     .ok();
@@ -2555,8 +2957,10 @@ impl TeamWorkspacePanel {
                                                 }
                                             })),
                                         );
+                                        let response_started_at = Instant::now();
                                         match executor.execute_task(full_history).await {
                                             Ok(full_text) => {
+                                                let thought_duration_secs = response_started_at.elapsed().as_secs_f64();
                                                 let _ = db_clone.update_team_message_content(&office_msg_id, &full_text);
                                             if cancel_flag_for_ai.load(Ordering::SeqCst) {
                                                 let _ = db_clone.update_team_message_delivery_status(&office_msg_id, "cancelled");
@@ -2570,30 +2974,39 @@ impl TeamWorkspacePanel {
                                                     let _ = db_clone.update_team_message_content(&office_msg_id, &clean_text);
                                                 }
                                                 let chosen = if files_written.is_empty() { full_text } else { clean_text };
-                                                round_result = Some(chosen);
+                                                round_result = Some(chosen.clone());
                                                 let _ = db_clone.ensure_session(&session_id_for_ai, &agent.id, Some(&instance_id_for_ai));
-                                                let _ = db_clone.append_conversation_turn(&session_id_for_ai, "assistant", round_result.as_ref().unwrap(), Some(&metadata));
+                                                let final_metadata = chat_message_metadata(&agent_name_str, Some(thought_duration_secs));
+                                                let _ = db_clone.append_conversation_turn(&session_id_for_ai, "assistant", round_result.as_ref().unwrap(), Some(&final_metadata));
                                                 let _ = db_clone.touch_session(&session_id_for_ai);
                                                 
                                                 // Sync AI reply to Office view
                                                 let agent_name_for_office = agent.name.clone();
                                                 let agent_id_for_office = agent.id.clone();
-                                                let chosen_for_office = round_result.clone().unwrap_or_default();
+                                                let chosen_for_office = chosen;
                                                 let _ = cx.update(|cx| view.update(cx, |this: &mut Self, cx| {
+                                                    this.update_chat_message_content(
+                                                        &session_id_for_ai,
+                                                        msg_idx,
+                                                        chosen_for_office.clone(),
+                                                        Some(thought_duration_secs),
+                                                        cx,
+                                                    );
                                                     this.push_office_chat_message(&agent_id_for_office, &chosen_for_office, false, &agent_name_for_office, cx);
-                                                    cx.notify();
                                                 })).ok();
                                             }
                                             Err(e) => {
-                                                let _ = db_clone.update_team_message_content(&office_msg_id, &format!("Error: {}", e));
+                                                let error_text = format!("Error: {}", e);
+                                                let _ = db_clone.update_team_message_content(&office_msg_id, &error_text);
                                                 let _ = db_clone.update_team_message_delivery_status(&office_msg_id, "failed");
-                                                // Sync AI reply to Office view
-                                                let agent_name_for_office = agent.name.clone();
-                                                let agent_id_for_office = agent.id.clone();
-                                                let chosen_for_office = round_result.clone().unwrap_or_default();
                                                 let _ = cx.update(|cx| view.update(cx, |this: &mut Self, cx| {
-                                                    this.push_office_chat_message(&agent_id_for_office, &chosen_for_office, false, &agent_name_for_office, cx);
-                                                    cx.notify();
+                                                    this.update_chat_message_content(
+                                                        &session_id_for_ai,
+                                                        msg_idx,
+                                                        error_text.clone(),
+                                                        None,
+                                                        cx,
+                                                    );
                                                 })).ok();
                                             }
                                         }
@@ -2604,7 +3017,7 @@ impl TeamWorkspacePanel {
                                     let mut adapter = crate::providers::opencode::OpenCodeAdapter::new();
                                     if adapter.initialize(&provider_config).is_ok() {
                                         let agent_name_str = agent.name.clone();
-                                        let metadata = serde_json::json!({"agent_name": agent_name_str}).to_string();
+                                        let metadata = chat_message_metadata(&agent_name_str, None);
                                         let mut office_msg = crate::teambus::routing::TeamMessage::new_broadcast(
                                             instance_id_for_ai.clone(),
                                             "assistant".to_string(),
@@ -2623,7 +3036,8 @@ impl TeamWorkspacePanel {
                                                     history.push(crate::providers::ChatMessage {
                                                         role: "assistant".into(),
                                                         content: "".into(),
-                                                        agent_name: Some(agent.name.clone().into())
+                                                        agent_name: Some(agent.name.clone().into()),
+                                                        thought_duration_secs: None,
                                                     });
                                                     msg_idx = history.len() - 1;
                                                 }
@@ -2650,25 +3064,13 @@ impl TeamWorkspacePanel {
                                                 let _ = cx
                                                     .update(|cx| {
                                                         view_stream.update(cx, |this: &mut Self, cx| {
-                                                            if let Some(history) = this.chat_histories.get_mut(&session_id_stream) {
-                                                                if msg_idx_stream < history.len() {
-                                                                    history[msg_idx_stream].content = partial.clone().into();
-                                                                }
-                                                            }
-                                                            this.rebuild_chat_display(&session_id_stream);
-                                                            if this.selected_session_id.as_deref() == Some(session_id_stream.as_str()) {
-                                                                let display_len = this
-                                                                    .chat_display_rows
-                                                                    .get(&session_id_stream)
-                                                                    .map(|v| v.len())
-                                                                    .unwrap_or(0);
-                                                                this.chat_list_state = gpui::ListState::new(
-                                                                    display_len,
-                                                                    gpui::ListAlignment::Bottom,
-                                                                    gpui::px(200.),
-                                                                );
-                                                            }
-                                                            cx.notify();
+                                                            this.update_chat_message_content(
+                                                                &session_id_stream,
+                                                                msg_idx_stream,
+                                                                partial.clone(),
+                                                                None,
+                                                                cx,
+                                                            );
                                                         });
                                                     })
                                                     .ok();
@@ -2693,8 +3095,10 @@ impl TeamWorkspacePanel {
                                             })),
                                         );
                                         
+                                        let response_started_at = Instant::now();
                                         match executor.execute_task(full_history).await {
                                             Ok(full_text) => {
+                                                let thought_duration_secs = response_started_at.elapsed().as_secs_f64();
                                                 let _ = db_clone.update_team_message_content(&office_msg_id, &full_text);
                                             if cancel_flag_for_ai.load(Ordering::SeqCst) {
                                                 let _ = db_clone.update_team_message_delivery_status(&office_msg_id, "cancelled");
@@ -2708,30 +3112,39 @@ impl TeamWorkspacePanel {
                                                     let _ = db_clone.update_team_message_content(&office_msg_id, &clean_text);
                                                 }
                                                 let chosen = if files_written.is_empty() { full_text } else { clean_text };
-                                                round_result = Some(chosen);
+                                                round_result = Some(chosen.clone());
                                                 let _ = db_clone.ensure_session(&session_id_for_ai, &agent.id, Some(&instance_id_for_ai));
-                                                let _ = db_clone.append_conversation_turn(&session_id_for_ai, "assistant", round_result.as_ref().unwrap(), Some(&metadata));
+                                                let final_metadata = chat_message_metadata(&agent_name_str, Some(thought_duration_secs));
+                                                let _ = db_clone.append_conversation_turn(&session_id_for_ai, "assistant", round_result.as_ref().unwrap(), Some(&final_metadata));
                                                 let _ = db_clone.touch_session(&session_id_for_ai);
                                                 
                                                 // Sync AI reply to Office view
                                                 let agent_name_for_office = agent.name.clone();
                                                 let agent_id_for_office = agent.id.clone();
-                                                let chosen_for_office = round_result.clone().unwrap_or_default();
+                                                let chosen_for_office = chosen;
                                                 let _ = cx.update(|cx| view.update(cx, |this: &mut Self, cx| {
+                                                    this.update_chat_message_content(
+                                                        &session_id_for_ai,
+                                                        msg_idx,
+                                                        chosen_for_office.clone(),
+                                                        Some(thought_duration_secs),
+                                                        cx,
+                                                    );
                                                     this.push_office_chat_message(&agent_id_for_office, &chosen_for_office, false, &agent_name_for_office, cx);
-                                                    cx.notify();
                                                 })).ok();
                                             }
                                             Err(e) => {
-                                                let _ = db_clone.update_team_message_content(&office_msg_id, &format!("Error: {}", e));
+                                                let error_text = format!("Error: {}", e);
+                                                let _ = db_clone.update_team_message_content(&office_msg_id, &error_text);
                                                 let _ = db_clone.update_team_message_delivery_status(&office_msg_id, "failed");
-                                                // Sync AI reply to Office view
-                                                let agent_name_for_office = agent.name.clone();
-                                                let agent_id_for_office = agent.id.clone();
-                                                let chosen_for_office = round_result.clone().unwrap_or_default();
                                                 let _ = cx.update(|cx| view.update(cx, |this: &mut Self, cx| {
-                                                    this.push_office_chat_message(&agent_id_for_office, &chosen_for_office, false, &agent_name_for_office, cx);
-                                                    cx.notify();
+                                                    this.update_chat_message_content(
+                                                        &session_id_for_ai,
+                                                        msg_idx,
+                                                        error_text.clone(),
+                                                        None,
+                                                        cx,
+                                                    );
                                                 })).ok();
                                             }
                                         }
@@ -2746,6 +3159,7 @@ impl TeamWorkspacePanel {
                                     role: gpui::SharedString::from("assistant"),
                                     content: gpui::SharedString::from(text.clone()),
                                     agent_name: Some(gpui::SharedString::from(agent.name.clone())),
+                                    thought_duration_secs: None,
                                 });
                                 if debate_mode && text.contains("[CONSENSUS_REACHED]") {
                                     break;
@@ -2772,7 +3186,7 @@ impl TeamWorkspacePanel {
                                 .chat_histories
                                 .entry(session_id_for_ai.clone())
                                 .or_default();
-                            history.push(crate::providers::ChatMessage { role: "assistant".into(), content: error_text.into(), agent_name: None });
+                            history.push(crate::providers::ChatMessage { role: "assistant".into(), content: error_text.into(), agent_name: None, thought_duration_secs: None });
                         }
                         this.rebuild_chat_display(&session_id_for_ai);
                         let assistant_msg = crate::teambus::routing::TeamMessage::new_broadcast(
@@ -2992,6 +3406,16 @@ impl TeamWorkspacePanel {
             "Agent".to_string()
         };
         let mut display_content = content_to_render.clone();
+        let is_thinking =
+            !is_user && msg.thought_duration_secs.is_none() && display_content.trim().is_empty();
+        if is_thinking {
+            display_content = AI_THINKING_LABEL.to_string();
+        }
+        let thought_duration_secs = if !is_user && !is_thinking {
+            msg.thought_duration_secs
+        } else {
+            None
+        };
 
         if !is_user {
             // Strip legacy prefixes like [Task Completed] {task_id}:
@@ -3175,7 +3599,19 @@ impl TeamWorkspacePanel {
                                         .rounded_lg()
                                         .overflow_hidden()
                                         .child(text_element),
-                                ),
+                                )
+                                .when_some(thought_duration_secs, |this, seconds| {
+                                    this.child(
+                                        div()
+                                            .mt(px(4.))
+                                            .text_size(px(11.))
+                                            .text_color(theme.muted_foreground)
+                                            .child(format!(
+                                                "Thought for {}",
+                                                format_thought_duration(seconds)
+                                            )),
+                                    )
+                                }),
                         ),
                 )
                 .into_any_element()

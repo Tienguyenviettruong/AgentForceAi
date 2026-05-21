@@ -1438,11 +1438,16 @@ impl crate::core::traits::database::DatabasePort for Database {
             let metadata = row.get::<usize, Option<String>>(2).unwrap_or(None);
 
             let mut agent_name = None;
+            let mut thought_duration_secs = None;
             if let Some(meta_str) = metadata {
                 if let Ok(json) = serde_json::from_str::<serde_json::Value>(&meta_str) {
                     if let Some(name) = json.get("agent_name").and_then(|n| n.as_str()) {
                         agent_name = Some(name.to_string().into());
                     }
+                    thought_duration_secs = json.get("thought_duration_secs").and_then(|n| {
+                        n.as_f64()
+                            .or_else(|| n.as_str().and_then(|s| s.parse::<f64>().ok()))
+                    });
                 }
             }
 
@@ -1450,6 +1455,7 @@ impl crate::core::traits::database::DatabasePort for Database {
                 role: role.into(),
                 content: content.into(),
                 agent_name,
+                thought_duration_secs,
             });
         }
         Ok(msgs)
@@ -1496,6 +1502,7 @@ impl crate::core::traits::database::DatabasePort for Database {
                 role: role.into(),
                 content: content.into(),
                 agent_name: None,
+                thought_duration_secs: None,
             });
         }
         Ok(msgs)

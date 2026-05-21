@@ -417,6 +417,7 @@ impl TeamWorkspacePanel {
                                             role: "assistant".into(),
                                             content: msg.content.clone().into(),
                                             agent_name: Some(agent_name.clone().into()),
+                                            thought_duration_secs: None,
                                         });
                                     }
                                     #[cfg(any(target_os = "windows", target_os = "macos"))]

@@ -67,6 +67,7 @@ impl ActionRecorder {
             role: "user".to_string().into(),
             content: prompt.into(),
             agent_name: None,
+            thought_duration_secs: None,
         }];
         let definition = match llm.send_message(messages).await {
             Ok(response) => response.content.to_string(),
