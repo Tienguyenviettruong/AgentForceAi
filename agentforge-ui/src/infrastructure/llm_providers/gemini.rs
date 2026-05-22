@@ -161,6 +161,17 @@ impl BaseProviderAdapter for GeminiAdapter {
         "gemini"
     }
 
+    /// Gemini 1.5+ hỗ trợ full multimodal: text, image, audio, video, PDF.
+    fn capabilities(&self) -> crate::core::models::ModelCapability {
+        // Kiểm tra config để có thể override từ DB
+        if let Some(config) = &self.config {
+            if let Some(cap) = &config.capabilities {
+                return cap.clone();
+            }
+        }
+        crate::core::models::ModelCapability::gemini_multimodal()
+    }
+
     fn initialize(&mut self, config: &crate::db::Provider) -> Result<()> {
         self.config = Some(config.clone());
         Ok(())

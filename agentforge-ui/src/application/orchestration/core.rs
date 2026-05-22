@@ -208,7 +208,8 @@ DO NOT include any markdown formatting like ```json, just return the raw JSON ar
             0,
             crate::providers::ChatMessage {
                 role: "system".into(),
-                content: system_prompt.into(),
+                content: system_prompt.clone().into(),
+                parts: vec![crate::core::models::ContentPart::Text(system_prompt)],
                 agent_name: None,
                 thought_duration_secs: None,
             },
@@ -223,6 +224,12 @@ DO NOT include any markdown formatting like ```json, just return the raw JSON ar
                 goal
             )
             .into(),
+            parts: vec![crate::core::models::ContentPart::Text(format!(
+                "Please decompose the following goal into tasks:
+
+{}",
+                goal
+            ))],
             agent_name: None,
             thought_duration_secs: None,
         });

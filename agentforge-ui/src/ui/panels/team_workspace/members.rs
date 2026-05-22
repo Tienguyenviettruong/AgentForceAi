@@ -38,7 +38,7 @@ impl TeamWorkspacePanel {
                     return false;
                 };
                 let role = v.get("role").and_then(|x| x.as_str()).unwrap_or("");
-                !role.is_empty() && role == agent.name
+                !role.is_empty() && role == agent.routing_role()
             })
             .collect();
         let agent_tasks_key = format!(

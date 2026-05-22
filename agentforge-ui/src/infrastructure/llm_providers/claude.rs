@@ -59,6 +59,16 @@ impl BaseProviderAdapter for ClaudeAdapter {
         "claude"
     }
 
+    /// Claude 3+ hỗ trợ text, image, và PDF.
+    fn capabilities(&self) -> crate::core::models::ModelCapability {
+        if let Some(config) = &self.config {
+            if let Some(cap) = &config.capabilities {
+                return cap.clone();
+            }
+        }
+        crate::core::models::ModelCapability::claude_multimodal()
+    }
+
     fn initialize(&mut self, config: &crate::db::Provider) -> Result<()> {
         self.config = Some(config.clone());
         Ok(())

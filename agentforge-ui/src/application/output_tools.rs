@@ -139,6 +139,60 @@ impl OutputTools {
         Ok(format!("Video generated: {}", path.display()))
     }
 
+    pub async fn render_document(&self, args: &Value) -> Result<String> {
+        let format = arg_string(args, "format")
+            .or_else(|| arg_string(args, "output_format"))
+            .unwrap_or_else(|| "markdown".to_string())
+            .to_ascii_lowercase();
+        let content = arg_string(args, "html")
+            .or_else(|| arg_string(args, "markdown"))
+            .or_else(|| arg_string(args, "content"))
+            .unwrap_or_default();
+
+        let (normalized_format, extension, bytes) = match format.as_str() {
+            "html" | "htm" => ("html", "html", normalize_html_document(&content).into_bytes()),
+            "txt" | "text" => ("text", "txt", content.into_bytes()),
+            "md" | "markdown" => ("markdown", "md", content.into_bytes()),
+            "csv" => ("csv", "csv", content.into_bytes()),
+            "json" => ("json", "json", content.into_bytes()),
+            "xml" => ("xml", "xml", content.into_bytes()),
+            "docx" | "word" => {
+                let manager = crate::application::doc_engine::formats::FormatManager::new();
+                let formatter = manager
+                    .get_formatter("word")
+                    .ok_or_else(|| anyhow!("Word formatter is not registered."))?;
+                ("docx", "docx", formatter.format(&content)?)
+            }
+            "pdf" => {
+                if self
+                    .setting_or_env("output_pdf_endpoint", "AGENTFORGE_PDF_OUTPUT_URL")
+                    .is_some()
+                {
+                    return self.render_pdf(args).await;
+                }
+                let manager = crate::application::doc_engine::formats::FormatManager::new();
+                let formatter = manager
+                    .get_formatter("pdf")
+                    .ok_or_else(|| anyhow!("PDF formatter is not registered."))?;
+                ("pdf", "pdf", formatter.format(&content)?)
+            }
+            "xlsx" | "excel" => ("xlsx", "xlsx", build_xlsx(args, &content)?),
+            other => {
+                return Err(anyhow!(
+                    "Unsupported document format '{}'. Supported: html, txt, md, csv, json, xml, docx, pdf, xlsx.",
+                    other
+                ))
+            }
+        };
+
+        let path = self.save_artifact(args, "docs", extension, &bytes)?;
+        Ok(format!(
+            "Document generated ({}): {}",
+            normalized_format,
+            path.display()
+        ))
+    }
+
     fn setting_or_env(&self, setting_key: &str, env_key: &str) -> Option<String> {
         self.db
             .get_setting(setting_key)
@@ -402,4 +456,142 @@ fn find_data_url(value: &Value) -> Option<String> {
 
 fn truncate(value: &str, max_chars: usize) -> String {
     value.chars().take(max_chars).collect()
+}
+
+fn normalize_html_document(content: &str) -> String {
+    let trimmed = content.trim_start();
+    if trimmed.starts_with("<!doctype")
+        || trimmed.starts_with("<!DOCTYPE")
+        || trimmed.starts_with("<html")
+        || trimmed.starts_with("<HTML")
+    {
+        content.to_string()
+    } else {
+        format!(
+            "<!doctype html><html><head><meta charset=\"utf-8\"></head><body>{}</body></html>",
+            escape_xml(content).replace('\n', "<br>\n")
+        )
+    }
+}
+
+fn build_xlsx(args: &Value, content: &str) -> Result<Vec<u8>> {
+    use std::io::Write;
+
+    let rows = rows_from_args(args).unwrap_or_else(|| parse_csv_like(content));
+    let cursor = std::io::Cursor::new(Vec::<u8>::new());
+    let mut zip = zip::ZipWriter::new(cursor);
+    let options = zip::write::FileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+
+    zip.start_file("[Content_Types].xml", options)?;
+    zip.write_all(br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+<Default Extension="xml" ContentType="application/xml"/>
+<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+</Types>"#)?;
+
+    zip.add_directory("_rels/", options)?;
+    zip.start_file("_rels/.rels", options)?;
+    zip.write_all(br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>"#)?;
+
+    zip.add_directory("xl/_rels/", options)?;
+    zip.start_file("xl/_rels/workbook.xml.rels", options)?;
+    zip.write_all(br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+</Relationships>"#)?;
+
+    zip.start_file("xl/workbook.xml", options)?;
+    zip.write_all(br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets>
+</workbook>"#)?;
+
+    zip.add_directory("xl/worksheets/", options)?;
+    zip.start_file("xl/worksheets/sheet1.xml", options)?;
+    let sheet = worksheet_xml(&rows);
+    zip.write_all(sheet.as_bytes())?;
+
+    let cursor = zip.finish()?;
+    Ok(cursor.into_inner())
+}
+
+fn rows_from_args(args: &Value) -> Option<Vec<Vec<String>>> {
+    let rows = args.get("rows")?.as_array()?;
+    let mut out = Vec::new();
+    for row in rows {
+        if let Some(values) = row.as_array() {
+            out.push(values.iter().map(value_to_cell).collect());
+        } else {
+            out.push(vec![value_to_cell(row)]);
+        }
+    }
+    Some(out)
+}
+
+fn value_to_cell(value: &Value) -> String {
+    match value {
+        Value::String(value) => value.clone(),
+        Value::Number(value) => value.to_string(),
+        Value::Bool(value) => value.to_string(),
+        Value::Null => String::new(),
+        other => other.to_string(),
+    }
+}
+
+fn parse_csv_like(content: &str) -> Vec<Vec<String>> {
+    content
+        .lines()
+        .map(|line| {
+            let delimiter = if line.contains('\t') { '\t' } else { ',' };
+            line.split(delimiter)
+                .map(|cell| cell.trim().trim_matches('"').to_string())
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+fn worksheet_xml(rows: &[Vec<String>]) -> String {
+    let mut out = String::from(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>"#,
+    );
+    for (row_ix, row) in rows.iter().enumerate() {
+        let row_number = row_ix + 1;
+        out.push_str(&format!(r#"<row r="{}">"#, row_number));
+        for (col_ix, value) in row.iter().enumerate() {
+            let cell_ref = format!("{}{}", column_name(col_ix + 1), row_number);
+            out.push_str(&format!(
+                r#"<c r="{}" t="inlineStr"><is><t>{}</t></is></c>"#,
+                cell_ref,
+                escape_xml(value)
+            ));
+        }
+        out.push_str("</row>");
+    }
+    out.push_str("</sheetData></worksheet>");
+    out
+}
+
+fn column_name(mut index: usize) -> String {
+    let mut name = String::new();
+    while index > 0 {
+        let rem = (index - 1) % 26;
+        name.insert(0, (b'A' + rem as u8) as char);
+        index = (index - 1) / 26;
+    }
+    name
+}
+
+fn escape_xml(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
 }

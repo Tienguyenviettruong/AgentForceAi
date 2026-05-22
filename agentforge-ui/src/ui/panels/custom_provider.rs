@@ -1,4 +1,3 @@
-use crate::core::traits::database::DatabasePort;
 use crate::db::{Provider, ProviderTemplate};
 use gpui::{
     div, px, AppContext, Context, Entity, FontWeight, IntoElement, ParentElement, Render,
@@ -137,6 +136,8 @@ impl CustomProviderSection {
                 Some(api_key)
             },
             status: "available".to_string(),
+            // capabilities: None = text-only by default (safe for local/unknown models)
+            capabilities: None,
         };
 
         let db = crate::AppState::global(cx).db.clone();

@@ -38,24 +38,15 @@ fn save_setting(cx: &mut App, key: &str, value: SharedString) {
 pub struct SettingsPanel {
     focus_handle: gpui::FocusHandle,
     custom_provider: Entity<CustomProviderSection>,
-    vault_path: SharedString,
 }
 
 impl SettingsPanel {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let custom_provider = cx.new(|cx| CustomProviderSection::new(window, cx));
 
-        let db = AppState::global(cx).db.clone();
-        let vault_path = db
-            .get_setting("obsidian_vault_path")
-            .unwrap_or_default()
-            .unwrap_or_else(|| "~/Documents/Obsidian/AgentForge".to_string())
-            .into();
-
         Self {
             focus_handle: cx.focus_handle(),
             custom_provider,
-            vault_path,
         }
     }
 }

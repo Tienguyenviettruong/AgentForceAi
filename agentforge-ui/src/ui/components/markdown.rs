@@ -508,19 +508,38 @@ fn render_table(
                         this.border_r_1().border_color(theme.border)
                     });
 
-                match align {
-                    Alignment::Center => cell_el = cell_el.flex().justify_center(),
-                    Alignment::Right => cell_el = cell_el.flex().justify_end(),
-                    _ => {}
-                }
-
                 if let Some(cell) = cells.get(col_ix) {
                     match cell {
-                        MdNode::TableCell(_, children) => {
+                        MdNode::TableCell(cell_align, children) => {
+                            let actual_align = if *cell_align != Alignment::None {
+                                *cell_align
+                            } else {
+                                align
+                            };
+
+                            match actual_align {
+                                Alignment::Center => cell_el = cell_el.flex().justify_center(),
+                                Alignment::Right => cell_el = cell_el.flex().justify_end(),
+                                _ => {}
+                            }
+
                             cell_el =
                                 cell_el.child(render_inline(children, theme, cx, config).w_full());
                         }
-                        _ => cell_el = cell_el.child(render_block(cell, theme, cx, config)),
+                        _ => {
+                            match align {
+                                Alignment::Center => cell_el = cell_el.flex().justify_center(),
+                                Alignment::Right => cell_el = cell_el.flex().justify_end(),
+                                _ => {}
+                            }
+                            cell_el = cell_el.child(render_block(cell, theme, cx, config));
+                        }
+                    }
+                } else {
+                    match align {
+                        Alignment::Center => cell_el = cell_el.flex().justify_center(),
+                        Alignment::Right => cell_el = cell_el.flex().justify_end(),
+                        _ => {}
                     }
                 }
 

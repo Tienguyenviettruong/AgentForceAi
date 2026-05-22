@@ -7,7 +7,7 @@ use gpui::{
 };
 use gpui_component::{
     dock::register_panel,
-    dock::{DockArea, DockEvent, DockItem, PanelView},
+    dock::{DockArea, DockEvent, DockItem},
     v_flex, Root,
 };
 use serde::Deserialize;
@@ -158,7 +158,6 @@ impl AppState {
 
 // ── Panel Registration ───────────────────────────────────
 
-const PANEL_TEAM_WORKSPACE: &str = "TeamWorkspace";
 const PANEL_IFLOW_BUILDER: &str = "IFlowBuilder";
 const PANEL_SESSION: &str = "Session";
 const PANEL_KNOWLEDGE: &str = "Knowledge";

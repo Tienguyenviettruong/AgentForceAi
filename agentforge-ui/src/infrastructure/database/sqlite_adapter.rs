@@ -311,6 +311,13 @@ impl Database {
         )
         .ok();
 
+        // Migration: thêm cột capabilities cho model capability routing
+        conn.execute(
+            "ALTER TABLE provider_configs ADD COLUMN capabilities TEXT",
+            [],
+        )
+        .ok();
+
         let db = Self {
             conn: Mutex::new(conn),
         };
@@ -475,18 +482,22 @@ impl crate::core::traits::database::DatabasePort for Database {
     fn insert_provider(&self, p: &Provider) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         let now = Utc::now().to_rfc3339();
+        let cap_json = p.capabilities.as_ref().map(|c| c.to_json());
         conn.execute(
-            "INSERT OR REPLACE INTO provider_configs (id, provider_name, model, adapter_type, command, api_key_ref, status, is_builtin, created_at, updated_at) 
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8, ?9)",
-            params![p.id, p.provider_name, p.model, p.adapter_type, p.command, p.api_key_ref, p.status, now, now],
+            "INSERT OR REPLACE INTO provider_configs (id, provider_name, model, adapter_type, command, api_key_ref, status, capabilities, is_builtin, created_at, updated_at) 
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, ?9, ?10)",
+            params![p.id, p.provider_name, p.model, p.adapter_type, p.command, p.api_key_ref, p.status, cap_json, now, now],
         )?;
         Ok(())
     }
 
     fn list_providers(&self) -> Result<Vec<Provider>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT id, provider_name, model, adapter_type, command, api_key_ref, status FROM provider_configs WHERE is_builtin = 0")?;
+        let mut stmt = conn.prepare("SELECT id, provider_name, model, adapter_type, command, api_key_ref, status, capabilities FROM provider_configs WHERE is_builtin = 0")?;
         let iter = stmt.query_map([], |row: &rusqlite::Row| {
+            let cap_json: Option<String> = row.get(7)?;
+            let capabilities = cap_json.as_deref()
+                .and_then(crate::core::models::ModelCapability::from_json);
             Ok(Provider {
                 id: row.get(0)?,
                 provider_name: row.get(1)?,
@@ -495,6 +506,7 @@ impl crate::core::traits::database::DatabasePort for Database {
                 command: row.get(4)?,
                 api_key_ref: row.get(5)?,
                 status: row.get(6)?,
+                capabilities,
             })
         })?;
 
@@ -513,10 +525,13 @@ impl crate::core::traits::database::DatabasePort for Database {
             .unwrap_or(provider_name)
             .trim()
             .to_string();
-        let mut stmt = conn.prepare("SELECT id, provider_name, model, adapter_type, command, api_key_ref, status FROM provider_configs WHERE provider_name = ?1 LIMIT 1")?;
+        let mut stmt = conn.prepare("SELECT id, provider_name, model, adapter_type, command, api_key_ref, status, capabilities FROM provider_configs WHERE provider_name = ?1 LIMIT 1")?;
         let mut rows = stmt.query(rusqlite::params![normalized])?;
 
         if let Some(row) = rows.next()? {
+            let cap_json: Option<String> = row.get(7)?;
+            let capabilities = cap_json.as_deref()
+                .and_then(crate::core::models::ModelCapability::from_json);
             Ok(Some(Provider {
                 id: row.get(0)?,
                 provider_name: row.get(1)?,
@@ -525,6 +540,7 @@ impl crate::core::traits::database::DatabasePort for Database {
                 command: row.get(4)?,
                 api_key_ref: row.get(5)?,
                 status: row.get(6)?,
+                capabilities,
             }))
         } else {
             Ok(None)
@@ -765,7 +781,7 @@ impl crate::core::traits::database::DatabasePort for Database {
         let mut map = std::collections::HashMap::new();
 
         let mut stmt = conn.prepare(
-            "SELECT a.name, m.agent_id 
+            "SELECT a.name, a.config, a.status, m.agent_id 
              FROM members m 
              JOIN agents a ON m.agent_id = a.id 
              WHERE m.instance_id = ?1",
@@ -773,12 +789,28 @@ impl crate::core::traits::database::DatabasePort for Database {
 
         let iter = stmt.query_map(rusqlite::params![instance_id], |row: &rusqlite::Row| {
             let agent_name: String = row.get(0)?;
-            let agent_id: String = row.get(1)?;
-            Ok((agent_name, agent_id))
+            let config: Option<String> = row.get(1)?;
+            let status: String = row.get(2)?;
+            let agent_id: String = row.get(3)?;
+            let role = config
+                .as_deref()
+                .and_then(|config| serde_json::from_str::<serde_json::Value>(config).ok())
+                .and_then(|value| {
+                    value
+                        .get("role")
+                        .and_then(|role| role.as_str())
+                        .map(str::trim)
+                        .filter(|role| !role.is_empty())
+                        .map(ToOwned::to_owned)
+                })
+                .unwrap_or(agent_name);
+            Ok((role, agent_id, status))
         })?;
 
-        for (agent_name, agent_id) in iter.flatten() {
-            map.insert(agent_name, agent_id);
+        for (role, agent_id, status) in iter.flatten() {
+            if status.to_lowercase() != "offline" {
+                map.insert(role, agent_id);
+            }
         }
 
         if !map.is_empty() {
@@ -795,7 +827,7 @@ impl crate::core::traits::database::DatabasePort for Database {
 
         if let Ok(team_id) = team_id_result {
             let mut stmt = conn.prepare(
-                "SELECT a.name, m.agent_id 
+                "SELECT a.name, a.config, a.status, m.agent_id 
                  FROM members m 
                  JOIN agents a ON m.agent_id = a.id 
                  WHERE m.team_id = ?1",
@@ -803,12 +835,28 @@ impl crate::core::traits::database::DatabasePort for Database {
 
             let iter = stmt.query_map(rusqlite::params![team_id], |row: &rusqlite::Row| {
                 let agent_name: String = row.get(0)?;
-                let agent_id: String = row.get(1)?;
-                Ok((agent_name, agent_id))
+                let config: Option<String> = row.get(1)?;
+                let status: String = row.get(2)?;
+                let agent_id: String = row.get(3)?;
+                let role = config
+                    .as_deref()
+                    .and_then(|config| serde_json::from_str::<serde_json::Value>(config).ok())
+                    .and_then(|value| {
+                        value
+                            .get("role")
+                            .and_then(|role| role.as_str())
+                            .map(str::trim)
+                            .filter(|role| !role.is_empty())
+                            .map(ToOwned::to_owned)
+                    })
+                    .unwrap_or(agent_name);
+                Ok((role, agent_id, status))
             })?;
 
-            for (agent_name, agent_id) in iter.flatten() {
-                map.insert(agent_name, agent_id);
+            for (role, agent_id, status) in iter.flatten() {
+                if status.to_lowercase() != "offline" {
+                    map.insert(role, agent_id);
+                }
             }
         }
 
@@ -1453,7 +1501,8 @@ impl crate::core::traits::database::DatabasePort for Database {
 
             msgs.push(crate::core::models::ChatMessage {
                 role: role.into(),
-                content: content.into(),
+                content: content.clone().into(),
+                parts: vec![crate::core::models::ContentPart::Text(content)],
                 agent_name,
                 thought_duration_secs,
             });
@@ -1500,7 +1549,8 @@ impl crate::core::traits::database::DatabasePort for Database {
             let content = row.get::<usize, String>(1)?;
             msgs.push(crate::core::models::ChatMessage {
                 role: role.into(),
-                content: content.into(),
+                content: content.clone().into(),
+                parts: vec![crate::core::models::ContentPart::Text(content)],
                 agent_name: None,
                 thought_duration_secs: None,
             });

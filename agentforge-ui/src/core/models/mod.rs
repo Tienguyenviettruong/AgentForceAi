@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod capability;
 pub mod chat;
 pub mod cross_team;
 pub mod knowledge;
@@ -9,7 +10,8 @@ pub mod team;
 pub mod workflow;
 
 pub use agent::Agent;
-pub use chat::{ChatMessage, ChatResponse, StreamChunk, TokenUsage};
+pub use capability::{Modality, ModelCapability};
+pub use chat::{ChatMessage, ChatResponse, ContentPart, StreamChunk, TokenUsage};
 pub use cross_team::{CrossTeamCaseEventRecord, CrossTeamCaseRecord};
 pub use knowledge::{Brain, KnowledgeItem, RetentionPolicy, Tag};
 pub use provider::{Provider, ProviderTemplate};

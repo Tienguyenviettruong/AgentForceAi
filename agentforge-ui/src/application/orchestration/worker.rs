@@ -45,6 +45,14 @@ impl AgentWorker {
     }
 
     pub async fn start(self: Arc<Self>) {
+        if !self.is_agent_online().await {
+            println!(
+                "AgentWorker {} not started because agent is offline",
+                self.agent_id
+            );
+            return;
+        }
+
         let agent_role = self
             .get_agent_role()
             .await
@@ -68,6 +76,9 @@ impl AgentWorker {
         loop {
             tokio::select! {
                 _ = tick.tick() => {
+                    if !self.is_agent_online().await {
+                        break;
+                    }
                     self.try_execute_next_task().await;
                 }
                 msg = rx.recv() => {
@@ -89,7 +100,16 @@ impl AgentWorker {
 
     async fn get_agent_role(&self) -> Option<String> {
         let agent = self.db.get_agent(&self.agent_id).ok()??;
-        Some(agent.name)
+        Some(agent.routing_role())
+    }
+
+    async fn is_agent_online(&self) -> bool {
+        self.db
+            .get_agent(&self.agent_id)
+            .ok()
+            .flatten()
+            .map(|agent| agent.status.to_lowercase() != "offline")
+            .unwrap_or(false)
     }
 
     async fn select_review_handler_agent_id(&self) -> Option<String> {
@@ -350,12 +370,14 @@ impl AgentWorker {
             crate::providers::ChatMessage {
                 role: "system".into(),
                 content: sys_prompt.into(),
+                parts: vec![],
                 agent_name: Some(agent.name.clone().into()),
                 thought_duration_secs: None,
             },
             crate::providers::ChatMessage {
                 role: "user".into(),
                 content: format!("{}{}", instructions, task_text).into(),
+                parts: vec![],
                 agent_name: None,
                 thought_duration_secs: None,
             },
@@ -596,23 +618,30 @@ impl AgentWorker {
         };
 
         let user_text = format!(
-            "Cross-team review request\ncorrelation_id: {}\nfrom_team: {}\noriginal_message: {}\n\nArtifact to review:\n{}",
+            "Cross-team review request\ncorrelation_id: {}\nfrom_team: {}\noriginal_message: {}\n\nArtifact to review:\n{}{}",
             correlation_id,
             handoff.from_team,
             original_msg.content,
-            handoff.briefing_package
+            handoff.briefing_package,
+            handoff.context
+                .as_ref()
+                .map(|c| format!("\n\nAdditional Context:\n{}",
+                    serde_json::to_string_pretty(c).unwrap_or_default()))
+                .unwrap_or_default()
         );
 
         let history = vec![
             crate::providers::ChatMessage {
                 role: "system".into(),
                 content: sys.into(),
+                parts: vec![],
                 agent_name: Some(agent.name.clone().into()),
                 thought_duration_secs: None,
             },
             crate::providers::ChatMessage {
                 role: "user".into(),
                 content: user_text.into(),
+                parts: vec![],
                 agent_name: None,
                 thought_duration_secs: None,
             },
@@ -803,20 +832,27 @@ impl AgentWorker {
         }
 
         let user_text = format!(
-            "Cross-team message\ncorrelation_id: {}\nfrom_instance: {}\noriginal_message: {}\n\nMessage:\n{}",
-            correlation_id, handoff.from_team, original_msg.content, handoff.briefing_package
+            "Cross-team message\ncorrelation_id: {}\nfrom_instance: {}\noriginal_message: {}\n\nMessage:\n{}{}",
+            correlation_id, handoff.from_team, original_msg.content, handoff.briefing_package,
+            handoff.context
+                .as_ref()
+                .map(|c| format!("\n\nAdditional Context (deadline, constraints, related_files, etc.):\n{}",
+                    serde_json::to_string_pretty(c).unwrap_or_default()))
+                .unwrap_or_default()
         );
 
         let history = vec![
             crate::providers::ChatMessage {
                 role: "system".into(),
                 content: sys.into(),
+                parts: vec![],
                 agent_name: Some(agent.name.clone().into()),
                 thought_duration_secs: None,
             },
             crate::providers::ChatMessage {
                 role: "user".into(),
                 content: user_text.into(),
+                parts: vec![],
                 agent_name: None,
                 thought_duration_secs: None,
             },
@@ -997,6 +1033,7 @@ impl AgentWorker {
             history.push(crate::providers::ChatMessage {
                 role: "system".into(),
                 content: system_prompt.into(),
+                parts: vec![],
                 agent_name: Some(agent.name.clone().into()),
                 thought_duration_secs: None,
             });
@@ -1004,6 +1041,7 @@ impl AgentWorker {
         history.push(crate::providers::ChatMessage {
             role: "user".into(),
             content: instruction.clone().into(),
+            parts: vec![],
             agent_name: Some(agent.name.clone().into()),
             thought_duration_secs: None,
         });
@@ -1108,7 +1146,19 @@ impl WorkerManager {
     pub async fn start_workers_for_instance(&self, instance_id: &str) {
         if let Ok(agent_ids) = self.db.get_instance_agents(instance_id) {
             let mut workers = self.workers.lock().await;
+            workers.retain(|_, handle| !handle.is_finished());
             for agent_id in agent_ids {
+                let is_online = self
+                    .db
+                    .get_agent(&agent_id)
+                    .ok()
+                    .flatten()
+                    .map(|agent| agent.status.to_lowercase() != "offline")
+                    .unwrap_or(false);
+                if !is_online {
+                    continue;
+                }
+
                 let worker_key = format!("{}_{}", instance_id, agent_id);
                 if !workers.contains_key(&worker_key) {
                     let worker = Arc::new(AgentWorker::new(

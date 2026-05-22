@@ -7,6 +7,9 @@ pub struct Provider {
     pub command: Option<String>,
     pub api_key_ref: Option<String>,
     pub status: String,
+    /// Khả năng của model: vision, audio, pdf... Lưu dạng JSON trong DB.
+    /// None = text-only (mặc định an toàn cho local models).
+    pub capabilities: Option<crate::core::models::ModelCapability>,
 }
 
 #[derive(Clone, Debug)]

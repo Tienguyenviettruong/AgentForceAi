@@ -1,4 +1,3 @@
-use crate::core::traits::database::DatabasePort;
 use gpui::AppContext;
 use gpui::{
     div, px, Context, Entity, FocusHandle, IntoElement, ListAlignment, ListState, ParentElement,
@@ -20,6 +19,7 @@ mod members;
 mod teams;
 
 pub struct TeamWorkspacePanel {
+    #[allow(dead_code)]
     focus_handle: FocusHandle,
     pub(crate) team_bus: Arc<crate::infrastructure::message_bus::routing::TeamBusRouter>,
     pub(crate) team_service: Arc<crate::application::services::team_service::TeamService>,
@@ -65,8 +65,6 @@ pub struct TeamWorkspacePanel {
     pub(crate) office_webview_init_attempted: bool,
     #[cfg(any(target_os = "windows", target_os = "macos"))]
     pub(crate) office_webview_disabled: bool,
-    #[cfg(any(target_os = "windows", target_os = "macos"))]
-    pub(crate) office_ipc_rx: Option<std::sync::mpsc::Receiver<String>>,
 }
 
 impl TeamWorkspacePanel {
@@ -134,8 +132,6 @@ impl TeamWorkspacePanel {
                     v == "1" || v == "true" || v == "yes"
                 })
                 .unwrap_or(false),
-            #[cfg(any(target_os = "windows", target_os = "macos"))]
-            office_ipc_rx: None,
         };
 
         panel.reload(cx);
@@ -416,6 +412,7 @@ impl TeamWorkspacePanel {
                                         history.push(crate::providers::ChatMessage {
                                             role: "assistant".into(),
                                             content: msg.content.clone().into(),
+                                            parts: vec![],
                                             agent_name: Some(agent_name.clone().into()),
                                             thought_duration_secs: None,
                                         });

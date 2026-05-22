@@ -259,7 +259,34 @@ impl OrchestrationPanel {
                                 .font_weight(gpui::FontWeight::BOLD)
                                 .child("Timeline / Progress"),
                         ),
-                ),
+                )
+                .child(self.render_gantt_row(
+                    "Task 1: Requirements Analysis",
+                    "Product Owner",
+                    "Completed",
+                    0.0,
+                    0.4,
+                    theme.success,
+                    cx,
+                ))
+                .child(self.render_gantt_row(
+                    "Task 2: UI Design & Mockup",
+                    "UX Designer",
+                    "Running",
+                    0.4,
+                    0.3,
+                    theme.primary,
+                    cx,
+                ))
+                .child(self.render_gantt_row(
+                    "Task 3: Backend API Setup",
+                    "Software Engineer",
+                    "Pending",
+                    0.7,
+                    0.3,
+                    theme.border,
+                    cx,
+                )),
         )
     }
 
@@ -397,11 +424,49 @@ impl OrchestrationPanel {
                 .border_color(theme.border)
                 .bg(theme.background)
                 .child(
-                    h_flex().justify_between().items_center().child(
-                        div()
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .child("Trigger Manual Transition"),
-                    ),
+                    h_flex()
+                        .justify_between()
+                        .items_center()
+                        .child(
+                            div()
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .child("Trigger Manual Transition"),
+                        )
+                        .child(
+                            div()
+                                .text_color(theme.primary)
+                                .child(format!("Current Mode: {}", self.current_mode)),
+                        ),
+                )
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .child(
+                            Button::new("btn-transition-autonomous")
+                                .primary()
+                                .label("Autonomous Mode")
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.open_transition_dialog("Autonomous", window, cx);
+                                })),
+                        )
+                        .child(
+                            Button::new("btn-transition-human")
+                                .label("Human Interaction")
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.open_transition_dialog("Human Interaction", window, cx);
+                                })),
+                        ),
+                )
+                .child(
+                    v_flex()
+                        .border_1()
+                        .border_color(theme.border)
+                        .rounded_md()
+                        .p_4()
+                        .child(div().mb_2().child("Safety Constraints"))
+                        .child(self.render_setting_row("Safety Check Delay", "500ms", cx))
+                        .child(self.render_setting_row("Max Cost Limit", "$10.00 / hour", cx))
+                        .child(self.render_setting_row("Auto-Fallback", "Enabled", cx)),
                 ),
         )
     }

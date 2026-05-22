@@ -1,5 +1,5 @@
 use gpui::{
-    div, App, Context, Focusable, InteractiveElement, IntoElement, ParentElement, Render, Styled,
+    div, App, Context, InteractiveElement, IntoElement, ParentElement, Render, Styled,
     Window,
 };
 use gpui_component::scroll::ScrollableElement;
@@ -7,6 +7,7 @@ use gpui_component::ActiveTheme;
 use gpui_component::StyledExt;
 use gpui_component::{button::Button, h_flex, v_flex};
 
+#[allow(dead_code)]
 pub struct TokenDashboard {
     focus_handle: gpui::FocusHandle,
     daily_tokens: usize,

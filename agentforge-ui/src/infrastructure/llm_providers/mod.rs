@@ -20,6 +20,13 @@ pub trait BaseProviderAdapter: Send + Sync {
     /// Returns the provider's identifier (e.g., "claude", "openai", "gemini")
     fn provider_id(&self) -> &'static str;
 
+    /// Returns the capability profile of this model/provider.
+    /// Used by CapabilityRouter to decide how to handle file attachments.
+    /// Default: text-only (safe fallback for local/unknown models).
+    fn capabilities(&self) -> crate::core::models::ModelCapability {
+        crate::core::models::ModelCapability::text_only()
+    }
+
     /// Initialize the provider with API keys, endpoints, and other configuration
     fn initialize(&mut self, config: &crate::db::Provider) -> Result<(), anyhow::Error>;
 

@@ -82,6 +82,15 @@ impl BaseProviderAdapter for OpenRouterAdapter {
         "openrouter"
     }
 
+    /// OpenRouter có thể proxy bất kỳ model nào: local hay cloud.
+    /// Capabilities được đọc từ config (user khai báo); mặc định text-only nếu không có.
+    fn capabilities(&self) -> crate::core::models::ModelCapability {
+        self.config
+            .as_ref()
+            .and_then(|c| c.capabilities.clone())
+            .unwrap_or_else(crate::core::models::ModelCapability::text_only)
+    }
+
     fn initialize(&mut self, config: &crate::db::Provider) -> Result<()> {
         self.config = Some(config.clone());
         Ok(())

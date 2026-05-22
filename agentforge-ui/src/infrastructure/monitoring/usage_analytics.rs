@@ -1,4 +1,4 @@
-use gpui::{div, App, Context, Focusable, IntoElement, ParentElement, Render, Styled, Window};
+use gpui::{div, App, Context, IntoElement, ParentElement, Render, Styled, Window};
 use gpui_component::StyledExt;
 use gpui_component::{
     button::{Button, ButtonVariants},
@@ -7,6 +7,7 @@ use gpui_component::{
     v_flex,
 };
 
+#[allow(dead_code)]
 pub struct UsageAnalytics {
     focus_handle: gpui::FocusHandle,
     db: std::sync::Arc<dyn crate::core::traits::database::DatabasePort>,

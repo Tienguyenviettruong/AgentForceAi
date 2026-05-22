@@ -1,4 +1,3 @@
-use crate::core::traits::database::DatabasePort;
 use chrono::Utc;
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -33,6 +32,41 @@ fn provider_kind(p: &crate::db::Provider) -> &str {
             "OpenCodeAdapter" => "opencode",
             _ => p.provider_name.as_str(),
         },
+    }
+}
+
+fn build_provider_adapter(
+    provider: &crate::db::Provider,
+) -> Option<Arc<dyn crate::providers::BaseProviderAdapter>> {
+    use crate::providers::BaseProviderAdapter as _;
+
+    match provider_kind(provider) {
+        "openrouter" => {
+            let mut adapter = crate::providers::openrouter::OpenRouterAdapter::new();
+            adapter.initialize(provider).ok()?;
+            Some(Arc::new(adapter))
+        }
+        "claude" => {
+            let mut adapter = crate::providers::claude::ClaudeAdapter::new();
+            adapter.initialize(provider).ok()?;
+            Some(Arc::new(adapter))
+        }
+        "gemini" => {
+            let mut adapter = crate::providers::gemini::GeminiAdapter::new();
+            adapter.initialize(provider).ok()?;
+            Some(Arc::new(adapter))
+        }
+        "codex" => {
+            let mut adapter = crate::providers::codex::CodexAdapter::new();
+            adapter.initialize(provider).ok()?;
+            Some(Arc::new(adapter))
+        }
+        "opencode" => {
+            let mut adapter = crate::providers::opencode::OpenCodeAdapter::new();
+            adapter.initialize(provider).ok()?;
+            Some(Arc::new(adapter))
+        }
+        _ => None,
     }
 }
 
@@ -712,7 +746,7 @@ impl TeamWorkspacePanel {
                                                 let db = crate::AppState::global(cx).db.clone();
                                                 let cases = Arc::new(db.list_cross_team_cases(&instance_id, 100).unwrap_or_default());
                                                 let view = cx.entity().clone();
-                                                window.open_sheet_at(gpui_component::Placement::Right, cx, move |sheet, window, cx| {
+                                                window.open_sheet_at(gpui_component::Placement::Right, cx, move |sheet, _window, cx| {
                                                     let theme = cx.theme().clone();
                                                     sheet
                                                         .title("Cross-team Cases")
@@ -935,9 +969,7 @@ impl TeamWorkspacePanel {
                                 }
                                 let _guard = OfficeWebviewInitGuard;
 
-                                let (ipc_tx, ipc_rx) = std::sync::mpsc::channel::<String>();
-                                self.office_ipc_rx = Some(ipc_rx);
-                                let mut async_cx = cx.to_async();
+                                let async_cx = cx.to_async();
                                 let view_clone = cx.entity().clone();
                                 let build_result =
                                     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -958,7 +990,7 @@ impl TeamWorkspacePanel {
 
                                                         {
                                                             let history = this.chat_histories.entry(session_id.clone()).or_default();
-                                                            history.push(crate::providers::ChatMessage { role: "user".into(), content: text.clone().into(), agent_name: None, thought_duration_secs: None });
+                                                            history.push(crate::providers::ChatMessage { role: "user".into(), content: text.clone().into(), agent_name: None, thought_duration_secs: None , parts: vec![] });
                                                         }
                                                         this.rebuild_chat_display(&session_id);
                                                         let display_len = this.chat_display_rows.get(&session_id).map(|v| v.len()).unwrap_or(0);
@@ -1869,9 +1901,20 @@ impl TeamWorkspacePanel {
             return;
         }
 
-        let raw_text = self.chat_input_state.read(cx).text().to_string();
-        let raw_text = raw_text.trim().to_string();
-        if raw_text.is_empty() {
+        let mut raw_text = self.chat_input_state.read(cx).text().to_string();
+        raw_text = raw_text.trim().to_string();
+        if let Some(cmd) = self.selected_slash_command.take() {
+            if !raw_text.starts_with('/') {
+                raw_text = if raw_text.is_empty() && cmd == "run" {
+                    "/run".to_string()
+                } else if raw_text.is_empty() {
+                    format!("/{}", cmd)
+                } else {
+                    format!("/{} {}", cmd, raw_text)
+                };
+            }
+        }
+        if raw_text.is_empty() && self.attached_files.is_empty() {
             return;
         }
         self.is_slash_dropdown_open = false;
@@ -1921,7 +1964,12 @@ impl TeamWorkspacePanel {
             session_id
         };
 
-        let mut text = raw_text.clone();
+        let attached_files_for_ai = self.attached_files.clone();
+        let mut text = if raw_text.is_empty() {
+            "Please analyze the attached file(s).".to_string()
+        } else {
+            raw_text.clone()
+        };
         if raw_text == "/" {
             window.push_notification(
                 (
@@ -1968,11 +2016,19 @@ impl TeamWorkspacePanel {
             );
         }
 
+        if !attached_files_for_ai.is_empty() {
+            text.push_str("\n\nAttached files:\n");
+            for file in &attached_files_for_ai {
+                text.push_str(&format!("- {}\n", file));
+            }
+        }
+
         {
             let history = self.chat_histories.entry(session_id.clone()).or_default();
             history.push(crate::providers::ChatMessage {
                 role: "user".into(),
                 content: text.clone().into(),
+                parts: vec![],
                 agent_name: None,
                 thought_duration_secs: None,
             });
@@ -2109,13 +2165,13 @@ impl TeamWorkspacePanel {
         let _history_clone = history_snapshot.clone();
         let view = cx.entity().clone();
         let workspace_dir_clone = self.workspace_path.clone();
+        self.attached_files.clear();
 
         if is_run_command {
             cx.spawn(async move |_, cx| {
                 let _is_run_command = true;
                 let _mode_clone = mode_clone;
                 let _text_clone = "".to_string(); // Not used
-                use crate::providers::BaseProviderAdapter;
 
                 let all_agent_ids = db_clone.get_instance_agents(&instance_id_clone).unwrap_or_default();
                 if all_agent_ids.is_empty() { return; }
@@ -2133,6 +2189,9 @@ impl TeamWorkspacePanel {
                     cx.spawn(async move |cx| {
                         loop {
                             let Ok(Some(agent)) = db_clone_agent.get_agent(&agent_id_clone) else { break; };
+                            if agent.status.to_lowercase() == "offline" {
+                                break;
+                            }
                             let provider_config = db_clone_agent
                                 .get_provider_by_name(&agent.provider)
                                 .ok()
@@ -2195,7 +2254,7 @@ impl TeamWorkspacePanel {
                             let mut task_prompt = Vec::new();
                             let chat_service = crate::application::services::chat_service::ChatService::new(db_clone_agent.clone(), team_bus_clone_agent.clone());
                             if let Some(sys_prompt) = chat_service.build_dynamic_system_prompt(&team_id_clone_agent, &instance_id_clone_agent, &agent_id_clone) {
-                                task_prompt.push(crate::core::models::ChatMessage { role: "system".into(), content: gpui::SharedString::from(sys_prompt), agent_name: None, thought_duration_secs: None });
+                                task_prompt.push(crate::core::models::ChatMessage { role: "system".into(), content: gpui::SharedString::from(sys_prompt), agent_name: None, thought_duration_secs: None , parts: vec![] });
                             }
                             
                             // Instruct the LLM to output files if needed
@@ -2223,36 +2282,35 @@ impl TeamWorkspacePanel {
                                 }
                             }
                             
-                            task_prompt.push(crate::providers::ChatMessage { role: "user".into(), content: format!("{}{}", instructions, task_text).into(), agent_name: None, thought_duration_secs: None });
+                            task_prompt.push(crate::providers::ChatMessage { role: "user".into(), content: format!("{}{}", instructions, task_text).into(), agent_name: None, thought_duration_secs: None , parts: vec![] });
 
-                            let result = if provider_kind(&provider_config) == "openrouter" {
-                                let mut adapter = crate::providers::openrouter::OpenRouterAdapter::new();
-                                if adapter.initialize(&provider_config).is_ok() {
-                                    adapter.send_message(task_prompt).await
-                                } else {
-                                    Err(anyhow::anyhow!("Failed to init adapter"))
-                                }
+                            let result = if let Some(adapter) = build_provider_adapter(&provider_config) {
+                                let mcp_registry = std::sync::Arc::new(
+                                    crate::infrastructure::mcp::registry::McpToolRegistry::new(
+                                        db_clone_agent.clone(),
+                                    ),
+                                );
+                                let executor =
+                                    crate::application::orchestration::executor::AgentExecutor::new(
+                                        adapter,
+                                        mcp_registry,
+                                        db_clone_agent.clone(),
+                                        team_bus_clone_agent.clone(),
+                                        instance_id_clone_agent.clone(),
+                                        agent_id_clone.clone(),
+                                        None,
+                                        None,
+                                    );
+                                executor.execute_task(task_prompt).await
                             } else {
-                                let mut adapter = crate::providers::claude::ClaudeAdapter::new();
-                                if adapter.initialize(&provider_config).is_ok() {
-                                    adapter.send_message(task_prompt).await
-                                } else {
-                                    Err(anyhow::anyhow!("Failed to init adapter"))
-                                }
+                                Err(anyhow::anyhow!(
+                                    "Provider adapter is not supported for /run: {}",
+                                    provider_config.provider_name
+                                ))
                             };
 
                             let (status_text, ok) = match result {
-                                Ok(resp) => {
-                                    let text = resp.content.to_string();
-                                    // Insert token usage
-                                    let _ = db_clone_agent.insert_token_usage(
-                                        Some(&instance_id_clone_agent),
-                                        &agent_id_clone,
-                                        resp.token_usage.input_tokens,
-                                        resp.token_usage.output_tokens,
-                                        resp.token_usage.total_tokens
-                                    );
-                                    
+                                Ok(text) => {
                                     let chat_service = crate::application::services::chat_service::ChatService::new(db_clone_agent.clone(), team_bus_clone_agent.clone());
                                     let (files_written, _) = chat_service.parse_and_write_files(&text, workspace_dir_agent.as_ref());
                                     
@@ -2316,6 +2374,7 @@ impl TeamWorkspacePanel {
                                         history.push(crate::providers::ChatMessage {
                                             role: "assistant".into(),
                                             content: status_text.clone().into(),
+                                            parts: vec![],
                                             agent_name: Some(agent_name_str.into()),
                                             thought_duration_secs: None,
                                         });
@@ -2371,6 +2430,7 @@ impl TeamWorkspacePanel {
         let team_bus_for_ai = self.team_bus.clone();
         let team_bus_clone = self.team_bus.clone();
         let workspace_dir_for_ai = workspace_dir_clone.clone();
+        let attached_files_for_context = attached_files_for_ai.clone();
         let cancel_flag_for_ai = cancel_flag.clone();
         cx.spawn(async move |_, cx| {
             use crate::providers::BaseProviderAdapter;
@@ -2391,6 +2451,36 @@ impl TeamWorkspacePanel {
             if let Ok(agent_ids) = db.get_instance_agents(&instance_id_for_ai) {
                 let agent_ids: Vec<String> = agent_ids;
                 let mut current_history = history_clone.clone();
+                let auto_context = crate::application::file_intelligence::build_chat_context(
+                    &query_text,
+                    &attached_files_for_context,
+                    workspace_dir_for_ai.as_deref(),
+                    crate::application::file_intelligence::AnalyzeOptions {
+                        max_text_chars: 18_000,
+                        ..crate::application::file_intelligence::AnalyzeOptions::default()
+                    },
+                )
+                .await;
+                if !auto_context.trim().is_empty() {
+                    if let Some(last_user) = current_history
+                        .iter_mut()
+                        .rev()
+                        .find(|msg| msg.role == "user")
+                    {
+                        last_user.content =
+                            format!("{}{}", last_user.content, auto_context).into();
+                    }
+                    let title = format!(
+                        "Chat intake {}",
+                        chrono::Utc::now().format("%Y-%m-%d %H:%M")
+                    );
+                    let _ = crate::application::research::web::save_research_notebook(
+                        db.clone(),
+                        &title,
+                        &auto_context,
+                    )
+                    .await;
+                }
 
                 let debate_steps: Vec<(String, &'static str)> = if debate_mode && agent_ids.len() > 1 {
                     let mut steps = vec![
@@ -2416,6 +2506,9 @@ impl TeamWorkspacePanel {
                     if !agent_id.is_empty() {
                         let agent_id = agent_id.clone();
                         if let Ok(Some(agent)) = db.get_agent(&agent_id) {
+                            if agent.status.to_lowercase() == "offline" {
+                                continue;
+                            }
                             let provider_config = db
                                 .get_provider_by_name(&agent.provider)
                                 .ok()
@@ -2454,7 +2547,7 @@ impl TeamWorkspacePanel {
                                         _ => {}
                                     }
                                 }
-                                full_history.insert(0, crate::providers::ChatMessage { role: gpui::SharedString::from("system"), content: gpui::SharedString::from(sys), agent_name: None, thought_duration_secs: None });
+                                full_history.insert(0, crate::providers::ChatMessage { role: gpui::SharedString::from("system"), content: gpui::SharedString::from(sys), agent_name: None, thought_duration_secs: None , parts: vec![] });
                             }
 
                             let mut round_result: Option<String> = None;
@@ -2483,6 +2576,7 @@ impl TeamWorkspacePanel {
                                                 history.push(crate::providers::ChatMessage {
                                                     role: "assistant".into(),
                                                     content: "".into(),
+                                                    parts: vec![],
                                                     agent_name: Some(agent.name.clone().into()),
                                                     thought_duration_secs: None,
                                                 });
@@ -2622,6 +2716,7 @@ impl TeamWorkspacePanel {
                                                 history.push(crate::providers::ChatMessage {
                                                     role: "assistant".into(),
                                                     content: "".into(),
+                                                    parts: vec![],
                                                     agent_name: Some(agent.name.clone().into()),
                                                     thought_duration_secs: None,
                                                 });
@@ -2760,6 +2855,7 @@ impl TeamWorkspacePanel {
                                                     history.push(crate::providers::ChatMessage {
                                                         role: "assistant".into(),
                                                         content: "".into(),
+                                                        parts: vec![],
                                                         agent_name: Some(agent.name.clone().into()),
                                                         thought_duration_secs: None,
                                                     });
@@ -2898,6 +2994,7 @@ impl TeamWorkspacePanel {
                                                     history.push(crate::providers::ChatMessage {
                                                         role: "assistant".into(),
                                                         content: "".into(),
+                                                        parts: vec![],
                                                         agent_name: Some(agent.name.clone().into()),
                                                         thought_duration_secs: None,
                                                     });
@@ -3036,6 +3133,7 @@ impl TeamWorkspacePanel {
                                                     history.push(crate::providers::ChatMessage {
                                                         role: "assistant".into(),
                                                         content: "".into(),
+                                                        parts: vec![],
                                                         agent_name: Some(agent.name.clone().into()),
                                                         thought_duration_secs: None,
                                                     });
@@ -3158,6 +3256,7 @@ impl TeamWorkspacePanel {
                                 current_history.push(crate::providers::ChatMessage {
                                     role: gpui::SharedString::from("assistant"),
                                     content: gpui::SharedString::from(text.clone()),
+                                    parts: vec![],
                                     agent_name: Some(gpui::SharedString::from(agent.name.clone())),
                                     thought_duration_secs: None,
                                 });
@@ -3186,7 +3285,7 @@ impl TeamWorkspacePanel {
                                 .chat_histories
                                 .entry(session_id_for_ai.clone())
                                 .or_default();
-                            history.push(crate::providers::ChatMessage { role: "assistant".into(), content: error_text.into(), agent_name: None, thought_duration_secs: None });
+                            history.push(crate::providers::ChatMessage { role: "assistant".into(), content: error_text.into(), agent_name: None, thought_duration_secs: None , parts: vec![] });
                         }
                         this.rebuild_chat_display(&session_id_for_ai);
                         let assistant_msg = crate::teambus::routing::TeamMessage::new_broadcast(
@@ -3245,7 +3344,7 @@ impl TeamWorkspacePanel {
                 from_team,
                 count,
                 preview,
-                has_request: _,
+                has_request,
                 has_response,
             } => {
                 let is_expanded = self.expanded_threads.contains(&correlation_id);
@@ -3283,12 +3382,14 @@ impl TeamWorkspacePanel {
                 } else {
                     &correlation_id
                 };
-                let status_color = if has_response {
-                    gpui::green()
+                // Smart badge: 3 states based on has_request + has_response
+                let (status_color, status_label) = if has_response {
+                    (gpui::green(), "✓ Responded")
+                } else if has_request {
+                    (gpui::yellow(), "⏳ Pending Review")
                 } else {
-                    gpui::yellow()
+                    (gpui::blue(), "Handoff")
                 };
-                let status_label = if has_response { "Responded" } else { "Pending" };
                 return div()
                     .id(("cross-team-thread", ix))
                     .w_full()
@@ -3624,7 +3725,41 @@ impl TeamWorkspacePanel {
         content: &str,
         theme: &gpui_component::Theme,
         cx: &mut Window,
-    ) -> impl IntoElement {
-        render_markdown_message(content, theme, cx)
+    ) -> gpui::AnyElement {
+        if let Some(html) = extract_renderable_html(content) {
+            return crate::ui::text::html(html)
+                .selectable(true)
+                .into_any_element();
+        }
+        render_markdown_message(content, theme, cx).into_any_element()
     }
+}
+
+fn extract_renderable_html(content: &str) -> Option<String> {
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.starts_with("```html") && trimmed.ends_with("```") {
+        let first_newline = trimmed.find('\n')?;
+        let body = &trimmed[first_newline + 1..trimmed.len().saturating_sub(3)];
+        return Some(body.trim().to_string());
+    }
+
+    let html_prefixes = [
+        "<!doctype html",
+        "<html",
+        "<body",
+        "<main",
+        "<article",
+        "<section",
+        "<table",
+        "<div",
+    ];
+    if html_prefixes.iter().any(|prefix| lower.starts_with(prefix)) && trimmed.contains('>') {
+        return Some(trimmed.to_string());
+    }
+    None
 }

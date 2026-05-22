@@ -1,7 +1,9 @@
 pub mod agents;
+pub mod capability_router;
 pub mod cost_optimization;
 pub mod cross_team_router;
 pub mod doc_engine;
+pub mod file_intelligence;
 pub mod iflow_engine;
 pub mod knowledge;
 pub mod marketplace_service;

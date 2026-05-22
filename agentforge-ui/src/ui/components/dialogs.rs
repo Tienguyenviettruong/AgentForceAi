@@ -2,13 +2,13 @@ use crate::core::traits::database::DatabasePort;
 use crate::db::{Agent, Team};
 use chrono::Utc;
 use gpui::*;
+use gpui_component::switch::Switch;
 use gpui_component::{
     button::*, form::*, input::*, notification::NotificationType, select::*, ActiveTheme as _,
     WindowExt,
 };
 use gpui_component::{h_flex, v_flex};
-use std::collections::HashSet;
-use std::sync::Arc;
+use std::{cell::Cell, collections::HashSet, rc::Rc, sync::Arc};
 
 pub fn open_new_team_dialog<V: 'static>(
     db: Arc<dyn DatabasePort>,
@@ -256,6 +256,7 @@ pub fn open_new_agent_dialog<V: 'static>(
         .map(|p| SharedString::from(format!("{} / {}", p.provider_name, p.model)))
         .collect();
     let provider_select = cx.new(|cx| SelectState::new(providers, None, window, cx));
+    let status_online = Rc::new(Cell::new(true));
 
     window.open_dialog(cx, move |dialog, _window, _cx| {
         let view_save = view.clone();
@@ -295,6 +296,23 @@ pub fn open_new_agent_dialog<V: 'static>(
                     .child(div().text_size(px(12.)).text_color(theme.muted_foreground).child("Mô hình LLM sẽ cung cấp năng lực cho Agent này (VD: Claude-3-Opus, GPT-4o).")))
                     .child(
                         field()
+                            .label("Status")
+                            .child(
+                                Switch::new("new-agent-status")
+                                    .checked(status_online.get())
+                                    .label("Online")
+                                    .on_click({
+                                        let status_online = status_online.clone();
+                                        move |checked, _window, cx| {
+                                            status_online.set(*checked);
+                                            cx.refresh_windows();
+                                        }
+                                    }),
+                            )
+                            .child(div().text_size(px(12.)).text_color(theme.muted_foreground).child("Online agents can receive routed tasks and run worker loops. Offline agents stay saved but inactive.")),
+                    )
+                    .child(
+                        field()
                             .label("System Prompt")
                             .child(Input::new(&system_prompt_input))
                             .child(div().text_size(px(12.)).text_color(theme.muted_foreground).child("Chỉ dẫn hệ thống cốt lõi để định hình hành vi, phong cách trả lời và luồng suy nghĩ của Agent.")),
@@ -308,6 +326,7 @@ pub fn open_new_agent_dialog<V: 'static>(
                 let role_input = role_input.clone();
                 let details_input = details_input.clone();
                 let provider_select = provider_select.clone();
+                let status_online = status_online.clone();
                 let on_success_save = on_success_save.clone();
 
                 move |_, _, _, _| {
@@ -318,6 +337,7 @@ pub fn open_new_agent_dialog<V: 'static>(
                     let role_input2 = role_input.clone();
                     let details_input2 = details_input.clone();
                     let provider_select2 = provider_select.clone();
+                    let status_online2 = status_online.clone();
                     let on_success_save2 = on_success_save.clone();
 
                     vec![
@@ -338,6 +358,7 @@ pub fn open_new_agent_dialog<V: 'static>(
                                 let role_input3 = role_input2.clone();
                                 let details_input3 = details_input2.clone();
                                 let provider_select3 = provider_select2.clone();
+                                let status_online3 = status_online2.clone();
                                 let on_success_save3 = on_success_save2.clone();
 
                                 move |_ev, window, cx| {
@@ -369,14 +390,14 @@ pub fn open_new_agent_dialog<V: 'static>(
                                         .unwrap_or_else(|| "unconfigured".to_string());
 
                                     let now = Utc::now().to_rfc3339();
-                                    
+
                                     let role = role_input3.read(cx).text().to_string();
                                     let details = details_input3.read(cx).text().to_string();
                                     let config_json = serde_json::json!({
                                         "role": role,
                                         "details": details
                                     });
-let system_prompt =
+                                    let system_prompt =
                                         system_prompt_input3.read(cx).text().to_string();
                                     let agent = Agent {
                                         id: uuid::Uuid::new_v4().to_string(),
@@ -391,7 +412,11 @@ let system_prompt =
                                             }
                                         },
                                         config: Some(config_json.to_string()),
-                                        status: "offline".to_string(),
+                                        status: if status_online3.get() {
+                                            "online".to_string()
+                                        } else {
+                                            "offline".to_string()
+                                        },
                                         created_at: now.clone(),
                                         updated_at: now,
                                     };
@@ -876,6 +901,7 @@ pub fn open_edit_agent_dialog<V: 'static>(
         .map(|i| gpui_component::IndexPath::new(i));
     let provider_select =
         cx.new(|cx| SelectState::new(providers, initial_provider_idx, window, cx));
+    let status_online = Rc::new(Cell::new(agent_to_edit.status.to_lowercase() != "offline"));
 
     window.open_dialog(cx, move |dialog, _window, _cx| {
         let view_save = view.clone();
@@ -929,6 +955,7 @@ pub fn open_edit_agent_dialog<V: 'static>(
                 let role_input = role_input.clone();
                 let details_input = details_input.clone();
                 let provider_select = provider_select.clone();
+                let status_online = status_online.clone();
                 let on_success_save = on_success_save.clone();
                 let agent_to_edit_save = agent_to_edit_save.clone();
 
@@ -940,10 +967,22 @@ pub fn open_edit_agent_dialog<V: 'static>(
                     let role_input2 = role_input.clone();
                     let details_input2 = details_input.clone();
                     let provider_select2 = provider_select.clone();
+                    let status_online2 = status_online.clone();
                     let on_success_save2 = on_success_save.clone();
                     let agent_to_edit_save2 = agent_to_edit_save.clone();
 
                     vec![
+                        Switch::new("edit-agent-status")
+                            .checked(status_online2.get())
+                            .label("Online")
+                            .on_click({
+                                let status_online = status_online2.clone();
+                                move |checked, _window, cx| {
+                                    status_online.set(*checked);
+                                    cx.refresh_windows();
+                                }
+                            })
+                            .into_any_element(),
                         Button::new("cancel-edit-agent")
                             .label("Cancel")
                             .on_click(|_, window, cx| {
@@ -961,6 +1000,7 @@ pub fn open_edit_agent_dialog<V: 'static>(
                                 let role_input3 = role_input2.clone();
                                 let details_input3 = details_input2.clone();
                                 let provider_select3 = provider_select2.clone();
+                                let status_online3 = status_online2.clone();
                                 let on_success_save3 = on_success_save2.clone();
                                 let agent_to_edit_save3 = agent_to_edit_save2.clone();
 
@@ -1022,7 +1062,11 @@ pub fn open_edit_agent_dialog<V: 'static>(
                                             }
                                         },
                                         config: Some(config_json.to_string()),
-                                        status: agent_to_edit_save3.status.clone(),
+                                        status: if status_online3.get() {
+                                            "online".to_string()
+                                        } else {
+                                            "offline".to_string()
+                                        },
                                         created_at: agent_to_edit_save3.created_at.clone(),
                                         updated_at: now,
                                     };

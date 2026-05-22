@@ -1,5 +1,5 @@
-use crate::core::traits::database::DatabasePort;
 use crate::db::Agent;
+use chrono::Utc;
 use gpui::{
     div, px, App, Context, EventEmitter, FocusHandle, Focusable, InteractiveElement, IntoElement,
     ParentElement, Render, StatefulInteractiveElement, Styled, Window,
@@ -7,7 +7,9 @@ use gpui::{
 use gpui_component::{
     button::{Button, ButtonVariants},
     dock::{Panel, PanelEvent, TitleStyle},
-    h_flex, v_flex, ActiveTheme as _, IconName, Sizable,
+    h_flex,
+    switch::Switch,
+    v_flex, ActiveTheme as _, IconName, Sizable,
 };
 
 pub struct AgentsPanel {
@@ -208,28 +210,17 @@ impl Render for AgentsPanel {
                         .gap(px(16.))
                         .children(self.agents.iter().map(|agent| {
                             
-                            // Parse config for role and details
-                            let mut role = "Unassigned".to_string();
-                            let mut details = "No profile details".to_string();
-                            if let Some(config_str) = &agent.config {
-                                if let Ok(val) = serde_json::from_str::<serde_json::Value>(config_str) {
-                                    if let Some(r) = val.get("role").and_then(|v| v.as_str()) {
-                                        role = r.to_string();
-                                    }
-                                    if let Some(d) = val.get("details").and_then(|v| v.as_str()) {
-                                        if !d.trim().is_empty() {
-                                            details = d.trim().to_string();
-                                        }
-                                    }
-                                }
-                            }
-
+                            let role = agent.profile_position();
+                            let details = agent
+                                .profile_details()
+                                .unwrap_or_else(|| "No profile details".to_string());
                             let is_offline = agent.status.to_lowercase() == "offline";
+                            let is_online = !is_offline;
                             let status_color = if is_offline { gpui::red() } else { gpui::green() };
 
                             v_flex()
                                 .w(px(336.))
-                                .h(px(156.))
+                                .h(px(168.))
                                 .p(px(16.))
                                 .border(px(1.))
                                 .border_color(theme.border)
@@ -304,11 +295,40 @@ impl Render for AgentsPanel {
                                             h_flex()
                                                 .flex_none()
                                                 .gap(px(4.))
+                                                .items_center()
+                                                .child(
+                                                    Switch::new(gpui::SharedString::from(format!(
+                                                        "status-{}",
+                                                        agent.id
+                                                    )))
+                                                        .checked(is_online)
+                                                        .tooltip(if is_online {
+                                                            "Set offline"
+                                                        } else {
+                                                            "Set online"
+                                                        })
+                                                        .on_click({
+                                                            let agent_to_update = agent.clone();
+                                                            let view = cx.entity().clone();
+                                                            move |checked: &bool, _window, cx| {
+                                                                let db = crate::AppState::global(cx).db.clone();
+                                                                let mut updated_agent = agent_to_update.clone();
+                                                                updated_agent.status = if *checked {
+                                                                    "online".to_string()
+                                                                } else {
+                                                                    "offline".to_string()
+                                                                };
+                                                                updated_agent.updated_at = Utc::now().to_rfc3339();
+                                                                let _ = db.insert_agent(&updated_agent);
+                                                                let _ = view.update(cx, |this, cx| this.reload(cx));
+                                                            }
+                                                        }),
+                                                )
                                                 .child(Button::new(gpui::SharedString::from(format!("edit-{}", agent.id))).ghost().small().compact().icon(IconName::Settings)
                                                     .on_click({
                                                         let agent_clone = agent.clone();
                                                         let view = cx.entity().clone();
-                                                        cx.listener(move |this, _, window, cx| {
+                                                        cx.listener(move |_this, _, window, cx| {
                                                             let db = crate::AppState::global(cx).db.clone();
                                                             crate::ui::components::dialogs::open_edit_agent_dialog(
                                                                 db,

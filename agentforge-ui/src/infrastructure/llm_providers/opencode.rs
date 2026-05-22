@@ -1,6 +1,5 @@
 use super::{BaseProviderAdapter, ChatMessage, ChatResponse, TokenUsage};
 use anyhow::{anyhow, Result};
-use futures::stream::StreamExt;
 use gpui::SharedString;
 use std::future::Future;
 use std::pin::Pin;

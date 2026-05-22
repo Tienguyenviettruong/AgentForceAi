@@ -1,4 +1,3 @@
-use crate::core::traits::database::DatabasePort;
 use crate::ui::text::TextView;
 use gpui::EventEmitter;
 use gpui::{
@@ -14,10 +13,9 @@ use urlencoding::encode;
 
 pub struct KnowledgePanel {
     focus_handle: gpui::FocusHandle,
-    db: Arc<dyn DatabasePort>,
     knowledge_service: Arc<crate::application::services::knowledge_service::KnowledgeService>,
     vault_path: Entity<String>,
-    tokio_runtime: Arc<tokio::runtime::Runtime>,
+    #[allow(dead_code)]
     obsidian_watcher: Arc<std::sync::Mutex<Option<notify::RecommendedWatcher>>>,
     items: Vec<crate::knowledge::core::KnowledgeItem>,
     selected_item: Option<crate::knowledge::core::KnowledgeItem>,
@@ -345,10 +343,8 @@ impl KnowledgePanel {
 
         Self {
             focus_handle: cx.focus_handle(),
-            db,
             knowledge_service,
             vault_path,
-            tokio_runtime,
             obsidian_watcher,
             items,
             selected_item: None,

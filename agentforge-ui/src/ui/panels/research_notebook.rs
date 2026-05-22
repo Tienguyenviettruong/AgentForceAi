@@ -34,94 +34,7 @@ struct SearchResult {
     title: String,
     url: String,
     snippet: String,
-}
-
-fn strip_tags(input: &str) -> String {
-    let mut out = String::new();
-    let mut in_tag = false;
-    for c in input.chars() {
-        if c == '<' {
-            in_tag = true;
-            continue;
-        }
-        if c == '>' {
-            in_tag = false;
-            out.push(' ');
-            continue;
-        }
-        if !in_tag {
-            out.push(c);
-        }
-    }
-    out.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-async fn ddg_search(query: &str) -> anyhow::Result<Vec<SearchResult>> {
-    let url = format!(
-        "https://html.duckduckgo.com/html/?q={}",
-        urlencoding::encode(query)
-    );
-    let client = reqwest::Client::new();
-    let html = client
-        .get(&url)
-        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
-        .send()
-        .await?
-        .text()
-        .await?;
-
-    let mut results = Vec::new();
-    let mut pos = 0usize;
-    while let Some(ix) = html[pos..].find("result__a") {
-        let ix = pos + ix;
-        let href_ix = match html[ix..].find("href=\"") {
-            Some(v) => ix + v + 6,
-            None => break,
-        };
-        let href_end = match html[href_ix..].find('"') {
-            Some(v) => href_ix + v,
-            None => break,
-        };
-        let href = html[href_ix..href_end].to_string();
-
-        let title_start = match html[href_end..].find('>') {
-            Some(v) => href_end + v + 1,
-            None => break,
-        };
-        let title_end = match html[title_start..].find("</a>") {
-            Some(v) => title_start + v,
-            None => break,
-        };
-        let title_raw = &html[title_start..title_end];
-        let title = strip_tags(title_raw);
-
-        let mut snippet = String::new();
-        if let Some(sn_ix) = html[title_end..].find("result__snippet") {
-            let sn_ix = title_end + sn_ix;
-            if let Some(sn_gt) = html[sn_ix..].find('>') {
-                let sn_start = sn_ix + sn_gt + 1;
-                if let Some(sn_end) = html[sn_start..].find("</") {
-                    let sn_end = sn_start + sn_end;
-                    snippet = strip_tags(&html[sn_start..sn_end]);
-                }
-            }
-        }
-
-        if !title.is_empty() && !href.is_empty() {
-            results.push(SearchResult {
-                title,
-                url: href,
-                snippet,
-            });
-        }
-
-        if results.len() >= 6 {
-            break;
-        }
-        pos = title_end;
-    }
-
-    Ok(results)
+    content_summary: String,
 }
 
 fn build_adapter(provider: &crate::db::Provider) -> Option<Arc<dyn BaseProviderAdapter>> {
@@ -232,7 +145,35 @@ impl Render for ResearchNotebookPanel {
                             let db = db.clone();
 
                             cx.spawn(async move |_, cx| {
-                                let results = ddg_search(&query).await.unwrap_or_default();
+                                let search_query = crate::application::research::web::WebSearchQuery::new(&query, 6);
+                                let raw_results =
+                                    crate::application::research::web::WebSearchEngine::execute_search(
+                                        &search_query,
+                                    )
+                                    .await
+                                    .unwrap_or_default();
+                                let notebook =
+                                    crate::application::research::web::build_research_notebook(
+                                        &query,
+                                        &raw_results,
+                                    );
+                                let save_target =
+                                    crate::application::research::web::save_research_notebook(
+                                        db.clone(),
+                                        &query,
+                                        &notebook,
+                                    )
+                                    .await
+                                    .ok();
+                                let results: Vec<SearchResult> = raw_results
+                                    .iter()
+                                    .map(|r| SearchResult {
+                                        title: r.title.clone(),
+                                        url: r.url.clone(),
+                                        snippet: r.snippet.clone(),
+                                        content_summary: r.content_summary.clone(),
+                                    })
+                                    .collect();
                                 action_recorder.record_action(
                                     "web_search".to_string(),
                                     serde_json::json!({"query": query}).to_string(),
@@ -249,13 +190,10 @@ impl Render for ResearchNotebookPanel {
                                     let _ = view.update(cx, |this: &mut Self, cx| {
                                         this.is_searching = false;
                                         this.search_results = results;
-                                        this.scratchpad
-                                            .push_str("\n\n### Found sources via Agent\n");
-                                        for r in &this.search_results {
-                                            this.scratchpad.push_str(&format!(
-                                                "- [{}]({}): {}\n",
-                                                r.title, r.url, r.snippet
-                                            ));
+                                        this.scratchpad = notebook;
+                                        if let Some(target) = save_target {
+                                            this.save_status =
+                                                Some(format!("Notebook saved: {}", target));
                                         }
                                         cx.notify();
                                     });
@@ -314,6 +252,13 @@ impl Render for ResearchNotebookPanel {
                                 .text_color(theme.muted_foreground)
                                 .mt_2()
                                 .child(result.snippet.clone()),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(theme.foreground.opacity(0.82))
+                                .mt_2()
+                                .child(result.content_summary.clone()),
                         ),
                 );
             }

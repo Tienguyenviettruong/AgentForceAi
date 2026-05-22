@@ -1,6 +1,5 @@
 use anyhow::Result;
-use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use crate::application::teams::role::RoleManager;
 use crate::core::traits::database::DatabasePort;

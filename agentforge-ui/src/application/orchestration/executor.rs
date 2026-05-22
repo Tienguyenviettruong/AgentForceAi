@@ -1,4 +1,4 @@
-use crate::core::models::chat::ChatMessage;
+﻿use crate::core::models::chat::ChatMessage;
 use crate::core::traits::database::DatabasePort;
 use crate::infrastructure::mcp::registry::McpToolRegistry;
 use crate::infrastructure::message_bus::routing::TeamBusRouter;
@@ -50,46 +50,29 @@ impl AgentExecutor {
         }
     }
 
-    async fn fetch_text(url: String, timeout_secs: u64) -> std::result::Result<String, String> {
-        smol::unblock(move || {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .map_err(|e| format!("Failed to create Tokio runtime: {}", e))?;
-
-            runtime.block_on(async move {
-                let client = reqwest::Client::builder()
-                    .timeout(std::time::Duration::from_secs(timeout_secs))
-                    .build()
-                    .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
-
-                let resp = client
-                    .get(&url)
-                    .header(
-                        "User-Agent",
-                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                    )
-                    .send()
-                    .await
-                    .map_err(|e| e.to_string())?;
-
-                resp.text().await.map_err(|e| e.to_string())
-            })
-        })
-        .await
-    }
-
     async fn run_command_with_timeout(
         mut command: std::process::Command,
         timeout_secs: u64,
+        stdin: Option<String>,
     ) -> std::result::Result<std::process::Output, String> {
         smol::unblock(move || {
             command.stdout(std::process::Stdio::piped());
             command.stderr(std::process::Stdio::piped());
+            if stdin.is_some() {
+                command.stdin(std::process::Stdio::piped());
+            }
 
             let mut child = command
                 .spawn()
                 .map_err(|e| format!("Failed to execute command: {}", e))?;
+            if let Some(input) = stdin {
+                if let Some(mut child_stdin) = child.stdin.take() {
+                    use std::io::Write as _;
+                    child_stdin
+                        .write_all(input.as_bytes())
+                        .map_err(|e| format!("Failed to write command stdin: {}", e))?;
+                }
+            }
             let started = std::time::Instant::now();
 
             loop {
@@ -195,28 +178,53 @@ impl AgentExecutor {
                 },
                 {
                     "name": "web_search",
-                    "description": "Search the web for information.",
+                    "description": "Search the web, optionally fetch result pages, extract page content, and save a Research Notebook for grounded citations.",
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "query": { "type": "string" }
+                            "query": { "type": "string" },
+                            "max_results": { "type": "integer", "description": "1-20 results. Default 6." },
+                            "recency_days": { "type": "integer", "description": "Optional freshness window in days. Uses official API freshness where available." },
+                            "domains": {
+                                "type": "array",
+                                "items": { "type": "string" },
+                                "description": "Optional domain filters such as openai.com or docs.rs."
+                            },
+                            "fetch_pages": { "type": "boolean", "description": "Fetch and extract result pages. Default true." },
+                            "save_notebook": { "type": "boolean", "description": "Save extracted results into the Research Notebook/knowledge base. Default true." }
                         },
                         "required": ["query"]
                     }
                 },
                 {
-                    "name": "run_cli",
-                    "description": "Run a shell command on the host machine. Commands are sandboxed to the workspace directory.",
+                    "name": "fetch_url",
+                    "description": "Fetch one URL, extract readable content using file intelligence, and optionally save it to the Research Notebook.",
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "command": { "type": "string" },
+                            "url": { "type": "string" },
+                            "save_notebook": { "type": "boolean", "description": "Default true." }
+                        },
+                        "required": ["url"]
+                    }
+                },
+                {
+                    "name": "run_cli",
+                    "description": "Run a command or shell snippet in the configured workspace. Supports cwd, stdin, timeout, and works for every provider through this executor.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "command": { "type": "string", "description": "Executable name, or a shell snippet when shell=true." },
                             "args": {
                                 "type": "array",
                                 "items": { "type": "string" }
-                            }
+                            },
+                            "cwd": { "type": "string", "description": "Optional working directory. Relative paths resolve under the workspace." },
+                            "stdin": { "type": "string", "description": "Optional stdin content." },
+                            "timeout_secs": { "type": "integer", "description": "Default 60, max 600." },
+                            "shell": { "type": "boolean", "description": "Run through the platform shell. Default false unless command contains whitespace and no args were provided." }
                         },
-                        "required": ["command", "args"]
+                        "required": ["command"]
                     }
                 },
                 {
@@ -233,11 +241,24 @@ impl AgentExecutor {
                 },
                 {
                     "name": "read_file",
-                    "description": "Read the content of an existing file in the workspace.",
+                    "description": "Read and understand an existing file in the workspace. Supports text, HTML/XML, PDF, DOCX, XLSX, PPTX, OpenDocument, ZIP listings, and media metadata.",
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "path": { "type": "string", "description": "Relative or absolute file path" }
+                            "path": { "type": "string", "description": "Relative or absolute file path" },
+                            "max_chars": { "type": "integer", "description": "Optional extracted text cap. Default 16000." }
+                        },
+                        "required": ["path"]
+                    }
+                },
+                {
+                    "name": "analyze_file",
+                    "description": "Alias for read_file when the intent is document/media analysis rather than raw text.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "path": { "type": "string", "description": "Relative or absolute file path" },
+                            "max_chars": { "type": "integer", "description": "Optional extracted text cap. Default 16000." }
                         },
                         "required": ["path"]
                     }
@@ -284,6 +305,26 @@ impl AgentExecutor {
                             "path": { "type": "string", "description": "Optional output path. Relative paths are resolved from the current workspace." },
                             "options": { "type": "object", "description": "Additional service-specific JSON options." }
                         }
+                    }
+                },
+                {
+                    "name": "render_document",
+                    "description": "Create a document artifact locally. Supports html, txt, markdown/md, csv, json, xml, docx/word, pdf, and xlsx/excel.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "format": { "type": "string", "description": "html, txt, md, csv, json, xml, docx, pdf, or xlsx." },
+                            "content": { "type": "string" },
+                            "html": { "type": "string", "description": "HTML content, used when format=html or pdf." },
+                            "markdown": { "type": "string", "description": "Markdown content." },
+                            "rows": {
+                                "type": "array",
+                                "description": "Optional tabular rows for xlsx.",
+                                "items": { "type": "array", "items": {} }
+                            },
+                            "path": { "type": "string", "description": "Optional output path. Relative paths resolve from the current workspace." }
+                        },
+                        "required": ["format"]
                     }
                 },
                 {
@@ -416,6 +457,7 @@ impl AgentExecutor {
                 ChatMessage {
                     role: "system".into(),
                     content: injection.into(),
+                    parts: vec![],
                     agent_name: None,
                     thought_duration_secs: None,
                 },
@@ -499,6 +541,7 @@ impl AgentExecutor {
             history.push(ChatMessage {
                 role: "assistant".into(),
                 content: response_text.into(),
+                parts: vec![],
                 agent_name: None,
                 thought_duration_secs: None,
             });
@@ -525,6 +568,7 @@ impl AgentExecutor {
                     role: "user".into(),
                     content: format!("Tool result (id={}, name={}):\n{}", tc.id, tc.name, result)
                         .into(),
+                    parts: vec![],
                     agent_name: Some(tc.name.clone().into()),
                     thought_duration_secs: None,
                 });
@@ -597,6 +641,7 @@ impl AgentExecutor {
             pruned.push(ChatMessage {
                 role: "system".into(),
                 content: truncated.into(),
+                parts: vec![],
                 agent_name: None,
                 thought_duration_secs: None,
             });
@@ -873,7 +918,10 @@ impl AgentExecutor {
             }
         }
 
-        if matches!(name, "generate_image" | "render_pdf" | "generate_video") {
+        if matches!(
+            name,
+            "generate_image" | "render_pdf" | "generate_video" | "render_document"
+        ) {
             let output_tools = crate::application::output_tools::OutputTools::new(
                 self.db.clone(),
                 self.team_instance_id.clone(),
@@ -882,6 +930,7 @@ impl AgentExecutor {
                 "generate_image" => output_tools.generate_image(args).await,
                 "render_pdf" => output_tools.render_pdf(args).await,
                 "generate_video" => output_tools.generate_video(args).await,
+                "render_document" => output_tools.render_document(args).await,
                 _ => unreachable!(),
             };
             return match result {
@@ -892,112 +941,146 @@ impl AgentExecutor {
 
         if name == "web_search" {
             let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
-            let direct_url = query.starts_with("http://") || query.starts_with("https://");
-            let url = if direct_url {
-                query.to_string()
-            } else {
-                format!(
-                    "https://html.duckduckgo.com/html/?q={}",
-                    urlencoding::encode(query)
-                )
+            if query.trim().is_empty() {
+                return "Error: query is required.".to_string();
+            }
+            let max_results = args
+                .get("max_results")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(6)
+                .clamp(1, 20) as usize;
+            let recency_days = args
+                .get("recency_days")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u32);
+            let fetch_pages = args
+                .get("fetch_pages")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+            let save_notebook = args
+                .get("save_notebook")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+            let domains = args
+                .get("domains")
+                .and_then(|v| v.as_array())
+                .map(|values| {
+                    values
+                        .iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+
+            let search_query = crate::application::research::web::WebSearchQuery {
+                id: uuid::Uuid::new_v4(),
+                keywords: vec![query.to_string()],
+                max_results,
+                search_engine: args
+                    .get("search_engine")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("auto")
+                    .to_string(),
+                recency_days,
+                domains,
+                fetch_pages,
             };
 
-            match Self::fetch_text(url, 15).await {
-                Ok(text) => {
-                    if direct_url {
-                        let mut in_tag = false;
-                        let mut stripped = String::new();
-                        for c in text.chars() {
-                            if c == '<' {
-                                in_tag = true;
-                                continue;
-                            }
-                            if c == '>' {
-                                in_tag = false;
-                                stripped.push(' ');
-                                continue;
-                            }
-                            if !in_tag {
-                                stripped.push(c);
-                            }
-                        }
-                        let truncated = stripped.split_whitespace().collect::<Vec<_>>().join(" ");
-                        let body: String = truncated.chars().take(6000).collect();
-                        return format!("Fetched content from '{}':\n{}", query, body);
+            match crate::application::research::web::WebSearchEngine::execute_search(&search_query)
+                .await
+            {
+                Ok(results) => {
+                    let notebook =
+                        crate::application::research::web::build_research_notebook(query, &results);
+                    let saved_to = if save_notebook {
+                        crate::application::research::web::save_research_notebook(
+                            self.db.clone(),
+                            query,
+                            &notebook,
+                        )
+                        .await
+                        .ok()
+                    } else {
+                        None
+                    };
+                    let mut response = format!(
+                        "Search results for '{}': {} result(s).\n",
+                        query,
+                        results.len()
+                    );
+                    if let Some(target) = saved_to {
+                        response.push_str(&format!("Research Notebook saved to: {}\n\n", target));
                     }
-
-                    // Extract structured results from DuckDuckGo HTML
-                    let mut results = Vec::new();
-                    let mut result_num = 0;
-
-                    // Extract result snippets between result__snippet class markers
-                    for segment in text.split("result__snippet") {
-                        if result_num > 0 && result_num <= 8 {
-                            // Strip HTML tags
-                            let mut in_tag = false;
-                            let mut clean = String::new();
-                            for c in segment.chars().take(500) {
-                                if c == '<' {
-                                    in_tag = true;
-                                    continue;
-                                }
-                                if c == '>' {
-                                    in_tag = false;
-                                    continue;
-                                }
-                                if !in_tag {
-                                    clean.push(c);
-                                }
-                            }
-                            let clean = clean.trim().to_string();
-                            if !clean.is_empty() && clean.len() > 20 {
-                                results.push(format!("{}. {}", result_num, clean));
-                            }
-                        }
-                        result_num += 1;
-                    }
-
-                    // Fallback: if structured extraction failed, use raw strip
-                    if results.is_empty() {
-                        let mut in_tag = false;
-                        let mut stripped = String::new();
-                        for c in text.chars() {
-                            if c == '<' {
-                                in_tag = true;
-                                continue;
-                            }
-                            if c == '>' {
-                                in_tag = false;
-                                stripped.push(' ');
-                                continue;
-                            }
-                            if !in_tag {
-                                stripped.push(c);
-                            }
-                        }
-                        let truncated: String =
-                            stripped.split_whitespace().collect::<Vec<_>>().join(" ");
-                        let limit = std::cmp::min(4000, truncated.len());
-                        return format!("Search results for '{}':\n{}", query, &truncated[..limit]);
-                    }
-
-                    return format!("Search results for '{}':\n{}", query, results.join("\n\n"));
+                    response.push_str(&notebook);
+                    return response;
                 }
-                Err(e) => {
-                    return format!("Web search failed: {}", e);
+                Err(e) => return format!("Web search failed: {}", e),
+            }
+        }
+
+        if name == "fetch_url" {
+            let url = args.get("url").and_then(|v| v.as_str()).unwrap_or("");
+            if url.trim().is_empty() {
+                return "Error: url is required.".to_string();
+            }
+            let save_notebook = args
+                .get("save_notebook")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+            match crate::application::research::web::fetch_url_as_result(url).await {
+                Ok(result) => {
+                    let notebook =
+                        crate::application::research::web::build_research_notebook(url, &[result]);
+                    let saved_to = if save_notebook {
+                        crate::application::research::web::save_research_notebook(
+                            self.db.clone(),
+                            url,
+                            &notebook,
+                        )
+                        .await
+                        .ok()
+                    } else {
+                        None
+                    };
+                    let mut response = String::new();
+                    if let Some(target) = saved_to {
+                        response.push_str(&format!("Research Notebook saved to: {}\n\n", target));
+                    }
+                    response.push_str(&notebook);
+                    return response;
                 }
+                Err(e) => return format!("URL fetch failed: {}", e),
             }
         }
 
         if name == "run_cli" {
             let cmd = args.get("command").and_then(|v| v.as_str()).unwrap_or("");
+            if cmd.trim().is_empty() {
+                return "Error: command is required.".to_string();
+            }
             let cmd_args: Vec<String> = args
                 .get("args")
                 .and_then(|v| v.as_array())
-                .unwrap_or(&vec![])
-                .iter()
-                .filter_map(|a| a.as_str().map(|s| s.to_string()))
-                .collect();
+                .map(|values| {
+                    values
+                        .iter()
+                        .filter_map(|a| a.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let timeout_secs = args
+                .get("timeout_secs")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(60)
+                .clamp(1, 600);
+            let stdin = args
+                .get("stdin")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let use_shell = args
+                .get("shell")
+                .and_then(|v| v.as_bool())
+                .unwrap_or_else(|| cmd_args.is_empty() && cmd.split_whitespace().count() > 1);
 
             // Sandbox: block dangerous commands
             let blocked = [
@@ -1023,19 +1106,76 @@ impl AgentExecutor {
                 .db
                 .get_setting(&format!("workspace_{}", self.team_instance_id))
                 .ok()
-                .flatten();
+                .flatten()
+                .filter(|v| !v.trim().is_empty())
+                .map(std::path::PathBuf::from);
 
-            let mut command = std::process::Command::new(cmd);
-            command.args(&cmd_args);
-            if let Some(ref ws) = workspace_dir {
-                command.current_dir(ws);
+            let cwd = args.get("cwd").and_then(|v| v.as_str()).and_then(|cwd| {
+                let cwd = cwd.trim();
+                if cwd.is_empty() {
+                    return None;
+                }
+                let path = std::path::PathBuf::from(cwd);
+                if path.is_absolute() {
+                    Some(path)
+                } else if let Some(workspace) = &workspace_dir {
+                    Some(workspace.join(path))
+                } else {
+                    Some(path)
+                }
+            });
+
+            let working_dir = cwd.or_else(|| workspace_dir.clone());
+            if let (Some(workspace), Some(cwd)) = (&workspace_dir, &working_dir) {
+                if let (Ok(workspace), Ok(cwd)) = (workspace.canonicalize(), cwd.canonicalize()) {
+                    if !cwd.starts_with(&workspace) {
+                        return format!(
+                            "Command blocked: cwd {} is outside workspace {}.",
+                            cwd.display(),
+                            workspace.display()
+                        );
+                    }
+                }
             }
 
-            match Self::run_command_with_timeout(command, 60).await {
+            let mut command = if use_shell {
+                let shell_text = if cmd_args.is_empty() {
+                    cmd.to_string()
+                } else {
+                    format!("{} {}", cmd, cmd_args.join(" "))
+                };
+                #[cfg(target_os = "windows")]
+                {
+                    let mut command = std::process::Command::new("cmd.exe");
+                    command.arg("/C").arg(shell_text);
+                    command
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    let mut command = std::process::Command::new("sh");
+                    command.arg("-lc").arg(shell_text);
+                    command
+                }
+            } else {
+                let mut command = std::process::Command::new(cmd);
+                command.args(&cmd_args);
+                command
+            };
+            if let Some(ref dir) = working_dir {
+                command.current_dir(dir);
+            }
+
+            match Self::run_command_with_timeout(command, timeout_secs, stdin).await {
                 Ok(out) => {
                     let stdout = String::from_utf8_lossy(&out.stdout);
                     let stderr = String::from_utf8_lossy(&out.stderr);
-                    let mut result = String::new();
+                    let mut result = format!(
+                        "Exit status: {}\n",
+                        out.status
+                            .code()
+                            .map(|code| code.to_string())
+                            .unwrap_or_else(|| "terminated".to_string())
+                    );
                     if !stdout.is_empty() {
                         let truncated: String = stdout.chars().take(8000).collect();
                         result.push_str(&format!("STDOUT:\n{}\n", truncated));
@@ -1087,11 +1227,16 @@ impl AgentExecutor {
             }
         }
 
-        if name == "read_file" {
+        if matches!(name, "read_file" | "analyze_file") {
             let file_path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
             if file_path.is_empty() {
                 return "Error: path is required.".to_string();
             }
+            let max_chars = args
+                .get("max_chars")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(16_000)
+                .clamp(1_000, 80_000) as usize;
             let workspace_dir = self
                 .db
                 .get_setting(&format!("workspace_{}", self.team_instance_id))
@@ -1107,12 +1252,19 @@ impl AgentExecutor {
             } else {
                 path.to_path_buf()
             };
-            match std::fs::read_to_string(&resolved) {
-                Ok(content) => {
-                    let truncated: String = content.chars().take(12000).collect();
-                    return format!("File content of {}:\n{}", resolved.display(), truncated);
+            match crate::application::file_intelligence::analyze_path(
+                &resolved,
+                crate::application::file_intelligence::AnalyzeOptions {
+                    max_text_chars: max_chars,
+                    ..crate::application::file_intelligence::AnalyzeOptions::default()
+                },
+            )
+            .await
+            {
+                Ok(analysis) => {
+                    return analysis.render_markdown(max_chars);
                 }
-                Err(e) => return format!("Failed to read file: {}", e),
+                Err(e) => return format!("Failed to analyze file: {}", e),
             }
         }
 

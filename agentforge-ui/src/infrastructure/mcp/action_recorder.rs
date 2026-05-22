@@ -66,6 +66,7 @@ impl ActionRecorder {
         let messages = vec![ChatMessage {
             role: "user".to_string().into(),
             content: prompt.into(),
+            parts: vec![],
             agent_name: None,
             thought_duration_secs: None,
         }];
@@ -90,6 +91,7 @@ impl ActionRecorder {
         Ok(format!("Generated and saved workflow: {}", workflow_name))
     }
 
+    #[allow(dead_code)]
     fn generate_mock_dag(
         &self,
         workflow_id: &str,

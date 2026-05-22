@@ -4,11 +4,11 @@ use anyhow::Result;
 use std::sync::Arc;
 
 pub struct MessageStore {
-    db: Arc<dyn crate::core::traits::database::DatabasePort>,
+    db: Arc<dyn DatabasePort>,
 }
 
 impl MessageStore {
-    pub fn new(db: Arc<dyn crate::core::traits::database::DatabasePort>) -> Self {
+    pub fn new(db: Arc<dyn DatabasePort>) -> Self {
         Self { db }
     }
 

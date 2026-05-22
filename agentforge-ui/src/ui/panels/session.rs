@@ -197,9 +197,7 @@ impl Render for SessionPanel {
                                 "Enable Auto-Run"
                             },
                         );
-                        if skill.status == SkillStatus::Active {
-                            btn = btn; // just default style
-                        } else {
+                        if skill.status != SkillStatus::Active {
                             btn = btn.primary();
                         }
                         let sid = selected_id.clone();
