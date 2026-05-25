@@ -1,0 +1,1572 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <style>
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+
+      html,
+      body {
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+        background: #f6f8fa;
+        color: #111827;
+        font-family: sans-serif;
+      }
+
+      #root {
+        position: relative;
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+        background: #f6f8fa;
+      }
+
+      .scene {
+        position: absolute;
+        inset: 0;
+        opacity: 0;
+        visibility: hidden;
+        overflow: hidden;
+        background: #f6f8fa;
+      }
+
+      #screen-1 {
+        opacity: 1;
+        visibility: visible;
+      }
+
+      .app {
+        position: relative;
+        display: grid;
+        grid-template-rows: 52px 1fr 32px;
+        width: 100%;
+        height: 100%;
+        background: #f6f8fa;
+      }
+
+      .topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 22px 0 72px;
+        border-bottom: 1px solid #d6dfdc;
+        background: #fbfcfd;
+        color: #667085;
+        font-size: 18px;
+      }
+
+      .breadcrumbs,
+      .top-actions,
+      .toolbar,
+      .tabs,
+      .inline,
+      .chips {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+
+      .crumb-current {
+        color: #111827;
+        font-weight: 700;
+      }
+
+      .shell {
+        position: relative;
+        display: grid;
+        grid-template-columns: 58px 1fr;
+        min-height: 0;
+      }
+
+      .activity {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 28px;
+        padding: 22px 0;
+        border-right: 1px solid #d6dfdc;
+        background: #fbfcfd;
+      }
+
+      .activity .icon {
+        position: relative;
+        width: 23px;
+        height: 23px;
+        border: 2px solid #7b8796;
+        border-radius: 5px;
+      }
+
+      .activity .icon.active {
+        border-color: #006b5b;
+        background: #ddf3ee;
+      }
+
+      .activity .icon.active:after {
+        content: "";
+        position: absolute;
+        left: -20px;
+        top: 4px;
+        width: 3px;
+        height: 15px;
+        border-radius: 8px;
+        background: #006b5b;
+      }
+
+      .statusbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 18px;
+        border-top: 1px solid #d6dfdc;
+        background: #fbfcfd;
+        color: #667085;
+        font-size: 15px;
+      }
+
+      .status-ok {
+        color: #006b5b;
+        font-weight: 700;
+      }
+
+      .content {
+        min-width: 0;
+        min-height: 0;
+        overflow: hidden;
+      }
+
+      .walkthrough-label {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        padding: 9px 14px;
+        border: 1px solid #b5cbc5;
+        border-radius: 999px;
+        color: #006b5b;
+        background: #ecf7f4;
+        font-family: monospace;
+        font-size: 15px;
+        font-weight: 700;
+      }
+
+      .walkthrough-label:before {
+        content: "";
+        width: 8px;
+        height: 8px;
+        border-radius: 99px;
+        background: #006b5b;
+      }
+
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        min-height: 31px;
+        padding: 5px 12px;
+        border: 1px solid #b5cbc5;
+        border-radius: 999px;
+        color: #006b5b;
+        background: #ecf7f4;
+        font-size: 15px;
+        font-weight: 700;
+      }
+
+      .button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        min-height: 38px;
+        padding: 8px 16px;
+        border: 1px solid #d6dfdc;
+        border-radius: 6px;
+        background: #ffffff;
+        color: #172033;
+        font-size: 17px;
+      }
+
+      .button.primary {
+        border-color: #006b5b;
+        background: #006b5b;
+        color: #ffffff;
+      }
+
+      .button.soft {
+        color: #006b5b;
+        background: #ecf7f4;
+        border-color: #b5cbc5;
+      }
+
+      .mono {
+        font-family: monospace;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .teams {
+        display: grid;
+        grid-template-columns: 336px 390px 1fr;
+        height: 100%;
+      }
+
+      .teams-pane {
+        min-height: 0;
+        border-right: 1px solid #d6dfdc;
+        background: #fbfcfd;
+        padding: 22px 18px;
+      }
+
+      .pane-heading {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 20px;
+        color: #172033;
+        font-size: 20px;
+        font-weight: 800;
+      }
+
+      .folder-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin: 20px 0 14px;
+        color: #667085;
+        font-size: 16px;
+        font-weight: 700;
+      }
+
+      .instance {
+        display: flex;
+        flex-direction: column;
+        gap: 9px;
+        margin-bottom: 10px;
+        padding: 15px;
+        border: 1px solid #dde5e3;
+        border-radius: 8px;
+        background: #ffffff;
+      }
+
+      .instance.selected {
+        border-color: #8bcabe;
+        background: #eaf6f3;
+      }
+
+      .instance-title {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        font-size: 17px;
+        font-weight: 800;
+      }
+
+      .run-dot {
+        width: 9px;
+        height: 9px;
+        margin-right: 9px;
+        border-radius: 50%;
+        background: #008a55;
+      }
+
+      .subtle {
+        color: #667085;
+        font-size: 15px;
+        line-height: 1.35;
+      }
+
+      .separator {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin: 22px 0;
+        color: #667085;
+        font-size: 14px;
+      }
+
+      .separator:before,
+      .separator:after {
+        content: "";
+        flex: 1;
+        height: 1px;
+        background: #d6dfdc;
+      }
+
+      .member-header {
+        margin: -22px -18px 14px;
+        padding: 14px 18px;
+        border-bottom: 1px solid #d6dfdc;
+      }
+
+      .agent {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        margin: 0 -18px;
+        padding: 18px;
+        border-bottom: 1px solid #d6dfdc;
+        background: #ffffff;
+      }
+
+      .agent-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font-size: 18px;
+        font-weight: 800;
+      }
+
+      .online {
+        color: #006b5b;
+        font-size: 15px;
+        font-weight: 700;
+      }
+
+      .agent-task {
+        padding: 10px;
+        border-radius: 6px;
+        color: #667085;
+        background: #f5f7f8;
+        font-size: 14px;
+        line-height: 1.35;
+      }
+
+      .chat-pane {
+        position: relative;
+        display: grid;
+        grid-template-rows: 58px 1fr 152px;
+        min-height: 0;
+        background: #f8fafb;
+      }
+
+      .chat-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 24px;
+        border-bottom: 1px solid #d6dfdc;
+        background: #fbfcfd;
+      }
+
+      .chat-title {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        font-size: 18px;
+        font-weight: 800;
+      }
+
+      .chat-body {
+        display: flex;
+        flex-direction: column;
+        gap: 18px;
+        padding: 24px 34px;
+        overflow: hidden;
+      }
+
+      .empty-guide {
+        flex: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #667085;
+        font-size: 20px;
+      }
+
+      .message {
+        max-width: 78%;
+        padding: 17px 20px;
+        border: 1px solid #d6dfdc;
+        border-radius: 9px;
+        background: #ffffff;
+        color: #172033;
+        font-size: 18px;
+        line-height: 1.46;
+      }
+
+      .message.user {
+        align-self: flex-end;
+        border-color: #9bcfc4;
+        background: #eaf6f3;
+      }
+
+      .message.assistant {
+        align-self: flex-start;
+      }
+
+      .message-meta {
+        margin-bottom: 9px;
+        color: #667085;
+        font-size: 14px;
+        font-weight: 700;
+      }
+
+      .composer {
+        margin: 0 24px 16px;
+        padding: 18px 22px;
+        border: 1px solid #c7d2cf;
+        border-radius: 14px;
+        background: #ffffff;
+        box-shadow: 0 10px 24px rgba(23, 32, 51, 0.05);
+      }
+
+      .composer-text {
+        height: 60px;
+        color: #667085;
+        font-size: 17px;
+      }
+
+      .composer-text.filled {
+        color: #172033;
+      }
+
+      .composer-toolbar {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+
+      .send {
+        display: grid;
+        place-items: center;
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
+        color: #006b5b;
+        background: #ecf7f4;
+        border: 1px solid #b5cbc5;
+        font-size: 22px;
+      }
+
+      .checklist {
+        display: flex;
+        flex-direction: column;
+        gap: 9px;
+        margin-top: 13px;
+      }
+
+      .checkline {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        color: #667085;
+        font-size: 16px;
+      }
+
+      .tick {
+        display: grid;
+        place-items: center;
+        width: 20px;
+        height: 20px;
+        border-radius: 50%;
+        color: #ffffff;
+        background: #006b5b;
+        font-size: 13px;
+      }
+
+      .toast {
+        position: absolute;
+        right: 28px;
+        top: 82px;
+        display: flex;
+        gap: 16px;
+        align-items: center;
+        width: 430px;
+        padding: 18px;
+        border: 1px solid #9bcfc4;
+        border-radius: 9px;
+        background: #ffffff;
+        box-shadow: 0 14px 32px rgba(23, 32, 51, 0.12);
+      }
+
+      .toast-mark {
+        display: grid;
+        place-items: center;
+        width: 42px;
+        height: 42px;
+        border-radius: 9px;
+        color: #ffffff;
+        background: #006b5b;
+        font-weight: 800;
+      }
+
+      .toast strong {
+        display: block;
+        font-size: 17px;
+      }
+
+      .toast span {
+        display: block;
+        margin-top: 5px;
+        color: #667085;
+        font-size: 15px;
+      }
+
+      .workflow-screen {
+        display: grid;
+        grid-template-columns: 344px 1fr 350px;
+        height: 100%;
+      }
+
+      .workflow-side,
+      .workflow-log {
+        padding: 22px;
+        border-right: 1px solid #d6dfdc;
+        background: #fbfcfd;
+      }
+
+      .workflow-log {
+        border-left: 1px solid #d6dfdc;
+        border-right: 0;
+      }
+
+      .panel-card {
+        margin-top: 16px;
+        padding: 18px;
+        border: 1px solid #d6dfdc;
+        border-radius: 8px;
+        background: #ffffff;
+      }
+
+      .panel-card h3 {
+        margin-bottom: 16px;
+        font-size: 19px;
+      }
+
+      .metrics-line {
+        display: flex;
+        justify-content: space-between;
+        margin: 12px 0;
+        font-size: 16px;
+      }
+
+      .palette-item {
+        margin-top: 9px;
+        padding: 11px 12px;
+        border-radius: 5px;
+        background: #f3f5f6;
+        font-size: 16px;
+      }
+
+      .canvas {
+        position: relative;
+        background: #f7f9fa;
+      }
+
+      .canvas-heading {
+        position: absolute;
+        left: 28px;
+        top: 20px;
+        display: flex;
+        align-items: center;
+        gap: 13px;
+        color: #172033;
+        font-size: 20px;
+        font-weight: 800;
+      }
+
+      .flow-node {
+        position: absolute;
+        display: flex;
+        flex-direction: column;
+        gap: 7px;
+        width: 194px;
+        min-height: 84px;
+        padding: 15px;
+        border: 1px solid #c7d2cf;
+        border-radius: 7px;
+        background: #ffffff;
+        box-shadow: 0 9px 20px rgba(23, 32, 51, 0.06);
+      }
+
+      .flow-node.active {
+        border-color: #68bbaa;
+        background: #eaf6f3;
+      }
+
+      .flow-node.pending {
+        border-color: #dba445;
+        background: #fff7e6;
+      }
+
+      .flow-node strong {
+        font-size: 17px;
+      }
+
+      .flow-node span {
+        color: #667085;
+        font-size: 14px;
+      }
+
+      .node-start { left: 64px; top: 266px; }
+      .node-spec { left: 306px; top: 266px; }
+      .node-api { left: 570px; top: 168px; }
+      .node-test { left: 570px; top: 366px; }
+      .node-review { left: 834px; top: 266px; }
+      .node-deliver { left: 1084px; top: 266px; }
+
+      .edges {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+      }
+
+      .edge {
+        stroke: #97aaa5;
+        stroke-width: 3;
+        stroke-dasharray: 8 7;
+        fill: none;
+      }
+
+      .edge.live {
+        stroke: #008c76;
+      }
+
+      .log-item {
+        display: flex;
+        gap: 11px;
+        margin: 14px 0;
+        color: #667085;
+        font-size: 15px;
+        line-height: 1.38;
+      }
+
+      .log-item.done {
+        color: #172033;
+      }
+
+      .log-dot {
+        flex: none;
+        width: 9px;
+        height: 9px;
+        margin-top: 5px;
+        border-radius: 50%;
+        background: #b8c2c0;
+      }
+
+      .done .log-dot {
+        background: #006b5b;
+      }
+
+      .waiting .log-dot {
+        background: #d88a00;
+      }
+
+      .orchestration {
+        height: 100%;
+        padding: 24px 30px;
+      }
+
+      .tabs {
+        gap: 10px;
+        margin-bottom: 24px;
+      }
+
+      .tab {
+        padding: 10px 18px;
+        border-radius: 6px;
+        color: #172033;
+        font-size: 17px;
+      }
+
+      .tab.active {
+        color: #ffffff;
+        background: #006b5b;
+      }
+
+      .title-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 20px;
+      }
+
+      .title-row h2 {
+        font-size: 28px;
+      }
+
+      .tracking-table {
+        padding: 22px;
+        border: 1px solid #d6dfdc;
+        border-radius: 8px;
+        background: #ffffff;
+      }
+
+      .track-head,
+      .track-row {
+        display: grid;
+        grid-template-columns: 280px 220px 170px 1fr;
+        align-items: center;
+        column-gap: 20px;
+      }
+
+      .track-head {
+        padding: 0 8px 15px;
+        border-bottom: 1px solid #d6dfdc;
+        font-size: 16px;
+        font-weight: 800;
+      }
+
+      .track-row {
+        min-height: 98px;
+        padding: 18px 8px;
+        font-size: 18px;
+      }
+
+      .progress {
+        position: relative;
+        height: 20px;
+        border-radius: 5px;
+        background: #eef3f1;
+        overflow: hidden;
+      }
+
+      .progress span {
+        position: absolute;
+        left: 0;
+        top: 0;
+        height: 100%;
+        border-radius: 5px;
+        background: #006b5b;
+        transform-origin: left center;
+      }
+
+      .mode-box {
+        padding: 24px;
+        border: 1px solid #d6dfdc;
+        border-radius: 8px;
+        background: #ffffff;
+      }
+
+      .mode-current {
+        color: #006b5b;
+        font-size: 18px;
+        font-weight: 700;
+      }
+
+      .mode-actions {
+        display: flex;
+        gap: 12px;
+        margin: 20px 0;
+      }
+
+      .constraints {
+        margin-top: 16px;
+        padding: 12px 18px;
+        border: 1px solid #d6dfdc;
+        border-radius: 7px;
+      }
+
+      .constraint {
+        display: flex;
+        justify-content: space-between;
+        padding: 15px 0;
+        border-bottom: 1px solid #d6dfdc;
+        font-size: 17px;
+      }
+
+      .constraint:last-child {
+        border-bottom: 0;
+      }
+
+      .research {
+        display: grid;
+        grid-template-rows: 64px 1fr;
+        height: 100%;
+      }
+
+      .research-search {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 20px;
+        padding: 0 28px;
+        border-bottom: 1px solid #d6dfdc;
+        background: #fbfcfd;
+      }
+
+      .query {
+        flex: 1;
+        color: #172033;
+        font-size: 18px;
+      }
+
+      .research-columns {
+        display: grid;
+        grid-template-columns: 42% 58%;
+        min-height: 0;
+      }
+
+      .sources,
+      .scratch {
+        padding: 24px;
+      }
+
+      .sources {
+        border-right: 1px solid #d6dfdc;
+      }
+
+      .source {
+        display: flex;
+        flex-direction: column;
+        gap: 7px;
+        margin-top: 16px;
+        padding: 15px;
+        border: 1px solid #d6dfdc;
+        border-radius: 7px;
+        background: #ffffff;
+      }
+
+      .source strong {
+        font-size: 17px;
+      }
+
+      .source span {
+        color: #667085;
+        font-size: 15px;
+      }
+
+      .scratch-document {
+        margin-top: 16px;
+        min-height: 600px;
+        padding: 26px;
+        border: 1px solid #d6dfdc;
+        border-radius: 8px;
+        background: #ffffff;
+      }
+
+      .scratch-document h3 {
+        margin-bottom: 20px;
+        font-size: 22px;
+      }
+
+      .note-line {
+        margin: 12px 0;
+        color: #334155;
+        font-size: 17px;
+        line-height: 1.4;
+      }
+
+      .chips {
+        margin-top: 24px;
+        flex-wrap: wrap;
+      }
+
+      .chip {
+        padding: 7px 12px;
+        border-radius: 999px;
+        color: #006b5b;
+        background: #ecf7f4;
+        font-family: monospace;
+        font-size: 14px;
+      }
+
+      .deliverables {
+        padding: 17px;
+        border: 1px solid #d6dfdc;
+        border-radius: 7px;
+        background: #ffffff;
+      }
+
+      .file-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 18px;
+        margin: 11px 0;
+        color: #172033;
+        font-family: monospace;
+        font-size: 15px;
+      }
+
+      .final-overlay {
+        position: absolute;
+        right: 38px;
+        bottom: 62px;
+        width: 570px;
+        padding: 28px;
+        border: 1px solid #9bcfc4;
+        border-radius: 10px;
+        background: #ffffff;
+        box-shadow: 0 18px 48px rgba(23, 32, 51, 0.13);
+      }
+
+      .final-overlay h2 {
+        margin: 14px 0 14px;
+        font-family: serif;
+        font-size: 36px;
+        line-height: 1.14;
+      }
+
+      .final-overlay p {
+        color: #667085;
+        font-size: 18px;
+        line-height: 1.4;
+      }
+
+      #cursor {
+        position: absolute;
+        left: 95px;
+        top: 185px;
+        z-index: 40;
+        width: 25px;
+        height: 32px;
+        opacity: 0;
+        pointer-events: none;
+        filter: drop-shadow(0 2px 2px rgba(17, 24, 39, 0.2));
+      }
+
+      #cursor:before {
+        content: "";
+        display: block;
+        width: 0;
+        height: 0;
+        border-left: 0 solid rgba(0, 0, 0, 0);
+        border-right: 19px solid rgba(0, 0, 0, 0);
+        border-top: 30px solid #172033;
+        transform: skewX(-14deg);
+      }
+
+      .click-pulse {
+        position: absolute;
+        z-index: 38;
+        width: 44px;
+        height: 44px;
+        margin-left: -22px;
+        margin-top: -22px;
+        border: 2px solid #006b5b;
+        border-radius: 50%;
+        opacity: 0;
+        pointer-events: none;
+      }
+
+      .wipe {
+        position: absolute;
+        inset: 0;
+        z-index: 30;
+        opacity: 0;
+        visibility: hidden;
+        overflow: hidden;
+      }
+
+      .wipe-bar {
+        position: absolute;
+        inset: -30px;
+        display: grid;
+        grid-template-columns: 0.18fr 1fr 0.18fr;
+        gap: 12px;
+        transform: translateX(-112%);
+      }
+
+      .wipe-bar span {
+        background: #006b5b;
+      }
+
+      .wipe-bar span:nth-child(2) {
+        background: #10a48f;
+      }
+
+      .video-progress {
+        position: absolute;
+        left: 500px;
+        bottom: 12px;
+        z-index: 42;
+        width: 720px;
+        height: 4px;
+        border-radius: 99px;
+        overflow: hidden;
+        background: #d7e1de;
+      }
+
+      .video-progress span {
+        display: block;
+        width: 100%;
+        height: 100%;
+        transform: scaleX(0);
+        transform-origin: left center;
+        background: #006b5b;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root" data-composition-id="main" data-start="0" data-duration="78" data-width="1920" data-height="1080">
+      <section id="screen-1" class="scene clip" data-start="0" data-duration="7" data-track-index="1">
+        <div class="app">
+          <div class="topbar">
+            <div class="breadcrumbs s1-enter"><span>Teams</span><span>›</span><span class="crumb-current">backend</span></div>
+            <div class="top-actions s1-enter"><span class="walkthrough-label">1 / Open a workspace</span><span>⋯</span></div>
+          </div>
+          <div class="shell">
+            <div class="activity">
+              <div class="icon active"></div><div class="icon"></div><div class="icon"></div><div class="icon"></div><div class="icon"></div><div class="icon"></div>
+            </div>
+            <div class="content teams">
+              <div class="teams-pane s1-column">
+                <div class="pane-heading"><span>AGENT TEAMS</span><span>+</span></div>
+                <div class="folder-row">⌄ ▣ Instances (4)</div>
+                <div class="instance">
+                  <div class="instance-title"><span><span class="run-dot"></span>Untitled</span><span class="pill">Initializing</span></div>
+                  <div class="subtle">No configuration provided</div>
+                </div>
+                <div class="instance">
+                  <div class="instance-title"><span><span class="run-dot"></span>test</span><span class="pill">running</span></div>
+                  <div class="subtle">2026-05-04 11:37</div>
+                </div>
+                <div class="instance selected" id="selected-backend">
+                  <div class="instance-title"><span><span class="run-dot"></span>backend</span><span class="pill">running</span></div>
+                  <div class="subtle">Supervisor workflow enabled</div>
+                </div>
+                <div class="separator">Templates</div>
+                <div class="instance"><div class="instance-title">SDG</div><div class="subtle">SDG Team</div></div>
+              </div>
+              <div class="teams-pane s1-column">
+                <div class="member-header">
+                  <div class="pane-heading"><span>Members <span class="pill">2</span></span><span>Tasks 0</span></div>
+                </div>
+                <div class="agent">
+                  <div class="agent-head"><span>Coordinator</span><span class="online">● online</span></div>
+                  <div class="subtle mono">@ coordinator</div>
+                </div>
+                <div class="agent">
+                  <div class="agent-head"><span>DEV</span><span class="online">● online</span></div>
+                  <div class="subtle mono">@ dev</div>
+                </div>
+              </div>
+              <div class="chat-pane s1-column">
+                <div class="chat-header">
+                  <div class="chat-title"><span>●</span><span>backend</span><span class="subtle">— Supervisor Chat</span><span class="pill">Active</span></div>
+                  <div class="toolbar"><span class="button">Cases</span><span class="button">＋</span></div>
+                </div>
+                <div class="chat-body">
+                  <div class="empty-guide">Start with a goal. AgentForge will turn it into an executable workflow.</div>
+                </div>
+                <div class="composer">
+                  <div class="composer-text">Describe new goal... (Enter to send, Ctrl+Enter for new line)</div>
+                  <div class="composer-toolbar"><span class="button soft">▱ safety</span><span class="send">↑</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="statusbar"><span>✓ Ready</span><span class="status-ok">◉ 2 Providers</span></div>
+        </div>
+      </section>
+
+      <section id="screen-2" class="scene clip" data-start="7" data-duration="11" data-track-index="1">
+        <div class="app">
+          <div class="topbar">
+            <div class="breadcrumbs"><span>Teams</span><span>›</span><span class="crumb-current">backend</span></div>
+            <div class="top-actions"><span class="walkthrough-label">2 / Describe the goal</span></div>
+          </div>
+          <div class="shell">
+            <div class="activity">
+              <div class="icon active"></div><div class="icon"></div><div class="icon"></div><div class="icon"></div><div class="icon"></div><div class="icon"></div>
+            </div>
+            <div class="content teams">
+              <div class="teams-pane">
+                <div class="pane-heading"><span>Instances</span></div>
+                <div class="instance selected"><div class="instance-title"><span><span class="run-dot"></span>backend</span><span class="pill">running</span></div><div class="subtle">Workflow generation ready</div></div>
+                <div class="separator">Context</div>
+                <div class="instance"><div class="instance-title">Product_Spec.md</div><div class="subtle">Attached document · indexed</div></div>
+              </div>
+              <div class="teams-pane">
+                <div class="pane-heading"><span>Agents</span><span class="pill">ready</span></div>
+                <div class="agent"><div class="agent-head"><span>Coordinator</span><span class="online">waiting</span></div><div class="agent-task">Plans work and generates iFlow.</div></div>
+                <div class="agent"><div class="agent-head"><span>DEV</span><span class="online">waiting</span></div><div class="agent-task">Implements API once assigned.</div></div>
+                <div class="agent"><div class="agent-head"><span>QA</span><span class="online">waiting</span></div><div class="agent-task">Runs acceptance checks.</div></div>
+              </div>
+              <div class="chat-pane">
+                <div class="chat-header">
+                  <div class="chat-title"><span>backend</span><span class="subtle">— Supervisor Chat</span><span class="pill">Active</span></div>
+                  <div class="toolbar"><span class="button">Document</span><span class="button">Cases</span></div>
+                </div>
+                <div class="chat-body">
+                  <div class="message user s2-message">
+                    <div class="message-meta">You · just now</div>
+                    Tạo REST API theo tài liệu Product_Spec.md. Phân rã công việc cho DEV và QA, sinh workflow có bước human review trước khi hoàn tất.
+                  </div>
+                  <div class="message assistant s2-thinking">
+                    <div class="message-meta">Coordinator · processing</div>
+                    Converting your goal into an executable plan.
+                    <div class="checklist">
+                      <div class="checkline s2-line"><span class="tick">✓</span>Read project specification and constraints</div>
+                      <div class="checkline s2-line"><span class="tick">✓</span>Resolve available roles: DEV, QA</div>
+                      <div class="checkline s2-line"><span class="tick">✓</span>Generate iFlow with a review gate</div>
+                    </div>
+                  </div>
+                </div>
+                <div class="composer">
+                  <div class="composer-text">Add clarification or attach more context...</div>
+                  <div class="composer-toolbar"><span class="button soft">▱ safety</span><span class="send">↑</span></div>
+                </div>
+                <div class="toast s2-toast">
+                  <div class="toast-mark">↻</div>
+                  <div><strong>Generating iFlow</strong><span>Backend Delivery Flow is being assembled.</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="statusbar"><span>Goal submitted · context attached</span><span class="status-ok">Workflow engine online</span></div>
+        </div>
+      </section>
+
+      <section id="screen-3" class="scene clip" data-start="18" data-duration="9" data-track-index="1">
+        <div class="app">
+          <div class="topbar">
+            <div class="breadcrumbs"><span>Teams</span><span>›</span><span class="crumb-current">backend</span></div>
+            <div class="top-actions"><span class="walkthrough-label">3 / Flow created from chat</span></div>
+          </div>
+          <div class="shell">
+            <div class="activity">
+              <div class="icon active"></div><div class="icon" id="workflow-icon-s3"></div><div class="icon"></div><div class="icon"></div><div class="icon"></div><div class="icon"></div>
+            </div>
+            <div class="content teams">
+              <div class="teams-pane">
+                <div class="pane-heading"><span>Instances</span></div>
+                <div class="instance selected"><div class="instance-title"><span><span class="run-dot"></span>backend</span><span class="pill">running</span></div><div class="subtle">iFlow attached to run</div></div>
+              </div>
+              <div class="teams-pane">
+                <div class="pane-heading"><span>Members</span><span>Tasks <span class="pill">3</span></span></div>
+                <div class="agent"><div class="agent-head"><span>Coordinator</span><span class="online">completed</span></div><div class="agent-task">Generate delivery workflow</div></div>
+                <div class="agent"><div class="agent-head"><span>DEV</span><span class="online">1 task</span></div><div class="agent-task">Implement API endpoints</div></div>
+                <div class="agent"><div class="agent-head"><span>QA</span><span class="online">1 task</span></div><div class="agent-task">Verify acceptance criteria</div></div>
+              </div>
+              <div class="chat-pane">
+                <div class="chat-header">
+                  <div class="chat-title"><span>backend</span><span class="subtle">— Supervisor Chat</span><span class="pill">Active</span></div>
+                </div>
+                <div class="chat-body">
+                  <div class="message user">
+                    <div class="message-meta">You</div>
+                    Tạo REST API theo Product_Spec.md và sinh workflow review.
+                  </div>
+                  <div class="message assistant s3-response">
+                    <div class="message-meta">Coordinator · completed</div>
+                    Tôi đã tạo flow triển khai gồm phân tích đặc tả, triển khai API và kiểm thử chạy song song, sau đó dừng tại Human Review.
+                    <div class="chips"><span class="chip">DEV · API Setup</span><span class="chip">QA · Acceptance</span><span class="chip">Review Gate</span></div>
+                  </div>
+                </div>
+                <div class="composer">
+                  <div class="composer-text">Continue with the generated workflow...</div>
+                  <div class="composer-toolbar"><span class="button soft">▱ safety</span><span class="send">↑</span></div>
+                </div>
+                <div class="toast s3-toast" id="open-flow-toast">
+                  <div class="toast-mark">✓</div>
+                  <div><strong>iFlow created: Backend Delivery Flow</strong><span>Open Workflow Pipeline to inspect and approve.</span></div>
+                  <span class="button primary">Open</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="statusbar"><span>3 tasks queued · 1 workflow generated</span><span class="status-ok">Traceable run created</span></div>
+        </div>
+      </section>
+
+      <section id="screen-4" class="scene clip" data-start="27" data-duration="13" data-track-index="1">
+        <div class="app">
+          <div class="topbar">
+            <div class="breadcrumbs"><span>Workflow Pipeline</span><span>›</span><span class="crumb-current">Backend Delivery Flow</span></div>
+            <div class="top-actions"><span class="walkthrough-label">4 / Inspect and approve iFlow</span></div>
+          </div>
+          <div class="shell">
+            <div class="activity">
+              <div class="icon"></div><div class="icon active"></div><div class="icon"></div><div class="icon"></div><div class="icon"></div><div class="icon"></div>
+            </div>
+            <div class="content workflow-screen">
+              <div class="workflow-side">
+                <div class="pane-heading"><span>Workflow Pipeline</span></div>
+                <div class="panel-card s4-side">
+                  <h3>Dashboard</h3>
+                  <div class="metrics-line"><span>Nodes</span><strong class="mono">6</strong></div>
+                  <div class="metrics-line"><span>Connections</span><strong class="mono">6</strong></div>
+                  <div class="metrics-line"><span>Execution</span><strong class="status-ok">Paused</strong></div>
+                  <div class="toolbar" style="margin-top:18px;"><span class="button">Step</span><span class="button primary" id="approve-action">Approve</span></div>
+                </div>
+                <div class="panel-card s4-side">
+                  <h3>Palette</h3>
+                  <div class="palette-item">Add Start</div>
+                  <div class="palette-item">Add Agent Task</div>
+                  <div class="palette-item">Add Decision</div>
+                  <div class="palette-item">Add Human Review</div>
+                  <div class="palette-item">Add Transform</div>
+                </div>
+              </div>
+              <div class="canvas">
+                <div class="canvas-heading"><span class="pill">Generated from chat</span><span>Backend Delivery Flow</span></div>
+                <svg class="edges" viewBox="0 0 1240 900" preserveAspectRatio="none">
+                  <path class="edge live" d="M258 308 L306 308" />
+                  <path class="edge live" d="M500 308 C538 308 535 210 570 210" />
+                  <path class="edge live" d="M500 308 C538 308 535 408 570 408" />
+                  <path class="edge" id="edge-api-review" d="M764 210 C802 210 798 308 834 308" />
+                  <path class="edge" id="edge-test-review" d="M764 408 C802 408 798 308 834 308" />
+                  <path class="edge" id="edge-deliver" d="M1028 308 L1084 308" />
+                </svg>
+                <div class="flow-node active node-start s4-node"><strong>Start</strong><span>Goal received</span></div>
+                <div class="flow-node active node-spec s4-node"><strong>Parse Spec</strong><span>Coordinator · complete</span></div>
+                <div class="flow-node active node-api s4-node"><strong>Build API</strong><span>DEV · complete</span></div>
+                <div class="flow-node active node-test s4-node"><strong>Acceptance Test</strong><span>QA · complete</span></div>
+                <div class="flow-node pending node-review s4-node" id="review-node"><strong>Human Review</strong><span>Approval required</span></div>
+                <div class="flow-node node-deliver s4-node" id="deliver-node"><strong>Deliver</strong><span>waiting</span></div>
+              </div>
+              <div class="workflow-log">
+                <div class="pane-heading"><span>Node Library</span></div>
+                <div class="panel-card s4-log">
+                  <h3>Execution Logs</h3>
+                  <div class="log-item done"><span class="log-dot"></span><span>Goal parsed from Supervisor Chat.</span></div>
+                  <div class="log-item done"><span class="log-dot"></span><span>DEV completed API scaffolding.</span></div>
+                  <div class="log-item done"><span class="log-dot"></span><span>QA acceptance checks passed.</span></div>
+                  <div class="log-item waiting" id="approval-log"><span class="log-dot"></span><span>Waiting for human approval...</span></div>
+                  <div class="log-item done" id="approved-log" style="opacity:0;"><span class="log-dot"></span><span>Approved by user. Deliver node released.</span></div>
+                </div>
+                <div class="panel-card s4-log">
+                  <h3>Saved Workflows (1)</h3>
+                  <div class="palette-item">Backend Delivery Flow</div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="statusbar"><span>Execution paused at review gate</span><span class="status-ok">Policy enforced</span></div>
+        </div>
+      </section>
+
+      <section id="screen-5" class="scene clip" data-start="40" data-duration="7" data-track-index="1">
+        <div class="app">
+          <div class="topbar">
+            <div class="breadcrumbs"><span>Orchestration</span><span>›</span><span class="crumb-current">backend run #0148</span></div>
+            <div class="top-actions"><span class="walkthrough-label">5 / Track execution</span></div>
+          </div>
+          <div class="shell">
+            <div class="activity">
+              <div class="icon"></div><div class="icon"></div><div class="icon"></div><div class="icon"></div><div class="icon"></div><div class="icon active"></div>
+            </div>
+            <div class="content orchestration">
+              <div class="tabs"><span class="tab">Dashboard</span><span class="tab active">Tracking</span><span class="tab">Logs</span><span class="tab">Governance</span><span class="tab">Mode Transition</span></div>
+              <div class="title-row">
+                <h2>Live Task Tracking · Backend Delivery Flow</h2>
+                <span class="pill">Execution: running</span>
+              </div>
+              <div class="tracking-table s5-table">
+                <div class="track-head"><span>Task Name</span><span>Agent</span><span>Status</span><span>Timeline / Progress</span></div>
+                <div class="track-row s5-row"><span>Parse Specification</span><span>Coordinator</span><span class="status-ok">Completed</span><div class="progress"><span style="width:100%;"></span></div></div>
+                <div class="track-row s5-row"><span>Backend API Setup</span><span>DEV</span><span class="status-ok">Completed</span><div class="progress"><span style="width:100%;"></span></div></div>
+                <div class="track-row s5-row"><span>Acceptance Tests</span><span>QA</span><span class="status-ok">Completed</span><div class="progress"><span style="width:100%;"></span></div></div>
+                <div class="track-row s5-row"><span>Human Review</span><span>User</span><span class="status-ok">Approved</span><div class="progress"><span style="width:100%;"></span></div></div>
+                <div class="track-row s5-row"><span>Deliver Artifacts</span><span>Coordinator</span><span>Running</span><div class="progress"><span class="delivery-progress" style="width:86%;"></span></div></div>
+              </div>
+            </div>
+          </div>
+          <div class="statusbar"><span>Run #0148 · all task status sourced from execution state</span><span class="status-ok">Audit recording</span></div>
+        </div>
+      </section>
+
+      <section id="screen-6" class="scene clip" data-start="47" data-duration="7" data-track-index="1">
+        <div class="app">
+          <div class="topbar">
+            <div class="breadcrumbs"><span>Orchestration</span><span>›</span><span class="crumb-current">Mode Transition</span></div>
+            <div class="top-actions"><span class="walkthrough-label">6 / Grant controlled autonomy</span></div>
+          </div>
+          <div class="shell">
+            <div class="activity">
+              <div class="icon"></div><div class="icon"></div><div class="icon"></div><div class="icon"></div><div class="icon"></div><div class="icon active"></div>
+            </div>
+            <div class="content orchestration">
+              <div class="tabs"><span class="tab">Dashboard</span><span class="tab">Tracking</span><span class="tab">Logs</span><span class="tab">Governance</span><span class="tab active">Mode Transition</span></div>
+              <div class="mode-box s6-mode">
+                <div class="title-row">
+                  <h2>Trigger Manual Transition</h2>
+                  <span class="mode-current" id="mode-before">Current Mode: Supervision</span>
+                  <span class="mode-current" id="mode-after" style="opacity:0;">Current Mode: Autonomous</span>
+                </div>
+                <div class="mode-actions">
+                  <span class="button" id="autonomous-button">Autonomous Mode</span>
+                  <span class="button">Human Interaction</span>
+                </div>
+                <div class="constraints">
+                  <div class="constraint"><span>Safety Check Delay</span><strong class="status-ok">500ms</strong></div>
+                  <div class="constraint"><span>Max Cost Limit</span><strong class="status-ok">$10.00 / hour</strong></div>
+                  <div class="constraint"><span>Sensitive MCP Tools</span><strong class="status-ok">Require approval</strong></div>
+                  <div class="constraint"><span>Auto-Fallback</span><strong class="status-ok">Enabled</strong></div>
+                  <div class="constraint"><span>Transition Audit</span><strong class="status-ok" id="audit-before">Pending selection</strong><strong class="status-ok" id="audit-after" style="opacity:0;">Recorded · Autonomous</strong></div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="statusbar"><span>Mode applies globally to this orchestration run</span><span class="status-ok">Governance policy active</span></div>
+        </div>
+      </section>
+
+      <section id="screen-7" class="scene clip" data-start="54" data-duration="9" data-track-index="1">
+        <div class="app">
+          <div class="topbar">
+            <div class="breadcrumbs"><span>Research Notebook</span><span>›</span><span class="crumb-current">API validation sources</span></div>
+            <div class="top-actions"><span class="walkthrough-label">7 / Add reusable knowledge</span></div>
+          </div>
+          <div class="shell">
+            <div class="activity">
+              <div class="icon"></div><div class="icon"></div><div class="icon"></div><div class="icon"></div><div class="icon active"></div><div class="icon"></div>
+            </div>
+            <div class="content research">
+              <div class="research-search">
+                <div class="query">REST API validation best practices for backend delivery</div>
+                <span class="button primary">Auto-Search via Agent</span>
+              </div>
+              <div class="research-columns">
+                <div class="sources">
+                  <div class="pane-heading"><span>Web Sources (Intake)</span><span class="pill">3 verified</span></div>
+                  <div class="source s7-source"><strong>API Contract Validation Guide</strong><span>Standards reference · extracted passages</span></div>
+                  <div class="source s7-source"><strong>HTTP Error Handling Patterns</strong><span>Implementation reference · cited</span></div>
+                  <div class="source s7-source"><strong>Acceptance Testing Checklist</strong><span>QA workflow reference · cited</span></div>
+                </div>
+                <div class="scratch">
+                  <div class="pane-heading"><span>Scratchpad (Synthesis)</span><span class="button soft s7-save">Save to Knowledge Base</span></div>
+                  <div class="scratch-document s7-document">
+                    <h3># Backend API Validation Notes</h3>
+                    <div class="note-line">## Contract rules</div>
+                    <div class="note-line">- Validate request schema before domain execution.</div>
+                    <div class="note-line">- Return structured error payloads with correlation IDs.</div>
+                    <div class="note-line">- Generate QA cases from endpoint acceptance criteria.</div>
+                    <div class="note-line">## Flow connection</div>
+                    <div class="note-line">This note is attached to Backend Delivery Flow and retrievable by DEV and QA agents during future runs.</div>
+                    <div class="chips"><span class="chip">#backend</span><span class="chip">#api</span><span class="chip">#qa</span><span class="chip">knowledge_chunks indexed</span></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="statusbar"><span>3 sources synthesized · chunks indexed</span><span class="status-ok">Saved to Knowledge Base</span></div>
+        </div>
+      </section>
+
+      <section id="screen-8" class="scene clip" data-start="63" data-duration="9" data-track-index="1">
+        <div class="app">
+          <div class="topbar">
+            <div class="breadcrumbs"><span>Teams</span><span>›</span><span class="crumb-current">backend</span></div>
+            <div class="top-actions"><span class="walkthrough-label">8 / Receive deliverables</span></div>
+          </div>
+          <div class="shell">
+            <div class="activity">
+              <div class="icon active"></div><div class="icon"></div><div class="icon"></div><div class="icon"></div><div class="icon"></div><div class="icon"></div>
+            </div>
+            <div class="content teams">
+              <div class="teams-pane">
+                <div class="pane-heading"><span>Instances</span></div>
+                <div class="instance selected"><div class="instance-title"><span><span class="run-dot"></span>backend</span><span class="pill">completed</span></div><div class="subtle">Run #0148 · traceable</div></div>
+                <div class="separator">Artifacts</div>
+                <div class="instance"><div class="instance-title">Backend Delivery Flow</div><div class="subtle">Reusable workflow</div></div>
+                <div class="instance"><div class="instance-title">API Validation Notes</div><div class="subtle">Knowledge document</div></div>
+              </div>
+              <div class="teams-pane">
+                <div class="pane-heading"><span>Members</span><span>Tasks <span class="pill">done</span></span></div>
+                <div class="agent"><div class="agent-head"><span>Coordinator</span><span class="online">✓ complete</span></div><div class="agent-task">Delivery assembled and audited</div></div>
+                <div class="agent"><div class="agent-head"><span>DEV</span><span class="online">✓ complete</span></div><div class="agent-task">API implementation generated</div></div>
+                <div class="agent"><div class="agent-head"><span>QA</span><span class="online">✓ passed</span></div><div class="agent-task">Acceptance suite verified</div></div>
+              </div>
+              <div class="chat-pane">
+                <div class="chat-header">
+                  <div class="chat-title"><span>backend</span><span class="subtle">— Supervisor Chat</span><span class="pill">Autonomous · Completed</span></div>
+                </div>
+                <div class="chat-body">
+                  <div class="message assistant s8-result">
+                    <div class="message-meta">Coordinator · Run #0148 completed</div>
+                    API implementation and validation suite are ready. The generated workflow and research note have been saved for reuse.
+                    <div class="chips"><span class="chip">View iFlow</span><span class="chip">Open Knowledge</span><span class="chip">View Audit Log</span></div>
+                  </div>
+                  <div class="deliverables s8-files">
+                    <strong>Files Generated / Modified</strong>
+                    <div class="file-row"><span>src/api/routes.rs</span><span class="status-ok">created</span></div>
+                    <div class="file-row"><span>src/api/validators.rs</span><span class="status-ok">created</span></div>
+                    <div class="file-row"><span>tests/api_contract_tests.rs</span><span class="status-ok">passed</span></div>
+                    <div class="file-row"><span>docs/api_validation_notes.md</span><span class="status-ok">indexed</span></div>
+                  </div>
+                </div>
+                <div class="composer">
+                  <div class="composer-text">Describe the next goal...</div>
+                  <div class="composer-toolbar"><span class="button soft">▱ safety</span><span class="send">↑</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="statusbar"><span>Run completed · files delivered · knowledge indexed</span><span class="status-ok">All modules synchronized</span></div>
+        </div>
+      </section>
+
+      <section id="screen-9" class="scene clip" data-start="72" data-duration="6" data-track-index="1">
+        <div class="app">
+          <div class="topbar">
+            <div class="breadcrumbs"><span>Teams</span><span>›</span><span class="crumb-current">backend</span></div>
+            <div class="top-actions"><span class="pill">Autonomous Mode</span><span class="pill">Governed</span></div>
+          </div>
+          <div class="shell">
+            <div class="activity">
+              <div class="icon active"></div><div class="icon active"></div><div class="icon active"></div><div class="icon active"></div><div class="icon active"></div><div class="icon active"></div>
+            </div>
+            <div class="content teams">
+              <div class="teams-pane">
+                <div class="pane-heading"><span>Workspace</span></div>
+                <div class="instance selected"><div class="instance-title">backend</div><div class="subtle">Flow-linked delivery complete</div></div>
+                <div class="instance"><div class="instance-title">iFlow</div><div class="subtle">Backend Delivery Flow</div></div>
+                <div class="instance"><div class="instance-title">Knowledge</div><div class="subtle">API Validation Notes</div></div>
+              </div>
+              <div class="teams-pane">
+                <div class="pane-heading"><span>Traceability</span></div>
+                <div class="agent"><div class="agent-head"><span>Goal</span><span class="online">✓</span></div><div class="agent-task">Supervisor Chat</div></div>
+                <div class="agent"><div class="agent-head"><span>Workflow</span><span class="online">✓</span></div><div class="agent-task">iFlow execution history</div></div>
+                <div class="agent"><div class="agent-head"><span>Governance</span><span class="online">✓</span></div><div class="agent-task">Mode + audit + permissions</div></div>
+              </div>
+              <div class="chat-pane">
+                <div class="chat-header"><div class="chat-title">AgentForgeAI IDE · Ideal Workflow</div></div>
+                <div class="chat-body"></div>
+                <div class="composer"></div>
+                <div class="final-overlay s9-final">
+                  <span class="walkthrough-label">Complete workflow</span>
+                  <h2>Một goal trở thành flow nhìn thấy được, kiểm soát được và tái sử dụng được.</h2>
+                  <p>Chat sinh iFlow. iFlow chạy agent tasks. Governance kiểm soát autonomy. Knowledge lưu kết quả. Workspace trả lại deliverables có traceability.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="statusbar"><span>AgentForgeAI</span><span class="status-ok">Goal → Flow → Execute → Learn → Deliver</span></div>
+        </div>
+      </section>
+
+      <div id="cursor"></div>
+      <div id="pulse-1" class="click-pulse"></div>
+      <div id="pulse-2" class="click-pulse"></div>
+      <div id="pulse-3" class="click-pulse"></div>
+      <div id="pulse-4" class="click-pulse"></div>
+      <div id="pulse-5" class="click-pulse"></div>
+      <div class="video-progress"><span id="video-progress-fill"></span></div>
+
+      <div id="wipe-1" class="wipe clip" data-layout-allow-overflow data-start="6.55" data-duration="0.9" data-track-index="5"><div class="wipe-bar wipe-bar-1"><span></span><span></span><span></span></div></div>
+      <div id="wipe-2" class="wipe clip" data-layout-allow-overflow data-start="17.55" data-duration="0.9" data-track-index="5"><div class="wipe-bar wipe-bar-2"><span></span><span></span><span></span></div></div>
+      <div id="wipe-3" class="wipe clip" data-layout-allow-overflow data-start="26.55" data-duration="0.9" data-track-index="5"><div class="wipe-bar wipe-bar-3"><span></span><span></span><span></span></div></div>
+      <div id="wipe-4" class="wipe clip" data-layout-allow-overflow data-start="39.55" data-duration="0.9" data-track-index="5"><div class="wipe-bar wipe-bar-4"><span></span><span></span><span></span></div></div>
+      <div id="wipe-5" class="wipe clip" data-layout-allow-overflow data-start="46.55" data-duration="0.9" data-track-index="5"><div class="wipe-bar wipe-bar-5"><span></span><span></span><span></span></div></div>
+      <div id="wipe-6" class="wipe clip" data-layout-allow-overflow data-start="53.55" data-duration="0.9" data-track-index="5"><div class="wipe-bar wipe-bar-6"><span></span><span></span><span></span></div></div>
+      <div id="wipe-7" class="wipe clip" data-layout-allow-overflow data-start="62.55" data-duration="0.9" data-track-index="5"><div class="wipe-bar wipe-bar-7"><span></span><span></span><span></span></div></div>
+      <div id="wipe-8" class="wipe clip" data-layout-allow-overflow data-start="71.55" data-duration="0.9" data-track-index="5"><div class="wipe-bar wipe-bar-8"><span></span><span></span><span></span></div></div>
+    </div>
+
+    <script>
+      window.__timelines = window.__timelines || {};
+      const tl = gsap.timeline({ paused: true });
+      const duration = 78;
+
+      tl.to("#video-progress-fill", { scaleX: 1, duration: duration, ease: "none" }, 0);
+
+      const scenes = [
+        ["#screen-1", 0, 7],
+        ["#screen-2", 7, 18],
+        ["#screen-3", 18, 27],
+        ["#screen-4", 27, 40],
+        ["#screen-5", 40, 47],
+        ["#screen-6", 47, 54],
+        ["#screen-7", 54, 63],
+        ["#screen-8", 63, 72],
+        ["#screen-9", 72, 78]
+      ];
+
+      scenes.forEach(([selector, start, end], index) => {
+        if (index > 0) {
+          tl.set(selector, { opacity: 1, visibility: "visible" }, start);
+        }
+        if (end < duration) {
+          tl.set(selector, { opacity: 0, visibility: "hidden" }, end);
+        }
+      });
+
+      function wipe(index, time) {
+        const holder = "#wipe-" + index;
+        const bar = ".wipe-bar-" + index;
+        tl.set(holder, { opacity: 1, visibility: "visible" }, time);
+        tl.fromTo(bar, { xPercent: -112 }, { xPercent: 112, duration: 0.9, ease: "power3.inOut" }, time);
+        tl.set(holder, { opacity: 0, visibility: "hidden" }, time + 0.9);
+      }
+
+      wipe(1, 6.55);
+      wipe(2, 17.55);
+      wipe(3, 26.55);
+      wipe(4, 39.55);
+      wipe(5, 46.55);
+      wipe(6, 53.55);
+      wipe(7, 62.55);
+      wipe(8, 71.55);
+
+      tl.from(".s1-enter", { y: -14, opacity: 0, duration: 0.42, stagger: 0.12, ease: "power3.out" }, 0.2);
+      tl.from(".s1-column", { y: 18, opacity: 0, duration: 0.55, stagger: 0.09, ease: "power2.out" }, 0.6);
+      tl.set("#cursor", { opacity: 1 }, 1.2);
+      tl.from("#cursor", { scale: 0.7, duration: 0.28, ease: "back.out(1.8)" }, 1.2);
+      tl.to("#cursor", { left: 222, top: 334, duration: 0.8, ease: "power2.inOut" }, 2.0);
+      tl.set("#pulse-1", { left: 222, top: 334 }, 2.8);
+      tl.fromTo("#pulse-1", { scale: 0.3, opacity: 0.8 }, { scale: 1.45, opacity: 0, duration: 0.44, ease: "power2.out" }, 2.8);
+      tl.from("#selected-backend", { backgroundColor: "#ffffff", duration: 0.42, ease: "power1.out" }, 2.82);
+
+      tl.from("#screen-2 .walkthrough-label", { y: -12, opacity: 0, duration: 0.42, ease: "power3.out" }, 7.25);
+      tl.to("#cursor", { left: 1340, top: 863, duration: 0.85, ease: "power2.inOut" }, 8.0);
+      tl.from(".s2-message", { y: 26, opacity: 0, duration: 0.55, ease: "power3.out" }, 8.6);
+      tl.to("#cursor", { left: 1805, top: 972, duration: 0.48, ease: "power2.inOut" }, 9.25);
+      tl.set("#pulse-2", { left: 1805, top: 972 }, 9.73);
+      tl.fromTo("#pulse-2", { scale: 0.3, opacity: 0.8 }, { scale: 1.4, opacity: 0, duration: 0.44, ease: "power2.out" }, 9.73);
+      tl.from(".s2-thinking", { y: 24, opacity: 0, duration: 0.55, ease: "expo.out" }, 10.35);
+      tl.from(".s2-line", { x: -16, opacity: 0, duration: 0.4, stagger: 0.45, ease: "power2.out" }, 11.0);
+      tl.from(".s2-toast", { x: 32, opacity: 0, duration: 0.54, ease: "back.out(1.35)" }, 14.6);
+
+      tl.from("#screen-3 .walkthrough-label", { y: -12, opacity: 0, duration: 0.42, ease: "power3.out" }, 18.25);
+      tl.from(".s3-response", { y: 22, opacity: 0, duration: 0.55, ease: "power3.out" }, 18.7);
+      tl.from(".s3-toast", { x: 34, opacity: 0, duration: 0.58, ease: "back.out(1.35)" }, 20.1);
+      tl.to("#cursor", { left: 1751, top: 174, duration: 0.82, ease: "power2.inOut" }, 21.0);
+      tl.set("#pulse-3", { left: 1751, top: 174 }, 21.83);
+      tl.fromTo("#pulse-3", { scale: 0.3, opacity: 0.8 }, { scale: 1.4, opacity: 0, duration: 0.44, ease: "power2.out" }, 21.83);
+      tl.to("#cursor", { left: 28, top: 140, duration: 1.1, ease: "power2.inOut" }, 24.0);
+
+      tl.from("#screen-4 .walkthrough-label", { y: -12, opacity: 0, duration: 0.42, ease: "power3.out" }, 27.25);
+      tl.from(".s4-side", { x: -18, opacity: 0, duration: 0.45, stagger: 0.12, ease: "power2.out" }, 27.65);
+      tl.from(".s4-node", { y: 14, opacity: 0, duration: 0.4, stagger: 0.13, ease: "back.out(1.5)" }, 28.25);
+      tl.from(".s4-log", { x: 18, opacity: 0, duration: 0.5, stagger: 0.13, ease: "power2.out" }, 29.3);
+      tl.to("#cursor", { left: 247, top: 290, duration: 0.85, ease: "power2.inOut" }, 34.5);
+      tl.set("#pulse-4", { left: 247, top: 290 }, 35.36);
+      tl.fromTo("#pulse-4", { scale: 0.3, opacity: 0.8 }, { scale: 1.4, opacity: 0, duration: 0.44, ease: "power2.out" }, 35.36);
+      tl.to("#review-node", { backgroundColor: "#eaf6f3", borderColor: "#68bbaa", duration: 0.38, ease: "power2.out" }, 35.62);
+      tl.to("#deliver-node", { backgroundColor: "#eaf6f3", borderColor: "#68bbaa", duration: 0.42, ease: "power2.out" }, 36.0);
+      tl.to("#edge-api-review, #edge-test-review, #edge-deliver", { stroke: "#008c76", duration: 0.38, ease: "power1.out" }, 35.72);
+      tl.to("#approval-log", { opacity: 0.32, duration: 0.3, ease: "power1.out" }, 35.8);
+      tl.to("#approved-log", { opacity: 1, duration: 0.4, ease: "power2.out" }, 36.2);
+
+      tl.from("#screen-5 .walkthrough-label", { y: -12, opacity: 0, duration: 0.42, ease: "power3.out" }, 40.25);
+      tl.from(".s5-table", { y: 22, opacity: 0, duration: 0.5, ease: "power2.out" }, 40.7);
+      tl.from(".s5-row", { y: 14, opacity: 0, duration: 0.34, stagger: 0.08, ease: "power2.out" }, 41.05);
+      tl.from("#screen-5 .progress span", { scaleX: 0, duration: 0.7, stagger: 0.1, ease: "power2.out" }, 41.65);
+      tl.to(".delivery-progress", { width: "100%", duration: 1.5, ease: "power1.inOut" }, 43.2);
+
+      tl.from("#screen-6 .walkthrough-label", { y: -12, opacity: 0, duration: 0.42, ease: "power3.out" }, 47.25);
+      tl.from(".s6-mode", { y: 20, opacity: 0, duration: 0.5, ease: "power2.out" }, 47.75);
+      tl.to("#cursor", { left: 177, top: 224, duration: 0.7, ease: "power2.inOut" }, 48.6);
+      tl.set("#pulse-5", { left: 177, top: 224 }, 49.32);
+      tl.fromTo("#pulse-5", { scale: 0.3, opacity: 0.8 }, { scale: 1.4, opacity: 0, duration: 0.44, ease: "power2.out" }, 49.32);
+      tl.to("#autonomous-button", { backgroundColor: "#006b5b", color: "#ffffff", borderColor: "#006b5b", duration: 0.36, ease: "power2.out" }, 49.45);
+      tl.to("#mode-before, #audit-before", { opacity: 0, duration: 0.22, ease: "power1.out" }, 49.7);
+      tl.to("#mode-after, #audit-after", { opacity: 1, duration: 0.38, ease: "power2.out" }, 49.94);
+
+      tl.from("#screen-7 .walkthrough-label", { y: -12, opacity: 0, duration: 0.42, ease: "power3.out" }, 54.25);
+      tl.from(".s7-source", { x: -24, opacity: 0, duration: 0.45, stagger: 0.13, ease: "power2.out" }, 54.8);
+      tl.from(".s7-document", { x: 22, opacity: 0, duration: 0.6, ease: "expo.out" }, 55.3);
+      tl.to("#cursor", { left: 1714, top: 101, duration: 0.82, ease: "power2.inOut" }, 58.0);
+      tl.from(".s7-save", { backgroundColor: "#006b5b", color: "#ffffff", duration: 0.5, ease: "power1.inOut" }, 58.85);
+
+      tl.from("#screen-8 .walkthrough-label", { y: -12, opacity: 0, duration: 0.42, ease: "power3.out" }, 63.25);
+      tl.from(".s8-result", { y: 18, opacity: 0, duration: 0.55, ease: "power3.out" }, 63.8);
+      tl.from(".s8-files", { y: 20, opacity: 0, duration: 0.5, ease: "power2.out" }, 64.55);
+      tl.from("#screen-8 .file-row", { x: -14, opacity: 0, duration: 0.32, stagger: 0.1, ease: "power2.out" }, 64.95);
+
+      tl.from(".s9-final", { x: 36, opacity: 0, duration: 0.65, ease: "expo.out" }, 72.45);
+      tl.to("#cursor", { opacity: 0, duration: 0.4, ease: "power1.out" }, 72.2);
+      tl.to("#screen-9", { backgroundColor: "#ecf7f4", duration: 0.75, ease: "sine.inOut" }, 76.8);
+
+      window.__timelines["main"] = tl;
+    </script>
+  </body>
+</html>
