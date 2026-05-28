@@ -17,7 +17,9 @@ pub struct KnowledgePanel {
     vault_path: Entity<String>,
     #[allow(dead_code)]
     obsidian_watcher: Arc<std::sync::Mutex<Option<notify::RecommendedWatcher>>>,
+    all_items: Vec<crate::knowledge::core::KnowledgeItem>,
     items: Vec<crate::knowledge::core::KnowledgeItem>,
+    active_filter: KnowledgeFilter,
     selected_item: Option<crate::knowledge::core::KnowledgeItem>,
     graph_pan: gpui::Point<f32>,
     graph_zoom: f32,
@@ -33,6 +35,14 @@ pub struct KnowledgePanel {
 }
 
 use std::collections::BTreeMap;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum KnowledgeFilter {
+    All,
+    Documents,
+    Memories,
+    Artifacts,
+}
 
 #[derive(Debug, Default)]
 struct TreeNode {
@@ -188,7 +198,7 @@ impl KnowledgePanel {
         let vault_path = cx.new(|_| initial_vault.clone());
 
         let mut items = Vec::new();
-        if let Ok(db_items) = knowledge_service.get_all_knowledge_items() {
+        if let Ok(db_items) = knowledge_service.get_all_records() {
             items = db_items;
         }
 
@@ -346,7 +356,9 @@ impl KnowledgePanel {
             knowledge_service,
             vault_path,
             obsidian_watcher,
+            all_items: items.clone(),
             items,
+            active_filter: KnowledgeFilter::All,
             selected_item: None,
             graph_pan: gpui::point(0.0, 0.0),
             graph_zoom: 1.0,
@@ -367,10 +379,68 @@ impl KnowledgePanel {
     }
 
     pub fn reload_items(&mut self, cx: &mut Context<Self>) {
-        if let Ok(items) = self.knowledge_service.get_all_knowledge_items() {
-            self.items = items;
+        if let Ok(items) = self.knowledge_service.get_all_records() {
+            self.all_items = items;
+            self.apply_filter();
             cx.notify();
         }
+    }
+
+    fn apply_filter(&mut self) {
+        self.items = self
+            .all_items
+            .iter()
+            .filter(|item| match self.active_filter {
+                KnowledgeFilter::All => true,
+                KnowledgeFilter::Documents => {
+                    item.record_kind == crate::knowledge::core::KnowledgeRecordKind::Document
+                }
+                KnowledgeFilter::Memories => {
+                    item.record_kind == crate::knowledge::core::KnowledgeRecordKind::Memory
+                }
+                KnowledgeFilter::Artifacts => {
+                    item.record_kind == crate::knowledge::core::KnowledgeRecordKind::Artifact
+                }
+            })
+            .cloned()
+            .collect();
+    }
+
+    fn render_filter_button(
+        &self,
+        label: &'static str,
+        filter: KnowledgeFilter,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        let theme = cx.theme();
+        let selected = self.active_filter == filter;
+        div()
+            .px_2()
+            .py_1()
+            .rounded_md()
+            .text_xs()
+            .text_color(if selected {
+                theme.foreground
+            } else {
+                theme.muted_foreground
+            })
+            .bg(if selected {
+                theme.secondary
+            } else {
+                gpui::transparent_black()
+            })
+            .cursor_pointer()
+            .on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(move |this, _, _, cx| {
+                    this.active_filter = filter;
+                    this.selected_item = None;
+                    this.selected_node_idx = None;
+                    this.apply_filter();
+                    cx.notify();
+                }),
+            )
+            .child(label)
     }
 
     fn render_tree_item(
@@ -498,14 +568,30 @@ impl KnowledgePanel {
                         div()
                             .text_xs()
                             .text_color(theme.muted_foreground)
-                            .child("Obsidian Vault"),
+                            .child("Knowledge Sources"),
                     )
                     .child(div().text_xs().child(display_path))
                     .child(
                         div()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .child("(Configure in Settings)"),
+                            .flex()
+                            .gap_1()
+                            .mt_1()
+                            .child(self.render_filter_button("All", KnowledgeFilter::All, cx))
+                            .child(self.render_filter_button(
+                                "Documents",
+                                KnowledgeFilter::Documents,
+                                cx,
+                            ))
+                            .child(self.render_filter_button(
+                                "Memories",
+                                KnowledgeFilter::Memories,
+                                cx,
+                            ))
+                            .child(self.render_filter_button(
+                                "Artifacts",
+                                KnowledgeFilter::Artifacts,
+                                cx,
+                            )),
                     ),
             )
             .child({
@@ -518,7 +604,7 @@ impl KnowledgePanel {
                     .gap_1()
                     .child(self.render_tree_item(
                         IconName::Folder,
-                        "Vault Root".to_string(),
+                        "Knowledge".to_string(),
                         self.is_dir_expanded(""),
                         0,
                         "".to_string(),
@@ -535,7 +621,7 @@ impl KnowledgePanel {
                     );
                 } else {
                     let mut root = TreeNode::default();
-                    root.name = "Vault Root".to_string();
+                    root.name = "Knowledge".to_string();
                     let vault_path_value = self.vault_path.read(cx).clone();
                     let mut vault_root_path = std::path::PathBuf::from(&vault_path_value);
                     if let Ok(p) = vault_root_path.canonicalize() {
@@ -543,27 +629,38 @@ impl KnowledgePanel {
                     }
 
                     for item in &self.items {
-                        let rel_path = if let Some(abs_path_str) = &item.vault_path {
-                            let mut abs_path = std::path::PathBuf::from(abs_path_str);
-                            if let Ok(p) = abs_path.canonicalize() {
-                                abs_path = p;
-                            }
-                            if vault_path_value.is_empty() {
-                                abs_path
-                                    .file_name()
-                                    .map(std::path::PathBuf::from)
-                                    .unwrap_or_default()
-                            } else {
-                                match abs_path.strip_prefix(&vault_root_path) {
-                                    Ok(p) => p.to_path_buf(),
-                                    Err(_) => abs_path
+                        let rel_path = if item.record_kind
+                            == crate::knowledge::core::KnowledgeRecordKind::Memory
+                        {
+                            std::path::PathBuf::from("Memories").join(format!("{}.md", item.title))
+                        } else if item.record_kind
+                            == crate::knowledge::core::KnowledgeRecordKind::Artifact
+                        {
+                            std::path::PathBuf::from("Artifacts").join(item.title.clone())
+                        } else {
+                            let document_path = if let Some(abs_path_str) = &item.vault_path {
+                                let mut abs_path = std::path::PathBuf::from(abs_path_str);
+                                if let Ok(p) = abs_path.canonicalize() {
+                                    abs_path = p;
+                                }
+                                if vault_path_value.is_empty() {
+                                    abs_path
                                         .file_name()
                                         .map(std::path::PathBuf::from)
-                                        .unwrap_or_default(),
+                                        .unwrap_or_default()
+                                } else {
+                                    match abs_path.strip_prefix(&vault_root_path) {
+                                        Ok(p) => p.to_path_buf(),
+                                        Err(_) => abs_path
+                                            .file_name()
+                                            .map(std::path::PathBuf::from)
+                                            .unwrap_or_default(),
+                                    }
                                 }
-                            }
-                        } else {
-                            std::path::PathBuf::from(format!("{}.md", item.title))
+                            } else {
+                                std::path::PathBuf::from(format!("{}.md", item.title))
+                            };
+                            std::path::PathBuf::from("Documents").join(document_path)
                         };
 
                         let components: Vec<_> = rel_path
@@ -1006,6 +1103,83 @@ impl KnowledgePanel {
 
     fn render_analytics_dashboard(&self, cx: &Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
+        let document_count = self
+            .all_items
+            .iter()
+            .filter(|item| {
+                item.record_kind == crate::knowledge::core::KnowledgeRecordKind::Document
+            })
+            .count();
+        let memory_count = self
+            .all_items
+            .iter()
+            .filter(|item| item.record_kind == crate::knowledge::core::KnowledgeRecordKind::Memory)
+            .count();
+        let artifact_count = self
+            .all_items
+            .iter()
+            .filter(|item| item.record_kind == crate::knowledge::core::KnowledgeRecordKind::Artifact)
+            .count();
+        let tag_count = self
+            .all_items
+            .iter()
+            .flat_map(|item| item.tags.iter().map(|tag| tag.0.clone()))
+            .collect::<HashSet<_>>()
+            .len();
+        let connection_count = self
+            .all_items
+            .iter()
+            .map(|item| {
+                self.all_items
+                    .iter()
+                    .filter(|other| {
+                        item.id != other.id
+                            && item.content.contains(&format!("[[{}]]", other.title))
+                    })
+                    .count()
+            })
+            .sum::<usize>();
+
+        let mut recent_activity = v_flex().mt_4().gap(px(12.)).child(
+            div()
+                .text_sm()
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(theme.muted_foreground)
+                .child("RECENT ACTIVITY"),
+        );
+        if self.all_items.is_empty() {
+            recent_activity = recent_activity.child(
+                div()
+                    .text_sm()
+                    .text_color(theme.muted_foreground)
+                    .child("No knowledge saved yet."),
+            );
+        } else {
+            for item in self.all_items.iter().take(4) {
+                let kind = match item.record_kind {
+                    crate::knowledge::core::KnowledgeRecordKind::Document => "Document",
+                    crate::knowledge::core::KnowledgeRecordKind::Memory => "Memory",
+                    crate::knowledge::core::KnowledgeRecordKind::Artifact => "Artifact",
+                };
+                recent_activity = recent_activity.child(
+                    div()
+                        .p_3()
+                        .bg(theme.secondary)
+                        .rounded_lg()
+                        .border_1()
+                        .border_color(theme.border)
+                        .flex_col()
+                        .gap_2()
+                        .child(div().text_sm().child(item.title.clone()))
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(theme.muted_foreground)
+                                .child(format!("{} / {}", kind, item.source_kind)),
+                        ),
+                );
+            }
+        }
         div()
             .w(px(300.))
             .h_full()
@@ -1016,46 +1190,50 @@ impl KnowledgePanel {
                 div()
                     .flex_1()
                     .p_4()
-                    .id("scroll-sheet").overflow_y_scroll()
+                    .id("scroll-sheet")
+                    .overflow_y_scroll()
                     .child(
                         v_flex()
                             .gap(px(12.))
-                            .child(div().text_sm().font_weight(gpui::FontWeight::SEMIBOLD).text_color(theme.muted_foreground).child("OVERVIEW"))
-                            .child(self.render_stat_card(IconName::File, "Total Documents".to_string(), format!("{}", self.items.len()), cx))
-                            .child(self.render_stat_card(IconName::Info, "Connections".to_string(), "0".to_string(), cx))
-                            .child(self.render_stat_card(IconName::Info, "Tags Used".to_string(), "0".to_string(), cx))
-                            .child(self.render_stat_card(IconName::Info, "Orphan Nodes".to_string(), "0".to_string(), cx))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .text_color(theme.muted_foreground)
+                                    .child("OVERVIEW"),
+                            )
+                            .child(self.render_stat_card(
+                                IconName::File,
+                                "Documents".to_string(),
+                                format!("{}", document_count),
+                                cx,
+                            ))
+                            .child(self.render_stat_card(
+                                IconName::Info,
+                                "Memories".to_string(),
+                                format!("{}", memory_count),
+                                cx,
+                            ))
+                            .child(self.render_stat_card(
+                                IconName::File,
+                                "Artifacts".to_string(),
+                                format!("{}", artifact_count),
+                                cx,
+                            ))
+                            .child(self.render_stat_card(
+                                IconName::Info,
+                                "Connections".to_string(),
+                                format!("{}", connection_count),
+                                cx,
+                            ))
+                            .child(self.render_stat_card(
+                                IconName::Info,
+                                "Tags Used".to_string(),
+                                format!("{}", tag_count),
+                                cx,
+                            )),
                     )
-                    .child(
-                        v_flex()
-                            .mt_4()
-                            .gap(px(12.))
-                            .child(div().text_sm().font_weight(gpui::FontWeight::SEMIBOLD).text_color(theme.muted_foreground).child("RECENT ACTIVITY"))
-                            .child(
-                                div()
-                                    .p_3()
-                                    .bg(theme.secondary)
-                                    .rounded_lg()
-                                    .border_1()
-                                    .border_color(theme.border)
-                                    .flex_col()
-                                    .gap_2()
-                                    .child(div().text_sm().child("Updated 'Vector Databases.md'"))
-                                    .child(div().text_xs().text_color(theme.muted_foreground).child("2 hours ago"))
-                            )
-                            .child(
-                                div()
-                                    .p_3()
-                                    .bg(theme.secondary)
-                                    .rounded_lg()
-                                    .border_1()
-                                    .border_color(theme.border)
-                                    .flex_col()
-                                    .gap_2()
-                                    .child(div().text_sm().child("Linked 'LLM Comparisons.md' to 'Project Specifications.md'"))
-                                    .child(div().text_xs().text_color(theme.muted_foreground).child("5 hours ago"))
-                            )
-                    ),
+                    .child(recent_activity),
             )
     }
 
@@ -1068,6 +1246,21 @@ impl KnowledgePanel {
 
         let item_id = item.id;
         let title = item.title.clone();
+        let kind = match item.record_kind {
+            crate::knowledge::core::KnowledgeRecordKind::Document => "Document",
+            crate::knowledge::core::KnowledgeRecordKind::Memory => "Memory",
+            crate::knowledge::core::KnowledgeRecordKind::Artifact => "Artifact",
+        };
+        let mut provenance = vec![format!("{} / {}", kind, item.source_kind)];
+        if let Some(run_id) = &item.origin_run_id {
+            provenance.push(format!("Run {}", run_id));
+        }
+        if let Some(session_id) = &item.origin_session_id {
+            provenance.push(format!("Session {}", session_id));
+        }
+        if let Some(agent_id) = &item.origin_agent_id {
+            provenance.push(format!("Agent {}", agent_id));
+        }
         let content_text =
             gpui::SharedString::from(Self::preprocess_obsidian_markdown(&item.content));
 
@@ -1117,6 +1310,25 @@ impl KnowledgePanel {
                                     .text_color(theme.muted_foreground),
                             ),
                     ),
+            )
+            .child(
+                div()
+                    .px_4()
+                    .py_2()
+                    .border_b_1()
+                    .border_color(theme.border)
+                    .flex()
+                    .gap_2()
+                    .children(provenance.into_iter().map(|value| {
+                        div()
+                            .px_2()
+                            .py_1()
+                            .rounded_md()
+                            .bg(theme.secondary)
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child(value)
+                    })),
             )
             .child(
                 div()

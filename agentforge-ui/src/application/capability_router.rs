@@ -16,7 +16,7 @@ pub enum AttachmentHandling {
 /// Loại file cho routing decision.
 #[derive(Debug, PartialEq)]
 enum FileKind {
-    Text,    // txt, md, json, csv, code files
+    Text, // txt, md, json, csv, code files
     Html,
     Xml,
     Pdf,
@@ -44,8 +44,8 @@ fn classify_path(path: &Path) -> FileKind {
         Some("pptx") | Some("pptm") => FileKind::Pptx,
         Some("odt") | Some("ods") | Some("odp") => FileKind::Odf,
         Some("zip") => FileKind::Zip,
-        Some("png") | Some("jpg") | Some("jpeg") | Some("gif") | Some("webp")
-        | Some("bmp") | Some("tif") | Some("tiff") => FileKind::Image,
+        Some("png") | Some("jpg") | Some("jpeg") | Some("gif") | Some("webp") | Some("bmp")
+        | Some("tif") | Some("tiff") => FileKind::Image,
         Some("mp4") | Some("mov") | Some("mkv") | Some("avi") | Some("webm") | Some("m4v") => {
             FileKind::Video
         }
@@ -159,9 +159,9 @@ impl CapabilityRouter {
             FileKind::Pdf => {
                 if capability.supports(&Modality::Pdf) {
                     match std::fs::read(path) {
-                        Ok(data) => AttachmentHandling::PassNative(vec![ContentPart::PdfBytes {
-                            data,
-                        }]),
+                        Ok(data) => {
+                            AttachmentHandling::PassNative(vec![ContentPart::PdfBytes { data }])
+                        }
                         Err(e) => AttachmentHandling::LocalExtract {
                             text: format!("### {}\n- Read error: {}\n", file_name, e),
                             notes: vec![],
@@ -185,7 +185,10 @@ impl CapabilityRouter {
                                 "PDF has no selectable text and the current model does not support PDF natively. To process this file, switch to a model with PDF capability (e.g. Gemini 1.5+, Claude 3+) or use a PDF OCR tool.".to_string()
                             );
                             AttachmentHandling::LocalExtract {
-                                text: format!("### {}\n- PDF with no extractable text.\n", file_name),
+                                text: format!(
+                                    "### {}\n- PDF with no extractable text.\n",
+                                    file_name
+                                ),
                                 notes,
                             }
                         }

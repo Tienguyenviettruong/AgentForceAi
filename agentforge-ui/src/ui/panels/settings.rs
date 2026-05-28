@@ -35,6 +35,14 @@ fn save_setting(cx: &mut App, key: &str, value: SharedString) {
     let _ = AppState::global(cx).db.set_setting(key, value.as_ref());
 }
 
+fn save_secret_reference_setting(cx: &mut App, key: &str, value: SharedString) {
+    let value = value.as_ref().trim();
+    if value.is_empty() || crate::infrastructure::security::keychain::is_credential_reference(value)
+    {
+        let _ = AppState::global(cx).db.set_setting(key, value);
+    }
+}
+
 pub struct SettingsPanel {
     focus_handle: gpui::FocusHandle,
     custom_provider: Entity<CustomProviderSection>,
@@ -188,15 +196,15 @@ impl Render for SettingsPanel {
                                 .description("Default model sent by the generate_image tool."),
 
                                 SettingItem::new(
-                                    "Image API Key",
+                                    "Image API Key Reference",
                                     SettingField::input(
-                                        |cx: &App| setting_only(cx, "output_image_api_key"),
+                                        |cx: &App| setting_only(cx, "output_image_api_key_ref"),
                                         |val: SharedString, cx: &mut App| {
-                                            save_setting(cx, "output_image_api_key", val);
+                                            save_secret_reference_setting(cx, "output_image_api_key_ref", val);
                                         },
                                     )
                                 )
-                                .description("Optional. If empty, generate_image also checks AGENTFORGE_IMAGE_OUTPUT_API_KEY and OPENAI_API_KEY."),
+                                .description("Optional secret:// or env: reference. If empty, generate_image checks AGENTFORGE_IMAGE_OUTPUT_API_KEY and OPENAI_API_KEY."),
 
                                 SettingItem::new(
                                     "PDF Service URL",
@@ -217,15 +225,15 @@ impl Render for SettingsPanel {
                                 .description("External PDF renderer endpoint, for example a pdfkit service."),
 
                                 SettingItem::new(
-                                    "PDF API Key",
+                                    "PDF API Key Reference",
                                     SettingField::input(
-                                        |cx: &App| setting_only(cx, "output_pdf_api_key"),
+                                        |cx: &App| setting_only(cx, "output_pdf_api_key_ref"),
                                         |val: SharedString, cx: &mut App| {
-                                            save_setting(cx, "output_pdf_api_key", val);
+                                            save_secret_reference_setting(cx, "output_pdf_api_key_ref", val);
                                         },
                                     )
                                 )
-                                .description("Optional bearer token for the PDF service."),
+                                .description("Optional secret:// or env: reference for the PDF bearer token."),
 
                                 SettingItem::new(
                                     "Video Service URL",
@@ -246,15 +254,15 @@ impl Render for SettingsPanel {
                                 .description("External video renderer endpoint."),
 
                                 SettingItem::new(
-                                    "Video API Key",
+                                    "Video API Key Reference",
                                     SettingField::input(
-                                        |cx: &App| setting_only(cx, "output_video_api_key"),
+                                        |cx: &App| setting_only(cx, "output_video_api_key_ref"),
                                         |val: SharedString, cx: &mut App| {
-                                            save_setting(cx, "output_video_api_key", val);
+                                            save_secret_reference_setting(cx, "output_video_api_key_ref", val);
                                         },
                                     )
                                 )
-                                .description("Optional bearer token for the video service."),
+                                .description("Optional secret:// or env: reference for the video bearer token."),
 
                                 SettingItem::new(
                                     "Output Directory",

@@ -11,6 +11,7 @@ impl Skill for WebSearchSkill {
             name: "Web Search".to_string(),
             description: "Searches the web for up-to-date information using DuckDuckGo."
                 .to_string(),
+            instructions: "Research current information only when needed, keep source attribution, and distinguish retrieved facts from inference.".to_string(),
             version: "2.0".to_string(),
             category: "Research".to_string(),
         }
@@ -141,6 +142,7 @@ impl Skill for DocumentAnalysisSkill {
             id: "research.document_analysis".to_string(),
             name: "Document Analysis".to_string(),
             description: "Analyzes documents and extracts key information including structure, word count, and topics.".to_string(),
+            instructions: "Analyze supplied documents faithfully, retain provenance, and identify missing or conflicting information.".to_string(),
             version: "2.0".to_string(),
             category: "Research".to_string(),
         }
@@ -204,6 +206,7 @@ impl Skill for DataExtractionSkill {
             id: "research.data_extraction".to_string(),
             name: "Data Extraction".to_string(),
             description: "Extracts structured data from unstructured text including emails, URLs, dates, and numbers.".to_string(),
+            instructions: "Extract structured fields from provided content without inventing missing values, and preserve source references.".to_string(),
             version: "2.0".to_string(),
             category: "Research".to_string(),
         }

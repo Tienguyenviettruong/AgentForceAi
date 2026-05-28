@@ -1,4 +1,5 @@
 use crate::db::{Provider, ProviderTemplate};
+use crate::infrastructure::security::keychain::is_credential_reference;
 use gpui::{
     div, px, AppContext, Context, Entity, FontWeight, IntoElement, ParentElement, Render,
     SharedString, Styled, Window,
@@ -46,7 +47,7 @@ impl CustomProviderSection {
             cx.new(|cx| SelectState::new(Vec::<SharedString>::new(), None, window, cx));
         let api_key_input = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("API Key (leave empty if not required)")
+                .placeholder("secret://account or env:VARIABLE (optional)")
                 .masked(true)
         });
         let base_url_input = cx.new(|cx| {
@@ -110,6 +111,17 @@ impl CustomProviderSection {
             return;
         }
 
+        if !api_key.trim().is_empty() && !is_credential_reference(&api_key) {
+            window.push_notification(
+                (
+                    NotificationType::Error,
+                    "Credentials must use a secret:// or env: reference; raw API keys are not stored.",
+                ),
+                cx,
+            );
+            return;
+        }
+
         let p_name = provider_name.unwrap().to_string();
         let m_name = model.unwrap().to_string();
         let adapter = self
@@ -130,10 +142,10 @@ impl CustomProviderSection {
             model: m_name,
             adapter_type: adapter,
             command,
-            api_key_ref: if api_key.is_empty() {
+            api_key_ref: if api_key.trim().is_empty() {
                 None
             } else {
-                Some(api_key)
+                Some(api_key.trim().to_string())
             },
             status: "available".to_string(),
             // capabilities: None = text-only by default (safe for local/unknown models)
@@ -151,7 +163,7 @@ impl CustomProviderSection {
                 .update(cx, |s, cx| s.set_selected_index(None, window, cx));
             self.api_key_input = cx.new(|cx| {
                 InputState::new(window, cx)
-                    .placeholder("API Key (leave empty if not required)")
+                    .placeholder("secret://account or env:VARIABLE (optional)")
                     .masked(true)
             });
             self.base_url_input = cx.new(|cx| {
@@ -286,10 +298,10 @@ impl Render for CustomProviderSection {
                                                     .label("Base URL / Endpoint")
                                                     .child(Input::new(&b_inp)),
                                             )
-                                            // API Key (masked, optional for self-hosted)
+                                            // API key reference (raw credentials are not persisted)
                                             .child(
                                                 field()
-                                                    .label("API Key")
+                                                    .label("API Key Reference")
                                                     .child(Input::new(&a_inp).mask_toggle()),
                                             ),
                                     )

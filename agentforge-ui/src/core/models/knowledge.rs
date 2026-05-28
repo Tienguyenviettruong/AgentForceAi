@@ -13,11 +13,20 @@ pub enum RetentionPolicy {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct Tag(pub String);
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum KnowledgeRecordKind {
+    Document,
+    Memory,
+    Artifact,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KnowledgeEntry {
     pub id: String,
     pub agent_id: String,
     pub session_id: Option<String>,
+    pub instance_id: Option<String>,
+    pub run_id: Option<String>,
     pub title: String,
     pub content: String,
     pub tags: Vec<String>,
@@ -27,6 +36,7 @@ pub struct KnowledgeEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KnowledgeItem {
     pub id: Uuid,
+    pub record_kind: KnowledgeRecordKind,
     pub title: String,
     pub content: String,
     pub tags: Vec<Tag>,
@@ -34,13 +44,43 @@ pub struct KnowledgeItem {
     pub updated_at: DateTime<Utc>,
     pub retention_policy: RetentionPolicy,
     pub vault_path: Option<String>,
+    pub source_kind: String,
+    pub source_uri_normalized: Option<String>,
+    pub content_hash: Option<String>,
+    pub origin_run_id: Option<String>,
+    pub origin_session_id: Option<String>,
+    pub origin_instance_id: Option<String>,
+    pub origin_agent_id: Option<String>,
 }
 
 impl KnowledgeItem {
+    pub fn content_hash(content: &str) -> String {
+        let mut hash = 0xcbf29ce484222325_u64;
+        for byte in content.as_bytes() {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+        format!("fnv1a64:{hash:016x}")
+    }
+
+    pub fn normalize_file_source(path: &str) -> String {
+        let normalized = path
+            .trim()
+            .replace('\\', "/")
+            .trim_start_matches("//?/")
+            .to_ascii_lowercase();
+        if normalized.starts_with('/') {
+            format!("file://{normalized}")
+        } else {
+            format!("file:///{normalized}")
+        }
+    }
+
     pub fn new(title: &str, content: &str, tags: Vec<Tag>, policy: RetentionPolicy) -> Self {
         let now = Utc::now();
         Self {
             id: Uuid::new_v4(),
+            record_kind: KnowledgeRecordKind::Document,
             title: title.to_string(),
             content: content.to_string(),
             tags,
@@ -48,6 +88,13 @@ impl KnowledgeItem {
             updated_at: now,
             retention_policy: policy,
             vault_path: None,
+            source_kind: "manual".to_string(),
+            source_uri_normalized: None,
+            content_hash: Some(Self::content_hash(content)),
+            origin_run_id: None,
+            origin_session_id: None,
+            origin_instance_id: None,
+            origin_agent_id: None,
         }
     }
 }

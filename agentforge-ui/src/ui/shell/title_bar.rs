@@ -58,7 +58,7 @@ impl AgentForgeTitleBar {
         let mode_manager_clone = mode_manager.clone();
         cx.subscribe(
             &mode_select_state,
-            move |_this, _, event: &SelectEvent<Vec<SharedString>>, _cx| {
+            move |_this, _, event: &SelectEvent<Vec<SharedString>>, cx| {
                 let SelectEvent::Confirm(Some(value)) = event else {
                     return;
                 };
@@ -70,8 +70,42 @@ impl AgentForgeTitleBar {
                 };
 
                 let mut manager = mode_manager_clone.lock().unwrap();
+                let from_mode = manager.current_mode();
                 if manager.can_transition(new_mode) {
-                    let _ = manager.transition_to(new_mode, "User switched mode via title bar");
+                    if manager
+                        .transition_to(new_mode, "User switched mode via title bar")
+                        .is_ok()
+                    {
+                        drop(manager);
+                        let state = crate::AppState::global(cx);
+                        let db = state.db.clone();
+                        let actor_id = state.current_actor_id.clone();
+                        let _ = db.set_setting("orchestration_mode", new_mode.storage_value());
+                        let _ =
+                            db.insert_mode_transition(&crate::core::models::ModeTransitionRecord {
+                                id: uuid::Uuid::new_v4().to_string(),
+                                instance_id: None,
+                                run_id: None,
+                                actor_id: Some(actor_id.clone()),
+                                from_mode: from_mode.storage_value().to_string(),
+                                to_mode: new_mode.storage_value().to_string(),
+                                reason: Some("User switched mode via title bar".to_string()),
+                                policy_version: Some("phase4-gateway".to_string()),
+                                created_at: chrono::Utc::now().to_rfc3339(),
+                            });
+                        let _ = db.insert_audit_log(
+                            &crate::infrastructure::security::audit::AuditEvent {
+                                timestamp: chrono::Utc::now(),
+                                action: "mode_transition".to_string(),
+                                user_id: Some(actor_id),
+                                resource: "application".to_string(),
+                                details: format!(
+                                    "Mode changed to {} from title bar",
+                                    new_mode.label()
+                                ),
+                            },
+                        );
+                    }
                 }
             },
         )

@@ -1,5 +1,5 @@
+use crate::application::orchestration::tool_gateway::ToolExecutionGateway;
 use crate::infrastructure::mcp::ActionRecorder;
-use crate::providers::BaseProviderAdapter;
 use gpui::EventEmitter;
 use gpui::{
     div, App, AppContext, Context, Entity, Focusable, IntoElement, ParentElement, Render, Styled,
@@ -35,32 +35,6 @@ struct SearchResult {
     url: String,
     snippet: String,
     content_summary: String,
-}
-
-fn build_adapter(provider: &crate::db::Provider) -> Option<Arc<dyn BaseProviderAdapter>> {
-    match provider.adapter_type.as_str() {
-        "AnthropicAdapter" => {
-            let mut a = crate::providers::claude::ClaudeAdapter::new();
-            a.initialize(provider).ok()?;
-            Some(Arc::new(a))
-        }
-        "OpenAIAdapter" => {
-            let mut a = crate::providers::codex::CodexAdapter::new();
-            a.initialize(provider).ok()?;
-            Some(Arc::new(a))
-        }
-        "GeminiAdapter" => {
-            let mut a = crate::providers::gemini::GeminiAdapter::new();
-            a.initialize(provider).ok()?;
-            Some(Arc::new(a))
-        }
-        "OpenCodeAdapter" => {
-            let mut a = crate::providers::opencode::OpenCodeAdapter::new();
-            a.initialize(provider).ok()?;
-            Some(Arc::new(a))
-        }
-        _ => None,
-    }
 }
 
 impl ResearchNotebookPanel {
@@ -136,13 +110,22 @@ impl Render for ResearchNotebookPanel {
                             if query.is_empty() {
                                 return;
                             }
+                            let actor_id = crate::AppState::global(cx).current_actor_id.clone();
+                            let gateway = ToolExecutionGateway::new(db.clone());
+                            let allowed =
+                                gateway.can_execute_interactively(&actor_id, "web_search");
+                            gateway.record_interactive_decision(&actor_id, "web_search", allowed);
+                            if !allowed {
+                                this.save_status = Some("Permission denied.".to_string());
+                                cx.notify();
+                                return;
+                            }
                             this.is_searching = true;
                             this.search_query = query.clone();
                             cx.notify();
 
                             let view = cx.entity().clone();
                             let action_recorder = action_recorder.clone();
-                            let db = db.clone();
 
                             cx.spawn(async move |_, cx| {
                                 let search_query = crate::application::research::web::WebSearchQuery::new(&query, 6);
@@ -157,14 +140,6 @@ impl Render for ResearchNotebookPanel {
                                         &query,
                                         &raw_results,
                                     );
-                                let save_target =
-                                    crate::application::research::web::save_research_notebook(
-                                        db.clone(),
-                                        &query,
-                                        &notebook,
-                                    )
-                                    .await
-                                    .ok();
                                 let results: Vec<SearchResult> = raw_results
                                     .iter()
                                     .map(|r| SearchResult {
@@ -180,21 +155,15 @@ impl Render for ResearchNotebookPanel {
                                     format!("Found {} results", results.len()),
                                 );
 
-                                let provider = db.list_providers().ok().and_then(|ps| {
-                                    ps.into_iter().find(|p| p.status == "available")
-                                });
-                                let adapter = provider.as_ref().and_then(|p| build_adapter(p));
-                                let _ = action_recorder.generate_iflow_and_save(adapter).await;
+                                let _ = action_recorder.generate_iflow_and_save().await;
 
                                 let _ = cx.update(|cx| {
                                     let _ = view.update(cx, |this: &mut Self, cx| {
                                         this.is_searching = false;
                                         this.search_results = results;
                                         this.scratchpad = notebook;
-                                        if let Some(target) = save_target {
-                                            this.save_status =
-                                                Some(format!("Notebook saved: {}", target));
-                                        }
+                                        this.save_status =
+                                            Some("Draft ready. Save explicitly to persist.".to_string());
                                         cx.notify();
                                     });
                                 });
@@ -311,12 +280,29 @@ impl Render for ResearchNotebookPanel {
                                 Button::new("btn-save-obsidian")
                                     .label("Save to Obsidian")
                                     .on_click(cx.listener(|this, _, _, cx| {
+                                        let state = crate::AppState::global(cx);
+                                        let db = state.db.clone();
+                                        let actor_id = state.current_actor_id.clone();
+                                        let gateway = ToolExecutionGateway::new(db.clone());
+                                        let allowed = gateway.can_execute_interactively(
+                                            &actor_id,
+                                            "save_research_notebook",
+                                        );
+                                        gateway.record_interactive_decision(
+                                            &actor_id,
+                                            "save_research_notebook",
+                                            allowed,
+                                        );
+                                        if !allowed {
+                                            this.save_status = Some("Permission denied.".to_string());
+                                            cx.notify();
+                                            return;
+                                        }
                                         let content = this.scratchpad.clone();
                                         let query = this.search_query.clone();
                                         this.save_status = Some("Saving...".to_string());
                                         cx.notify();
                                         let view = cx.entity().clone();
-                                        let db = crate::AppState::global(cx).db.clone();
                                         let vault_path = std::env::var("AGENTFORGE_OBSIDIAN_VAULT")
                                             .ok()
                                             .or_else(|| db.get_setting("obsidian_vault_path").ok().flatten());
@@ -347,12 +333,13 @@ impl Render for ResearchNotebookPanel {
                                                     saved = true;
                                                 }
                                             } else {
-                                                let item = crate::knowledge::core::KnowledgeItem::new(
+                                                let mut item = crate::knowledge::core::KnowledgeItem::new(
                                                     if query.trim().is_empty() { "Research Notes" } else { query.trim() },
                                                     &content,
                                                     Vec::new(),
                                                     crate::knowledge::core::RetentionPolicy::KeepForever,
                                                 );
+                                                item.source_kind = "research_scratchpad".to_string();
                                                 if db.upsert_knowledge_item(&item).is_ok() {
                                                     saved = true;
                                                 }

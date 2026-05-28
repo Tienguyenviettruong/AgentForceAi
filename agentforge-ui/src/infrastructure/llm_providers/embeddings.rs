@@ -3,11 +3,11 @@ use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use once_cell::sync::Lazy;
 use std::sync::Mutex;
 
-static GLOBAL_MODEL: Lazy<Mutex<TextEmbedding>> = Lazy::new(|| {
+static GLOBAL_MODEL: Lazy<Mutex<Result<TextEmbedding, String>>> = Lazy::new(|| {
     let model = TextEmbedding::try_new(
         InitOptions::new(EmbeddingModel::AllMiniLML6V2).with_show_download_progress(true),
     )
-    .expect("Failed to initialize fastembed model");
+    .map_err(|error| format!("Embedding runtime is unavailable: {error}"));
     Mutex::new(model)
 });
 
@@ -36,10 +36,13 @@ impl EmbeddingProvider {
                 let result = GLOBAL_MODEL
                     .lock()
                     .map_err(|e| anyhow::anyhow!("Mutex poisoned: {}", e))
-                    .and_then(|mut model| {
-                        model
-                            .embed(vec![text], None)
-                            .map_err(|e| anyhow::anyhow!("Embedding failed: {}", e))
+                    .and_then(|mut model_result| {
+                        let model = model_result
+                            .as_mut()
+                            .map_err(|error| anyhow::anyhow!(error.clone()))?;
+                        model.embed(vec![text], None).map_err(|error| {
+                            anyhow::anyhow!("Embedding generation failed: {}", error)
+                        })
                     });
                 let _ = tx.send(result);
             })

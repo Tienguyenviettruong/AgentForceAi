@@ -3,6 +3,7 @@ pub struct Task {
     pub id: String,
     pub team_id: String,
     pub instance_id: Option<String>,
+    pub run_id: Option<String>,
     pub assignee_id: Option<String>,
     pub status: String,
     pub priority: String,

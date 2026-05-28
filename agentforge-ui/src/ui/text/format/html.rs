@@ -692,15 +692,7 @@ mod tests {
         let node = super::parse(html, &mut cx).unwrap();
         assert_eq!(
             node.to_markdown(),
-            indoc::indoc! {r#"
-            and *code italic* text
-
-            ![Example](https://example.com/image.png "Example Image")
-
-            - Item 1
-            - Item 2
-            "#}
-            .trim()
+            "and *code italic* text\n\n![Example](https://example.com/image.png \"Example Image\")\n\n- Item 1\n- Item 2"
         );
     }
 

@@ -1,4 +1,5 @@
 use super::{BaseProviderAdapter, ChatMessage, ChatResponse, TokenUsage};
+use crate::infrastructure::security::keychain::resolve_credential_reference;
 use anyhow::{anyhow, Result};
 use futures::stream::StreamExt;
 use gpui::SharedString;
@@ -83,16 +84,16 @@ impl BaseProviderAdapter for ClaudeAdapter {
 
         Box::pin(async move {
             let config = config.ok_or_else(|| anyhow!("Adapter not initialized"))?;
-            let api_key = match config.api_key_ref.clone() {
-                Some(v) if v.starts_with("env:") => env::var(v.trim_start_matches("env:"))
-                    .ok()
-                    .ok_or_else(|| anyhow!("API key env var missing: {}", v.trim_start_matches("env:")))?,
-                Some(v) => v,
-                None => env::var("ANTHROPIC_AUTH_TOKEN")
-                    .ok()
-                    .or_else(|| env::var("ANTHROPIC_API_KEY").ok())
-                    .ok_or_else(|| anyhow!("API key missing (set provider api_key_ref or env ANTHROPIC_AUTH_TOKEN/ANTHROPIC_API_KEY)"))?,
-            };
+            let api_key = resolve_credential_reference(
+                config.api_key_ref.as_deref(),
+                &["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"],
+            )
+            .await?
+            .ok_or_else(|| {
+                anyhow!(
+                    "API key missing (set provider api_key_ref to secret:// or env:, or configure ANTHROPIC_AUTH_TOKEN/ANTHROPIC_API_KEY)"
+                )
+            })?;
             let model = match config.model.as_str() {
                 "opus" => env::var("ANTHROPIC_DEFAULT_OPUS_MODEL")
                     .unwrap_or_else(|_| config.model.clone()),
@@ -201,16 +202,16 @@ impl BaseProviderAdapter for ClaudeAdapter {
 
         Box::pin(async move {
             let config = config.ok_or_else(|| anyhow!("Adapter not initialized"))?;
-            let api_key = match config.api_key_ref.clone() {
-                Some(v) if v.starts_with("env:") => env::var(v.trim_start_matches("env:"))
-                    .ok()
-                    .ok_or_else(|| anyhow!("API key env var missing: {}", v.trim_start_matches("env:")))?,
-                Some(v) => v,
-                None => env::var("ANTHROPIC_AUTH_TOKEN")
-                    .ok()
-                    .or_else(|| env::var("ANTHROPIC_API_KEY").ok())
-                    .ok_or_else(|| anyhow!("API key missing (set provider api_key_ref or env ANTHROPIC_AUTH_TOKEN/ANTHROPIC_API_KEY)"))?,
-            };
+            let api_key = resolve_credential_reference(
+                config.api_key_ref.as_deref(),
+                &["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"],
+            )
+            .await?
+            .ok_or_else(|| {
+                anyhow!(
+                    "API key missing (set provider api_key_ref to secret:// or env:, or configure ANTHROPIC_AUTH_TOKEN/ANTHROPIC_API_KEY)"
+                )
+            })?;
             let model = match config.model.as_str() {
                 "opus" => env::var("ANTHROPIC_DEFAULT_OPUS_MODEL")
                     .unwrap_or_else(|_| config.model.clone()),

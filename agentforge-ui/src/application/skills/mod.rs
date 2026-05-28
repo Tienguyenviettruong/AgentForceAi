@@ -10,6 +10,20 @@ pub use research::*;
 
 use std::sync::Arc;
 
+pub fn builtin_skill_catalog() -> Vec<SkillMetadata> {
+    vec![
+        CodeReviewSkill.metadata(),
+        CodeGenerateSkill.metadata(),
+        CodeDebugSkill.metadata(),
+        WebSearchSkill.metadata(),
+        DocumentAnalysisSkill.metadata(),
+        DataExtractionSkill.metadata(),
+        SummarizeSkill.metadata(),
+        TranslateSkill.metadata(),
+        ExplainSkill.metadata(),
+    ]
+}
+
 pub async fn initialize_skills() -> SkillRegistry {
     let registry = SkillRegistry::new();
 

@@ -15,9 +15,8 @@ use gpui_component::IndexPath;
 use gpui_component::WindowExt;
 use gpui_component::{h_flex, ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _};
 use std::ops::Range;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::time::Instant;
 
 use super::TeamWorkspacePanel;
 use crate::ui::components::markdown::render_markdown_message;
@@ -423,6 +422,7 @@ impl Element for LinkInlineOverlay {
 }
 
 impl TeamWorkspacePanel {
+    #[cfg(any())]
     fn update_chat_message_content(
         &mut self,
         session_id: &str,
@@ -924,6 +924,43 @@ impl TeamWorkspacePanel {
                                                 this.show_history_sheet = !this.show_history_sheet;
                                                 cx.notify();
                                             }))
+                                    )
+                                    .when_some(
+                                        self.available_iflow_run_id.clone(),
+                                        |header, run_id| {
+                                            header.child(
+                                                Button::new("view-iflow-run")
+                                                    .ghost()
+                                                    .small()
+                                                    .icon(IconName::GalleryVerticalEnd)
+                                                    .label("iFlow")
+                                                    .tooltip("View the validated flow for this run")
+                                                    .on_click(move |_, _, cx| {
+                                                        let db =
+                                                            crate::AppState::global(cx).db.clone();
+                                                        let selected = crate::AppState::global(cx)
+                                                            .selected_iflow_run_id
+                                                            .clone();
+                                                        let active_panel =
+                                                            crate::AppState::global(cx)
+                                                                .active_panel
+                                                                .clone();
+                                                        let _ = db.set_setting(
+                                                            "iflow_selected_run_id",
+                                                            &run_id,
+                                                        );
+                                                        let selected_run_id = run_id.clone();
+                                                        selected.update(cx, move |current, cx| {
+                                                            *current = Some(selected_run_id);
+                                                            cx.notify();
+                                                        });
+                                                        active_panel.update(cx, |page, cx| {
+                                                            *page = "iflow_builder".to_string();
+                                                            cx.notify();
+                                                        });
+                                                    }),
+                                            )
+                                        },
                                     )
                                     .child(
                                         Switch::new("debate-mode")
@@ -1885,6 +1922,162 @@ impl TeamWorkspacePanel {
         // No-op on Linux
     }
 
+    fn persist_initial_iflow_for_run(
+        db: &Arc<dyn crate::core::traits::database::DatabasePort>,
+        run_id: &str,
+        team_id: &str,
+        instance_id: &str,
+        agent_id: &str,
+        goal: &str,
+    ) -> Result<String, String> {
+        let workflow_id = uuid::Uuid::new_v4().to_string();
+        let task_node_id = "goal".to_string();
+        let mut nodes = std::collections::HashMap::new();
+        nodes.insert(
+            "start".to_string(),
+            crate::application::iflow_engine::nodes::Node {
+                id: "start".to_string(),
+                name: "Start".to_string(),
+                node_type: crate::application::iflow_engine::nodes::NodeType::Start,
+                next_nodes: vec![task_node_id.clone()],
+            },
+        );
+        nodes.insert(
+            task_node_id.clone(),
+            crate::application::iflow_engine::nodes::Node {
+                id: task_node_id,
+                name: "User Goal".to_string(),
+                node_type: crate::application::iflow_engine::nodes::NodeType::AgentTask {
+                    agent_id: agent_id.to_string(),
+                    instruction: goal.to_string(),
+                    input_vars: Vec::new(),
+                    output_var: Some("result".to_string()),
+                },
+                next_nodes: vec!["end".to_string()],
+            },
+        );
+        nodes.insert(
+            "end".to_string(),
+            crate::application::iflow_engine::nodes::Node {
+                id: "end".to_string(),
+                name: "End".to_string(),
+                node_type: crate::application::iflow_engine::nodes::NodeType::End,
+                next_nodes: Vec::new(),
+            },
+        );
+        let workflow = crate::application::iflow_engine::engine::Workflow {
+            id: workflow_id.clone(),
+            name: format!(
+                "Goal Flow {}",
+                chrono::Utc::now().format("%Y-%m-%d %H:%M:%S")
+            ),
+            version: "1.0".to_string(),
+            nodes,
+            start_node_id: "start".to_string(),
+            team_id: Some(team_id.to_string()),
+            instance_id: Some(instance_id.to_string()),
+        };
+        crate::application::iflow_engine::engine::WorkflowEngine::validate_workflow(&workflow)?;
+        let definition = serde_json::to_string(&workflow).map_err(|error| error.to_string())?;
+        db.upsert_workflow(&crate::core::models::WorkflowRecord {
+            id: workflow_id.clone(),
+            run_id: Some(run_id.to_string()),
+            origin_kind: "planned".to_string(),
+            activation_status: "active".to_string(),
+            name: workflow.name.clone(),
+            definition: definition.clone(),
+            version: workflow.version.clone(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            updated_at: chrono::Utc::now().to_rfc3339(),
+        })
+        .map_err(|error| error.to_string())?;
+        let workflow_version_id = uuid::Uuid::new_v4().to_string();
+        db.save_workflow_version(&crate::core::models::WorkflowVersionRecord {
+            id: workflow_version_id.clone(),
+            workflow_id: workflow_id.clone(),
+            run_id: Some(run_id.to_string()),
+            instance_id: instance_id.to_string(),
+            version: db
+                .next_workflow_version_number(&workflow_id)
+                .map_err(|error| error.to_string())?,
+            definition_json: definition,
+            validation_status: "valid".to_string(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+        })
+        .map_err(|error| error.to_string())?;
+        db.update_orchestration_run_status(run_id, "running", Some(&workflow_id))
+            .map_err(|error| error.to_string())?;
+        db.set_setting("iflow_selected_run_id", run_id)
+            .map_err(|error| error.to_string())?;
+        let _ = db.insert_run_event(&crate::core::models::RunEventRecord {
+            id: uuid::Uuid::new_v4().to_string(),
+            run_id: run_id.to_string(),
+            event_type: "workflow_version_created".to_string(),
+            actor_type: "system".to_string(),
+            actor_id: None,
+            task_id: None,
+            payload: Some(format!(
+                "Initial validated iFlow {} created for authoritative goal node dispatch.",
+                workflow_id
+            )),
+            created_at: chrono::Utc::now().to_rfc3339(),
+        });
+        Ok(workflow_id)
+    }
+
+    #[cfg(any())]
+    fn finish_initial_iflow_for_run(
+        db: &Arc<dyn crate::core::traits::database::DatabasePort>,
+        run_id: &str,
+        run_status: &str,
+    ) {
+        let Ok(Some(version)) = db.get_latest_workflow_version_for_run(run_id) else {
+            return;
+        };
+        let Ok(Some(mut execution)) = db.get_latest_workflow_execution_for_version(&version.id)
+        else {
+            return;
+        };
+        let Ok(mut state) = serde_json::from_str::<
+            crate::application::iflow_engine::engine::WorkflowState,
+        >(&execution.state_json)
+        else {
+            return;
+        };
+        match run_status {
+            "completed" => {
+                state.pending_agent_tasks.clear();
+                state.completed_nodes.insert("goal".to_string());
+                state.completed_nodes.insert("end".to_string());
+                state.current_nodes = vec!["end".to_string()];
+                state.status = crate::application::iflow_engine::engine::WorkflowStatus::Completed;
+                execution.status = "completed".to_string();
+            }
+            "waiting_approval" => {
+                state.status = crate::application::iflow_engine::engine::WorkflowStatus::Paused;
+                execution.status = "waiting_approval".to_string();
+            }
+            "cancelled" => {
+                state.status = crate::application::iflow_engine::engine::WorkflowStatus::Failed(
+                    "Cancelled by user.".to_string(),
+                );
+                execution.status = "cancelled".to_string();
+            }
+            _ => {
+                state.status = crate::application::iflow_engine::engine::WorkflowStatus::Failed(
+                    "Chat execution did not complete.".to_string(),
+                );
+                execution.status = "failed".to_string();
+            }
+        }
+        if let Ok(state_json) = serde_json::to_string(&state) {
+            execution.state_json = state_json;
+            execution.updated_at = chrono::Utc::now().to_rfc3339();
+            let _ = db.save_workflow_state(&state);
+            let _ = db.save_workflow_execution(&execution);
+        }
+    }
+
     pub(crate) fn handle_send_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let db = crate::AppState::global(cx).db.clone();
         if self.is_generating {
@@ -1994,7 +2187,7 @@ impl TeamWorkspacePanel {
             }
             let ts = Utc::now().format("%Y%m%d_%H%M%S").to_string();
             text = format!(
-                "Tạo kế hoạch thực thi cho mục tiêu sau:\n{}\n\nYêu cầu:\n- Trả về checklist các bước + rủi ro + tiêu chí hoàn thành.\n- Nếu phù hợp, tạo subtasks theo vai trò bằng create_subtasks.\n- Xuất plan ra file markdown theo format ```file:...```.\n\n```file:docs/plans/plan_{}.md\n# Plan\n\n## Goal\n{}\n\n## Plan\n- \n\n## Risks\n- \n\n## Done\n- \n```\n",
+                "Tạo kế hoạch thực thi cho mục tiêu sau:\n{}\n\nYêu cầu:\n- Trả về checklist các bước + rủi ro + tiêu chí hoàn thành.\n- Nếu phù hợp, tạo subtasks theo vai trò bằng create_subtasks.\n- Dùng tool write_file để lưu plan vào docs/plans/plan_{}.md; không xuất thao tác file dưới dạng code block.\n\nNội dung plan phải gồm Goal, Plan, Risks và Done cho mục tiêu:\n{}\n",
                 goal, ts, goal
             );
         } else if let Some(rest) = raw_text.strip_prefix("/spec") {
@@ -2011,7 +2204,7 @@ impl TeamWorkspacePanel {
             }
             let ts = Utc::now().format("%Y%m%d_%H%M%S").to_string();
             text = format!(
-                "Tạo đặc tả (spec) cho mục tiêu sau:\n{}\n\nYêu cầu:\n- Spec rõ scope/in-scope/out-of-scope, API/behavior, dữ liệu, edge cases.\n- Nêu open_questions nếu thiếu thông tin.\n- Xuất spec ra file markdown theo format ```file:...```.\n\n```file:docs/specs/spec_{}.md\n# Spec\n\n## Objective\n{}\n\n## Scope\n\n## Requirements\n\n## API\n\n## Data Model\n\n## Edge Cases\n\n## Open Questions\n\n```\n",
+                "Tạo đặc tả (spec) cho mục tiêu sau:\n{}\n\nYêu cầu:\n- Spec rõ scope/in-scope/out-of-scope, API/behavior, dữ liệu, edge cases.\n- Nêu open_questions nếu thiếu thông tin.\n- Dùng tool write_file để lưu spec vào docs/specs/spec_{}.md; không xuất thao tác file dưới dạng code block.\n\nSpec phải gồm Objective, Scope, Requirements, API, Data Model, Edge Cases và Open Questions cho mục tiêu:\n{}\n",
                 goal, ts, goal
             );
         }
@@ -2020,6 +2213,73 @@ impl TeamWorkspacePanel {
             text.push_str("\n\nAttached files:\n");
             for file in &attached_files_for_ai {
                 text.push_str(&format!("- {}\n", file));
+            }
+        }
+
+        let run_id = uuid::Uuid::new_v4().to_string();
+        let run_created_at = chrono::Utc::now().to_rfc3339();
+        let current_actor_id = crate::AppState::global(cx).current_actor_id.clone();
+        let run_goal = if raw_text.trim().is_empty() {
+            "Analyze attached files".to_string()
+        } else {
+            raw_text.clone()
+        };
+        let run = crate::core::models::OrchestrationRunRecord {
+            id: run_id.clone(),
+            session_id: session_id.clone(),
+            instance_id: instance_id.clone(),
+            initiated_by: Some(current_actor_id.clone()),
+            goal: run_goal,
+            mode: mode.storage_value().to_string(),
+            status: "running".to_string(),
+            workflow_id: None,
+            created_at: run_created_at.clone(),
+            updated_at: run_created_at.clone(),
+        };
+        if let Err(error) = db.create_orchestration_run(&run) {
+            window.push_notification(
+                (
+                    gpui_component::notification::NotificationType::Error,
+                    gpui::SharedString::from(format!("Unable to start traceable run: {}", error)),
+                ),
+                cx,
+            );
+            return;
+        }
+        let _ = db.insert_run_event(&crate::core::models::RunEventRecord {
+            id: uuid::Uuid::new_v4().to_string(),
+            run_id: run_id.clone(),
+            event_type: "run_created".to_string(),
+            actor_type: "user".to_string(),
+            actor_id: Some(current_actor_id),
+            task_id: None,
+            payload: Some(format!("Session: {}", session_id)),
+            created_at: run_created_at,
+        });
+        let mut initial_workflow_id = None;
+        if raw_text != "/run" {
+            if let Some(agent_id) = db
+                .get_instance_agents(&instance_id)
+                .ok()
+                .and_then(|ids| ids.first().cloned())
+            {
+                if let Ok(workflow_id) = Self::persist_initial_iflow_for_run(
+                    &db,
+                    &run_id,
+                    &team_id,
+                    &instance_id,
+                    &agent_id,
+                    &text,
+                ) {
+                    initial_workflow_id = Some(workflow_id);
+                    self.available_iflow_run_id = Some(run_id.clone());
+                    let selected_iflow = crate::AppState::global(cx).selected_iflow_run_id.clone();
+                    let run_for_selection = run_id.clone();
+                    selected_iflow.update(cx, move |selected, cx| {
+                        *selected = Some(run_for_selection);
+                        cx.notify();
+                    });
+                }
             }
         }
 
@@ -2095,60 +2355,116 @@ impl TeamWorkspacePanel {
         if let Some(target_instance_id) = self.cross_team_target_instance_id.clone() {
             if target_instance_id != instance_id {
                 let correlation_id = uuid::Uuid::new_v4().to_string();
-                let payload = serde_json::json!({
-                    "handoff_type": "message",
-                    "correlation_id": correlation_id,
-                    "from_team": instance_id,
-                    "reply_to_team": instance_id,
-                    "briefing_package": text
+                let context_refs_json = serde_json::json!({
+                    "session_id": &session_id,
+                    "run_id": &run_id
                 })
                 .to_string();
-                let content = format!("[CROSS_TEAM_HANDOFF] {}", payload);
+                let handoff_result =
+                    crate::application::orchestration::collaboration::CollaborationService::new(
+                        db.clone(),
+                    )
+                    .create_handoff(
+                        crate::application::orchestration::collaboration::HandoffInput {
+                            run_id: Some(&run_id),
+                            correlation_id: Some(&correlation_id),
+                            from_instance_id: &instance_id,
+                            to_instance_id: &target_instance_id,
+                            from_agent_id: None,
+                            objective: &text,
+                            acceptance_json: "[]",
+                            constraints_json: "{}",
+                            context_refs_json: &context_refs_json,
+                            priority: "medium",
+                            risk_level: "medium",
+                        },
+                    );
+                match handoff_result {
+                    Ok((case_id, handoff_id, persisted_correlation_id)) => {
+                        let payload = serde_json::json!({
+                            "handoff_type": "message",
+                            "correlation_id": persisted_correlation_id,
+                            "case_id": case_id,
+                            "handoff_id": handoff_id,
+                            "from_team": &instance_id,
+                            "reply_to_team": &instance_id,
+                            "briefing_package": &text
+                        })
+                        .to_string();
+                        let content = format!("[CROSS_TEAM_HANDOFF] {}", payload);
 
-                let cross_msg = crate::teambus::routing::TeamMessage::new_broadcast(
-                    target_instance_id.clone(),
-                    "cross-team".to_string(),
-                    content.clone(),
-                );
-                let _ = db.insert_team_message(&cross_msg);
-                let team_bus = self.team_bus.clone();
-                let cross_msg_clone = cross_msg.clone();
-                cx.spawn(async move |_, _| {
-                    let _ = team_bus.route_message(cross_msg_clone).await;
-                })
-                .detach();
+                        let mut cross_msg = crate::teambus::routing::TeamMessage::new_broadcast(
+                            target_instance_id.clone(),
+                            "cross-team".to_string(),
+                            content.clone(),
+                        );
+                        cross_msg.metadata = Some(payload);
+                        let _ = db.insert_team_message(&cross_msg);
+                        let team_bus = self.team_bus.clone();
+                        let cross_msg_clone = cross_msg.clone();
+                        cx.spawn(async move |_, _| {
+                            let _ = team_bus.route_message(cross_msg_clone).await;
+                        })
+                        .detach();
 
-                let target_agent_id = db
-                    .get_instance_agents(&target_instance_id)
-                    .ok()
-                    .and_then(|ids| ids.first().cloned());
-                if let Some(target_agent_id) = target_agent_id {
-                    let mut session = db
-                        .get_latest_session_for_instance(&target_instance_id)
-                        .ok()
-                        .flatten();
-                    if session.is_none() {
-                        let _ =
-                            db.create_session_for_instance(&target_instance_id, &target_agent_id);
-                        session = db
-                            .get_latest_session_for_instance(&target_instance_id)
+                        let target_agent_id = db
+                            .get_instance_agents(&target_instance_id)
                             .ok()
-                            .flatten();
+                            .and_then(|ids| ids.first().cloned());
+                        if let Some(target_agent_id) = target_agent_id {
+                            let mut session = db
+                                .get_latest_session_for_instance(&target_instance_id)
+                                .ok()
+                                .flatten();
+                            if session.is_none() {
+                                let _ = db.create_session_for_instance(
+                                    &target_instance_id,
+                                    &target_agent_id,
+                                );
+                                session = db
+                                    .get_latest_session_for_instance(&target_instance_id)
+                                    .ok()
+                                    .flatten();
+                            }
+                            if let Some(session) = session {
+                                let meta =
+                                    serde_json::json!({"agent_name":"Cross-team"}).to_string();
+                                let _ = db.ensure_session(
+                                    &session.id,
+                                    &target_agent_id,
+                                    Some(&target_instance_id),
+                                );
+                                let _ = db.append_conversation_turn(
+                                    &session.id,
+                                    "assistant",
+                                    &content,
+                                    Some(&meta),
+                                );
+                                let _ = db.touch_session(&session.id);
+                            }
+                        }
                     }
-                    if let Some(session) = session {
-                        let meta = serde_json::json!({"agent_name":"Cross-team"}).to_string();
-                        let _ = db.ensure_session(
-                            &session.id,
-                            &target_agent_id,
-                            Some(&target_instance_id),
+                    Err(error) => {
+                        let _ = db.insert_run_event(&crate::core::models::RunEventRecord {
+                            id: uuid::Uuid::new_v4().to_string(),
+                            run_id: run_id.clone(),
+                            event_type: "governed_handoff_persist_failed".to_string(),
+                            actor_type: "system".to_string(),
+                            actor_id: None,
+                            task_id: None,
+                            payload: Some(error.to_string()),
+                            created_at: chrono::Utc::now().to_rfc3339(),
+                        });
+                        window.push_notification(
+                            (
+                                gpui_component::notification::NotificationType::Error,
+                                gpui::SharedString::from(format!(
+                                    "Unable to send governed handoff: {}",
+                                    error
+                                )),
+                            ),
+                            cx,
                         );
-                        let _ = db.append_conversation_turn(
-                            &session.id,
-                            "assistant",
-                            &content,
-                            Some(&meta),
-                        );
-                        let _ = db.touch_session(&session.id);
                     }
                 }
             }
@@ -2162,10 +2478,52 @@ impl TeamWorkspacePanel {
         let instance_id_clone = instance_id.clone();
         let team_id_clone = team_id.clone();
         let session_id_clone = session_id.clone();
+        let run_id_clone = run_id.clone();
         let _history_clone = history_snapshot.clone();
         let view = cx.entity().clone();
         let workspace_dir_clone = self.workspace_path.clone();
         self.attached_files.clear();
+
+        if !is_run_command {
+            self.chat_input_state.update(cx, |state, cx| {
+                state.set_value("", window, cx);
+            });
+            let dispatch_result = initial_workflow_id
+                .as_deref()
+                .ok_or_else(|| "Unable to create the authoritative iFlow for this run.".to_string())
+                .and_then(|workflow_id| {
+                    let app = crate::AppState::global(cx);
+                    crate::application::iflow_engine::automation::IFlowAutomation::dispatch_persisted_workflow(
+                        db.clone(),
+                        self.team_bus.clone(),
+                        app.tokio_runtime.clone(),
+                        workflow_id,
+                    )
+                    .map(|_| ())
+                });
+            if let Err(error) = dispatch_result {
+                let _ = db.update_orchestration_run_status(&run_id, "failed", None);
+                let _ = db.insert_run_event(&crate::core::models::RunEventRecord {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    run_id: run_id.clone(),
+                    event_type: "workflow_dispatch_failed".to_string(),
+                    actor_type: "system".to_string(),
+                    actor_id: None,
+                    task_id: None,
+                    payload: Some(error.clone()),
+                    created_at: chrono::Utc::now().to_rfc3339(),
+                });
+                window.push_notification(
+                    (
+                        gpui_component::notification::NotificationType::Error,
+                        gpui::SharedString::from(error),
+                    ),
+                    cx,
+                );
+            }
+            cx.notify();
+            return;
+        }
 
         if is_run_command {
             cx.spawn(async move |_, cx| {
@@ -2184,6 +2542,7 @@ impl TeamWorkspacePanel {
                     let team_bus_clone_agent = team_bus_clone.clone();
                     let view_agent = view.clone();
                     let session_id_clone_agent = session_id_clone.clone();
+                    let run_id_clone_agent = run_id_clone.clone();
                     let workspace_dir_agent = workspace_dir_clone.clone();
 
                     cx.spawn(async move |cx| {
@@ -2207,27 +2566,12 @@ impl TeamWorkspacePanel {
                             
                             let tasks = db_clone_agent.list_tasks_for_instance(&instance_id_clone_agent).unwrap_or_default();
                             
-                            // Find next pending task assigned to this agent where dependencies are met
                             let mut next_task = None;
                             for task in &tasks {
                                 if task.status == "pending" && task.assignee_id.as_ref() == Some(&agent_id_clone) {
-                                    if let Some(payload) = &task.payload {
-                                        if let Ok(dag_task) = serde_json::from_str::<crate::orchestration::core::DagTask>(payload) {
-                                            let mut all_deps_met = true;
-                                            for dep_id in dag_task.dependencies {
-                                                let full_dep_id = format!("{}:{}", instance_id_clone_agent, dep_id);
-                                                if let Some(dt) = tasks.iter().find(|t| t.id == full_dep_id) {
-                                                    if dt.status != "completed" {
-                                                        all_deps_met = false;
-                                                        break;
-                                                    }
-                                                }
-                                            }
-                                            if all_deps_met {
-                                                next_task = Some(task.clone());
-                                                break;
-                            }
-                                }
+                                    if db_clone_agent.is_task_unblocked(&task.id).unwrap_or(false) {
+                                        next_task = Some(task.clone());
+                                        break;
                                     }
                                 }
                             }
@@ -2258,29 +2602,13 @@ impl TeamWorkspacePanel {
                             }
                             
                             // Instruct the LLM to output files if needed
-                            let mut instructions = if let Some(ref ws) = workspace_dir_agent {
-                                format!("Execute the following task. You are working in the directory: {}. If you generate or modify any files, use a markdown code block starting with ```file:<filepath> and ending with ```. Please output absolute file paths within this directory. For example:\n```file:{}/example.txt\nFile contents here\n```\nTask:\n", ws, ws)
+                            let instructions = if let Some(ref ws) = workspace_dir_agent {
+                                format!("Execute the following task. You are working in the directory: {}. To generate or modify files, call write_file or edit_file with a relative path inside this workspace. Sensitive tools may pause for governance approval. Do not express file operations as markdown. Task:\n", ws)
                             } else {
-                                "Execute the following task. If you generate or modify any files, use a markdown code block starting with ```file:<filepath> and ending with ```. For example:\n```file:/workspace/example.txt\nFile contents here\n```\nTask:\n".to_string()
+                                "Execute the following task. A configured workspace is required for file changes, and file operations must use write_file or edit_file tools. Sensitive tools may pause for governance approval. Do not express file operations as markdown. Task:\n".to_string()
                             };
                             
                             let task_text = task.payload.clone().unwrap_or_else(|| task.id.clone());
-                            
-                            // Perform RAG Vector Search
-                            let embedding_provider = crate::providers::embeddings::EmbeddingProvider::new();
-                            if let Ok(query_vec) = embedding_provider.get_embedding(&task_text).await {
-                                if let Ok(similar) = db_clone_agent.search_similar_chunks(&query_vec, 3) {
-                                    if !similar.is_empty() {
-                                        instructions.push_str("\n\n[SYSTEM KNOWLEDGE RETRIEVAL]\nHere is context retrieved from the user's Obsidian Vault that might be relevant to your task:\n");
-                                        for (title, chunk_content, sim) in similar {
-                                            if sim > 0.6 { // Only include somewhat relevant chunks
-                                                instructions.push_str(&format!("\n--- Document: {} (Similarity: {:.2}) ---\n{}\n", title, sim, chunk_content));
-                                            }
-                                        }
-                                        instructions.push_str("\n[END KNOWLEDGE RETRIEVAL]\n\n");
-                                    }
-                                }
-                            }
                             
                             task_prompt.push(crate::providers::ChatMessage { role: "user".into(), content: format!("{}{}", instructions, task_text).into(), agent_name: None, thought_duration_secs: None , parts: vec![] });
 
@@ -2298,6 +2626,10 @@ impl TeamWorkspacePanel {
                                         team_bus_clone_agent.clone(),
                                         instance_id_clone_agent.clone(),
                                         agent_id_clone.clone(),
+                                        Some(session_id_clone_agent.clone()),
+                                        task.run_id
+                                            .clone()
+                                            .or_else(|| Some(run_id_clone_agent.clone())),
                                         None,
                                         None,
                                     );
@@ -2309,10 +2641,14 @@ impl TeamWorkspacePanel {
                                 ))
                             };
 
-                            let (status_text, ok) = match result {
+                            let (status_text, status) = match result {
+                                Ok(text) if text.starts_with("Approval required before executing") => (
+                                    format!("[Task Waiting Approval] {}:\n{}", task.id, text),
+                                    "waiting_approval",
+                                ),
                                 Ok(text) => {
                                     let chat_service = crate::application::services::chat_service::ChatService::new(db_clone_agent.clone(), team_bus_clone_agent.clone());
-                                    let (files_written, _) = chat_service.parse_and_write_files(&text, workspace_dir_agent.as_ref());
+                                    let (files_written, _) = chat_service.parse_generated_response(&text, workspace_dir_agent.as_ref());
                                     
                                     let mut final_text = format!("[Task Completed] {}:\n{}", task.id, text);
                                     if !files_written.is_empty() {
@@ -2329,15 +2665,15 @@ impl TeamWorkspacePanel {
                                         }
                                     }
                                     
-                                    (final_text, true)
+                                    (final_text, "completed")
                                 },
-                                Err(e) => (format!("[Task Failed] {}:\n{}", task.id, e), false),
+                                Err(e) => (format!("[Task Failed] {}:\n{}", task.id, e), "failed"),
                             };
 
-                            let _ = if ok {
-                                db_clone_agent.mark_task_completed(&task.id)
-                            } else {
-                                db_clone_agent.mark_task_failed(&task.id)
+                            let _ = match status {
+                                "completed" => db_clone_agent.mark_task_completed(&task.id),
+                                "waiting_approval" => db_clone_agent.mark_task_waiting_approval(&task.id),
+                                _ => db_clone_agent.mark_task_failed(&task.id),
                             };
 
                             let agent_name_str = agent.name.clone();
@@ -2399,6 +2735,17 @@ impl TeamWorkspacePanel {
                     }).detach();
                 }
             }).detach();
+            let _ = db.update_orchestration_run_status(&run_id, "dispatched", None);
+            let _ = db.insert_run_event(&crate::core::models::RunEventRecord {
+                id: uuid::Uuid::new_v4().to_string(),
+                run_id: run_id.clone(),
+                event_type: "task_dispatch_started".to_string(),
+                actor_type: "system".to_string(),
+                actor_id: None,
+                task_id: None,
+                payload: Some("Workers started for queued tasks".to_string()),
+                created_at: chrono::Utc::now().to_rfc3339(),
+            });
             self.chat_input_state.update(cx, |state, cx| {
                 state.set_value("", window, cx);
             });
@@ -2406,6 +2753,10 @@ impl TeamWorkspacePanel {
             return;
         }
 
+        // Retained temporarily for source migration history; new chat requests return above
+        // after dispatching their persisted iFlow and cannot enter this legacy direct path.
+        #[cfg(any())]
+        {
         let cancel_flag = Arc::new(AtomicBool::new(false));
         self.is_generating = true;
         self.generation_cancel_flag = Some(cancel_flag.clone());
@@ -2424,6 +2775,7 @@ impl TeamWorkspacePanel {
         let query_text = text.clone();
         let instance_id_for_ai = instance_id.clone();
         let session_id_for_ai = session_id.clone();
+        let run_id_for_ai = run_id.clone();
 
         let debate_mode = self.debate_mode;
         let db_clone = db.clone();
@@ -2436,8 +2788,20 @@ impl TeamWorkspacePanel {
             use crate::providers::BaseProviderAdapter;
 
             let mut use_mock = true;
+            let mut produced_response = false;
 
             if cancel_flag_for_ai.load(Ordering::SeqCst) {
+                let _ = db.update_orchestration_run_status(&run_id_for_ai, "cancelled", None);
+                let _ = db.insert_run_event(&crate::core::models::RunEventRecord {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    run_id: run_id_for_ai.clone(),
+                    event_type: "run_cancelled".to_string(),
+                    actor_type: "system".to_string(),
+                    actor_id: None,
+                    task_id: None,
+                    payload: None,
+                    created_at: chrono::Utc::now().to_rfc3339(),
+                });
                 let _ = cx.update(|cx| {
                     view.update(cx, |this: &mut Self, cx| {
                         this.is_generating = false;
@@ -2470,16 +2834,6 @@ impl TeamWorkspacePanel {
                         last_user.content =
                             format!("{}{}", last_user.content, auto_context).into();
                     }
-                    let title = format!(
-                        "Chat intake {}",
-                        chrono::Utc::now().format("%Y-%m-%d %H:%M")
-                    );
-                    let _ = crate::application::research::web::save_research_notebook(
-                        db.clone(),
-                        &title,
-                        &auto_context,
-                    )
-                    .await;
                 }
 
                 let debate_steps: Vec<(String, &'static str)> = if debate_mode && agent_ids.len() > 1 {
@@ -2628,6 +2982,8 @@ impl TeamWorkspacePanel {
                                             team_bus_clone.clone(),
                                             instance_id.clone(),
                                             agent.id.clone(),
+                                            Some(session_id_for_ai.clone()),
+                                            Some(run_id_for_ai.clone()),
                                             Some(cancel_flag_for_ai.clone()),
                                             Some(std::sync::Arc::new(move |partial| {
                                                 if !cancel_for_stream.load(Ordering::SeqCst) {
@@ -2648,7 +3004,7 @@ impl TeamWorkspacePanel {
                                             }
                                                 
                                                 let chat_service = crate::application::services::chat_service::ChatService::new(db_clone.clone(), team_bus_clone.clone());
-                                            let (files_written, clean_text) = chat_service.parse_and_write_files(&full_text, workspace_dir_for_ai.as_ref());
+                                            let (files_written, clean_text) = chat_service.parse_generated_response(&full_text, workspace_dir_for_ai.as_ref());
                                                 if !files_written.is_empty() {
                                                     let _ = db_clone.update_team_message_content(&office_msg_id, &clean_text);
                                                 }
@@ -2768,6 +3124,8 @@ impl TeamWorkspacePanel {
                                             team_bus_clone.clone(),
                                             instance_id.clone(),
                                             agent.id.clone(),
+                                            Some(session_id_for_ai.clone()),
+                                        Some(run_id_for_ai.clone()),
                                         Some(cancel_flag_for_ai.clone()),
                                             Some(std::sync::Arc::new(move |partial| {
                                                 if !cancel_for_stream.load(Ordering::SeqCst) {
@@ -2788,7 +3146,7 @@ impl TeamWorkspacePanel {
                                             }
                                                 
                                                 let chat_service = crate::application::services::chat_service::ChatService::new(db_clone.clone(), team_bus_clone.clone());
-                                            let (files_written, clean_text) = chat_service.parse_and_write_files(&full_text, workspace_dir_for_ai.as_ref());
+                                            let (files_written, clean_text) = chat_service.parse_generated_response(&full_text, workspace_dir_for_ai.as_ref());
                                                 if !files_written.is_empty() {
                                                     let _ = db_clone.update_team_message_content(&office_msg_id, &clean_text);
                                                 }
@@ -2907,6 +3265,8 @@ impl TeamWorkspacePanel {
                                             team_bus_clone.clone(),
                                             instance_id.clone(),
                                             agent.id.clone(),
+                                            Some(session_id_for_ai.clone()),
+                                        Some(run_id_for_ai.clone()),
                                         Some(cancel_flag_for_ai.clone()),
                                             Some(std::sync::Arc::new(move |partial| {
                                                 if !cancel_for_stream.load(Ordering::SeqCst) {
@@ -2927,7 +3287,7 @@ impl TeamWorkspacePanel {
                                             }
                                                 
                                                 let chat_service = crate::application::services::chat_service::ChatService::new(db_clone.clone(), team_bus_clone.clone());
-                                            let (files_written, clean_text) = chat_service.parse_and_write_files(&full_text, workspace_dir_for_ai.as_ref());
+                                            let (files_written, clean_text) = chat_service.parse_generated_response(&full_text, workspace_dir_for_ai.as_ref());
                                                 if !files_written.is_empty() {
                                                     let _ = db_clone.update_team_message_content(&office_msg_id, &clean_text);
                                                 }
@@ -3047,6 +3407,8 @@ impl TeamWorkspacePanel {
                                             team_bus_clone.clone(),
                                             instance_id.clone(),
                                             agent.id.clone(),
+                                            Some(session_id_for_ai.clone()),
+                                        Some(run_id_for_ai.clone()),
                                         Some(cancel_flag_for_ai.clone()),
                                             Some(std::sync::Arc::new(move |partial| {
                                                 if !cancel_for_stream.load(Ordering::SeqCst) {
@@ -3066,7 +3428,7 @@ impl TeamWorkspacePanel {
                                             }
                                                 
                                                 let chat_service = crate::application::services::chat_service::ChatService::new(db_clone.clone(), team_bus_clone.clone());
-                                            let (files_written, clean_text) = chat_service.parse_and_write_files(&full_text, workspace_dir_for_ai.as_ref());
+                                            let (files_written, clean_text) = chat_service.parse_generated_response(&full_text, workspace_dir_for_ai.as_ref());
                                                 if !files_written.is_empty() {
                                                     let _ = db_clone.update_team_message_content(&office_msg_id, &clean_text);
                                                 }
@@ -3185,6 +3547,8 @@ impl TeamWorkspacePanel {
                                             team_bus_clone.clone(),
                                             instance_id.clone(),
                                             agent.id.clone(),
+                                            Some(session_id_for_ai.clone()),
+                                        Some(run_id_for_ai.clone()),
                                         Some(cancel_flag_for_ai.clone()),
                                             Some(std::sync::Arc::new(move |partial| {
                                                 if !cancel_for_stream.load(Ordering::SeqCst) {
@@ -3205,7 +3569,7 @@ impl TeamWorkspacePanel {
                                             }
                                                 
                                                 let chat_service = crate::application::services::chat_service::ChatService::new(db_clone.clone(), team_bus_clone.clone());
-                                            let (files_written, clean_text) = chat_service.parse_and_write_files(&full_text, workspace_dir_for_ai.as_ref());
+                                            let (files_written, clean_text) = chat_service.parse_generated_response(&full_text, workspace_dir_for_ai.as_ref());
                                                 if !files_written.is_empty() {
                                                     let _ = db_clone.update_team_message_content(&office_msg_id, &clean_text);
                                                 }
@@ -3253,6 +3617,7 @@ impl TeamWorkspacePanel {
                             }
                             
                             if let Some(text) = round_result {
+                                produced_response = true;
                                 current_history.push(crate::providers::ChatMessage {
                                     role: gpui::SharedString::from("assistant"),
                                     content: gpui::SharedString::from(text.clone()),
@@ -3269,6 +3634,36 @@ impl TeamWorkspacePanel {
                 }
             }
 
+            let has_pending_approval = db
+                .list_pending_approval_requests(1000)
+                .unwrap_or_default()
+                .iter()
+                .any(|request| request.run_id == run_id_for_ai);
+            let run_status = if cancel_flag_for_ai.load(Ordering::SeqCst) {
+                "cancelled"
+            } else if has_pending_approval {
+                "waiting_approval"
+            } else if produced_response {
+                "completed"
+            } else {
+                "failed"
+            };
+            let _ = db.update_orchestration_run_status(&run_id_for_ai, run_status, None);
+            Self::finish_initial_iflow_for_run(&db, &run_id_for_ai, run_status);
+            let _ = db.insert_run_event(&crate::core::models::RunEventRecord {
+                id: uuid::Uuid::new_v4().to_string(),
+                run_id: run_id_for_ai.clone(),
+                event_type: format!("run_{}", run_status),
+                actor_type: "system".to_string(),
+                actor_id: None,
+                task_id: None,
+                payload: if use_mock {
+                    Some("No usable provider completed the request".to_string())
+                } else {
+                    None
+                },
+                created_at: chrono::Utc::now().to_rfc3339(),
+            });
             let _ = cx.update(|cx| {
                 view.update(cx, |this: &mut Self, cx| {
                     this.is_generating = false;
@@ -3311,6 +3706,7 @@ impl TeamWorkspacePanel {
                 });
             }
         }).detach();
+        }
     }
     pub(crate) fn render_entry(
         &mut self,

@@ -86,13 +86,27 @@ impl ObsidianMarkdown {
 
         Ok(KnowledgeItem {
             id: Uuid::new_v4(),
+            record_kind: crate::knowledge::core::KnowledgeRecordKind::Document,
             title: title.to_string(),
+            content_hash: Some(KnowledgeItem::content_hash(&self.content)),
             content: self.content,
             tags,
             created_at: Utc::now(),
             updated_at: Utc::now(),
             retention_policy: RetentionPolicy::KeepForever,
+            source_kind: if vault_path.is_some() {
+                "obsidian".to_string()
+            } else {
+                "manual".to_string()
+            },
+            source_uri_normalized: vault_path
+                .as_deref()
+                .map(KnowledgeItem::normalize_file_source),
             vault_path,
+            origin_run_id: None,
+            origin_session_id: None,
+            origin_instance_id: None,
+            origin_agent_id: None,
         })
     }
 
@@ -133,6 +147,15 @@ use crate::core::traits::database::DatabasePort;
 use notify::EventKind;
 use std::path::PathBuf;
 
+fn normalized_vault_path(path: &Path) -> String {
+    let resolved = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let normalized = resolved.to_string_lossy().replace('\\', "/");
+    normalized
+        .strip_prefix("//?/")
+        .unwrap_or(&normalized)
+        .to_string()
+}
+
 pub async fn sync_obsidian_file(
     path: &std::path::Path,
     db: &dyn crate::core::traits::database::DatabasePort,
@@ -143,11 +166,8 @@ pub async fn sync_obsidian_file(
                 .file_stem()
                 .and_then(|s| s.to_str())
                 .unwrap_or("Untitled");
-            let vault_path_str = path
-                .canonicalize()
-                .unwrap_or_else(|_| path.to_path_buf())
-                .to_string_lossy()
-                .to_string();
+            let vault_path_str = normalized_vault_path(path);
+            let source_uri = KnowledgeItem::normalize_file_source(&vault_path_str);
 
             // Check if an item with this vault_path already exists
             let existing_item = db
@@ -155,19 +175,19 @@ pub async fn sync_obsidian_file(
                 .unwrap_or_default()
                 .into_iter()
                 .find(|i| {
-                    i.vault_path.as_ref().map(|p| {
-                        std::path::Path::new(p)
-                            .canonicalize()
-                            .unwrap_or_else(|_| std::path::PathBuf::from(p))
-                            .to_string_lossy()
-                            .to_string()
-                    }) == Some(vault_path_str.clone())
+                    i.source_uri_normalized.as_deref() == Some(source_uri.as_str())
+                        || i.vault_path
+                            .as_ref()
+                            .map(|p| normalized_vault_path(Path::new(p)))
+                            == Some(vault_path_str.clone())
                 });
 
-            let mut item = markdown
+            let Ok(mut item) = markdown
                 .into_knowledge_item(title, Some(vault_path_str))
                 .await
-                .unwrap();
+            else {
+                return;
+            };
 
             if let Some(existing) = existing_item {
                 item.id = existing.id; // Preserve ID so it updates instead of duplicating
@@ -232,38 +252,7 @@ impl ObsidianWatcher {
                         if matches!(event.kind, EventKind::Create(_) | EventKind::Modify(_)) {
                             for path in event.paths {
                                 if path.extension().and_then(|s| s.to_str()) == Some("md") {
-                                    if let Ok(markdown) = ObsidianMarkdown::read_from_file(&path).await {
-                                        // In a real app, you would have a more robust title extraction
-                                        let title = path.file_stem().and_then(|s| s.to_str()).unwrap_or("Untitled");
-                                        
-                                        let vault_path_str = path.to_string_lossy().to_string();
-                                        if let Ok(item) = markdown.into_knowledge_item(title, Some(vault_path_str)).await {
-                                            // Sync the parsed KnowledgeItem to the SQLite DB
-                                            if let Err(e) = db.upsert_knowledge_item(&item) {
-                                                eprintln!("Failed to sync Obsidian file to DB: {}", e);
-                                            } else {
-                                                // Create chunks and generate embeddings
-                                                let text_chunks = chunk_text(&item.content, 500);
-                                                let embedding_provider = crate::providers::embeddings::EmbeddingProvider::new();
-                                                
-                                                let mut chunk_data = Vec::new();
-                                                for (i, chunk_text) in text_chunks.into_iter().enumerate() {
-                        let text: String = chunk_text;
-                        if let Ok(embedding) = embedding_provider.get_embedding(&text).await {
-                            chunk_data.push((i, text, embedding));
-                        }
-                    }
-                                                
-                                                if !chunk_data.is_empty() {
-                                                    if let Err(e) = db.upsert_knowledge_chunks(&item.id.to_string(), chunk_data) {
-                                                        eprintln!("Failed to sync chunks to DB: {}", e);
-                                                    }
-                                                }
-                                                
-                                                println!("Successfully synced Obsidian file: {:?}", path);
-                                            }
-                                        }
-                                    }
+                                    sync_obsidian_file(&path, &*db).await;
                                 }
                             }
                         }

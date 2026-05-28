@@ -1,9 +1,9 @@
-use crate::core::models::{ChatMessage, WorkflowRecord};
+use crate::core::models::WorkflowRecord;
 use crate::core::traits::database::DatabasePort;
-use crate::providers::BaseProviderAdapter;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,45 +41,78 @@ impl ActionRecorder {
         self.logs.read().unwrap().clone()
     }
 
-    pub async fn generate_iflow_and_save(
-        &self,
-        llm_provider: Option<Arc<dyn BaseProviderAdapter>>,
-    ) -> Result<String> {
+    pub async fn generate_iflow_and_save(&self) -> Result<String> {
         let logs = self.get_logs();
         if logs.is_empty() {
             return Ok("No logs to generate iFlow from".to_string());
         }
 
-        let logs_json = serde_json::to_string_pretty(&logs)?;
-
-        let prompt = format!("Convert the following MCP tool usage logs into an iFlow DAG JSON. Only output valid JSON with nodes and edges representing the workflow steps.\nLogs:\n{}", logs_json);
-
         let workflow_id = uuid::Uuid::new_v4().to_string();
         let workflow_name = format!("Learned Workflow {}", Utc::now().timestamp());
-
-        let Some(llm) = llm_provider else {
-            return Ok(
-                "No provider configured to generate iFlow. Configure an AI provider first."
-                    .to_string(),
-            );
+        let instruction = logs
+            .iter()
+            .map(|log| {
+                format!(
+                    "Repeat governed action '{}' with input {} after review.",
+                    log.tool_name, log.args
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut nodes = HashMap::new();
+        nodes.insert(
+            "start".to_string(),
+            crate::application::iflow_engine::nodes::Node {
+                id: "start".to_string(),
+                name: "Start".to_string(),
+                node_type: crate::application::iflow_engine::nodes::NodeType::Start,
+                next_nodes: vec!["reviewed-action".to_string()],
+            },
+        );
+        nodes.insert(
+            "reviewed-action".to_string(),
+            crate::application::iflow_engine::nodes::Node {
+                id: "reviewed-action".to_string(),
+                name: "Reviewed Recorded Actions".to_string(),
+                node_type: crate::application::iflow_engine::nodes::NodeType::AgentTask {
+                    agent_id: "unassigned".to_string(),
+                    instruction,
+                    input_vars: Vec::new(),
+                    output_var: Some("result".to_string()),
+                },
+                next_nodes: vec!["end".to_string()],
+            },
+        );
+        nodes.insert(
+            "end".to_string(),
+            crate::application::iflow_engine::nodes::Node {
+                id: "end".to_string(),
+                name: "End".to_string(),
+                node_type: crate::application::iflow_engine::nodes::NodeType::End,
+                next_nodes: Vec::new(),
+            },
+        );
+        let workflow = crate::application::iflow_engine::engine::Workflow {
+            id: workflow_id,
+            name: workflow_name.clone(),
+            version: "1.0".to_string(),
+            nodes,
+            start_node_id: "start".to_string(),
+            team_id: None,
+            instance_id: None,
         };
-        let messages = vec![ChatMessage {
-            role: "user".to_string().into(),
-            content: prompt.into(),
-            parts: vec![],
-            agent_name: None,
-            thought_duration_secs: None,
-        }];
-        let definition = match llm.send_message(messages).await {
-            Ok(response) => response.content.to_string(),
-            Err(e) => return Ok(format!("Failed to generate iFlow via provider: {}", e)),
-        };
+        crate::application::iflow_engine::engine::WorkflowEngine::validate_workflow(&workflow)
+            .map_err(anyhow::Error::msg)?;
+        let definition = serde_json::to_string(&workflow)?;
 
         let wf = WorkflowRecord {
-            id: workflow_id.clone(),
-            name: workflow_name.clone(),
-            definition,
-            version: "1.0".to_string(),
+            id: workflow.id.clone(),
+            run_id: None,
+            origin_kind: "learned".to_string(),
+            activation_status: "review_required".to_string(),
+            name: workflow.name.clone(),
+            definition: definition.clone(),
+            version: workflow.version.clone(),
             created_at: Utc::now().to_rfc3339(),
             updated_at: Utc::now().to_rfc3339(),
         };
@@ -88,45 +121,9 @@ impl ActionRecorder {
 
         self.logs.write().unwrap().clear();
 
-        Ok(format!("Generated and saved workflow: {}", workflow_name))
-    }
-
-    #[allow(dead_code)]
-    fn generate_mock_dag(
-        &self,
-        workflow_id: &str,
-        workflow_name: &str,
-        logs: &[McpActionLog],
-    ) -> String {
-        let mut nodes_json = String::new();
-        for (i, log) in logs.iter().enumerate() {
-            let node = format!(
-                r#"
-            "{node_id}": {{
-                "id": "{node_id}",
-                "node_type": {{"AgentTask": {{"agent_id": "auto", "task_description": "Execute {tool} with {args}"}}}},
-                "name": "Step {i}",
-                "position": {{"x": 100.0, "y": {y}}}
-            }}"#,
-                node_id = format!("node_{}", i),
-                tool = log.tool_name,
-                args = log.args.replace("\"", "\\\"").replace("\n", " "),
-                y = 100.0 + (i as f32 * 100.0)
-            );
-            if i > 0 {
-                nodes_json.push_str(",\n");
-            }
-            nodes_json.push_str(&node);
-        }
-
-        format!(
-            r#"{{
-            "id": "{workflow_id}",
-            "name": "{workflow_name}",
-            "start_node_id": "node_0",
-            "nodes": {{{nodes_json}}},
-            "edges": []
-        }}"#
-        )
+        Ok(format!(
+            "Generated learned workflow draft for review: {}",
+            workflow_name
+        ))
     }
 }

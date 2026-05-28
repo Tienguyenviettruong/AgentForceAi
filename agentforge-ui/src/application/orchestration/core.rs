@@ -168,117 +168,19 @@ impl Orchestrator {
     /// Decomposes a high-level goal into a DAG of tasks using the LLM provider.
     pub async fn decompose_goal(
         &mut self,
-        goal: &str,
-        db: std::sync::Arc<dyn crate::core::traits::database::DatabasePort>,
-        mut chat_history: Vec<crate::providers::ChatMessage>,
-        provider_config: crate::db::Provider,
-        instance_id: &str,
+        _goal: &str,
+        _db: std::sync::Arc<dyn crate::core::traits::database::DatabasePort>,
+        _chat_history: Vec<crate::providers::ChatMessage>,
+        _provider_config: crate::db::Provider,
+        _instance_id: &str,
     ) -> Result<Vec<DagTask>, String> {
         if self.state_machine.current_state() != OrchestrationState::Planning {
             return Err("Can only decompose tasks in Planning state".to_string());
         }
-
-        let role_mapping = db
-            .get_instance_agent_name_mapping(instance_id)
-            .unwrap_or_default();
-        let available_roles: Vec<String> = role_mapping.keys().cloned().collect();
-        let roles_str = if available_roles.is_empty() {
-            "No specific roles available, leave assignee_id as null".to_string()
-        } else {
-            format!("Available roles: {}. Please assign the most appropriate role to the assignee_id field.", available_roles.join(", "))
-        };
-
-        let system_prompt = format!("You are the Orchestrator. Your job is to decompose the user's goal into a DAG (Directed Acyclic Graph) of specific tasks.
-Return ONLY a JSON array of task objects.
-Each task object MUST have the following fields:
-- id: A unique string identifier for the task (e.g., 'task_1').
-- name: A short, descriptive name for the task.
-- description: Detailed instructions for the task.
-- dependencies: An array of task IDs that must be completed before this task can start.
-- priority: An integer from 1 (lowest) to 10 (highest).
-- deadline: null (or a string if applicable).
-- assignee_id: A string representing the assigned team member's role (e.g., 'BA', 'PM', etc.). {}
-
-CRITICAL: Design tasks to run in PARALLEL whenever possible. If two tasks do not strictly depend on each other's outputs, their `dependencies` arrays MUST be empty so they can execute concurrently. Do NOT create a linear sequence of tasks unless absolutely necessary.
-
-DO NOT include any markdown formatting like ```json, just return the raw JSON array.
-", roles_str);
-
-        chat_history.insert(
-            0,
-            crate::providers::ChatMessage {
-                role: "system".into(),
-                content: system_prompt.clone().into(),
-                parts: vec![crate::core::models::ContentPart::Text(system_prompt)],
-                agent_name: None,
-                thought_duration_secs: None,
-            },
-        );
-
-        chat_history.push(crate::providers::ChatMessage {
-            role: "user".into(),
-            content: format!(
-                "Please decompose the following goal into tasks:
-
-{}",
-                goal
-            )
-            .into(),
-            parts: vec![crate::core::models::ContentPart::Text(format!(
-                "Please decompose the following goal into tasks:
-
-{}",
-                goal
-            ))],
-            agent_name: None,
-            thought_duration_secs: None,
-        });
-
-        use crate::providers::BaseProviderAdapter;
-        let response_text = if provider_config.provider_name == "openrouter" {
-            let mut adapter = crate::providers::openrouter::OpenRouterAdapter::new();
-            if adapter.initialize(&provider_config).is_ok() {
-                adapter
-                    .send_message(chat_history)
-                    .await
-                    .map(|r| r.content.to_string())
-                    .map_err(|e| e.to_string())?
-            } else {
-                return Err("Failed to init OpenRouter adapter".to_string());
-            }
-        } else {
-            let mut adapter = crate::providers::claude::ClaudeAdapter::new();
-            if adapter.initialize(&provider_config).is_ok() {
-                adapter
-                    .send_message(chat_history)
-                    .await
-                    .map(|r| r.content.to_string())
-                    .map_err(|e| e.to_string())?
-            } else {
-                return Err("Failed to init Claude adapter".to_string());
-            }
-        };
-
-        // Clean up markdown block if the LLM returned one
-        let cleaned_json = response_text
-            .trim()
-            .strip_prefix("```json")
-            .unwrap_or(response_text.trim())
-            .strip_prefix("```")
-            .unwrap_or(response_text.trim())
-            .strip_suffix("```")
-            .unwrap_or(response_text.trim())
-            .trim();
-
-        let tasks: Vec<DagTask> = serde_json::from_str(cleaned_json).map_err(|e| {
-            format!(
-                "Failed to parse JSON: {} 
-Response: {}",
-                e, cleaned_json
-            )
-        })?;
-
-        Ok(tasks)
+        Err(
+            "Legacy direct task decomposition is disabled. Create a persisted iFlow and execute its AgentTask through AgentExecutor so capability selection, context snapshots, policy and approvals are enforced."
+                .to_string(),
+        )
     }
     /// Load tasks (after decomposition)
     pub fn load_tasks(&mut self, dag_tasks: Vec<DagTask>) -> Result<(), String> {

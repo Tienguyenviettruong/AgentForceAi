@@ -4,12 +4,11 @@ use std::sync::Arc;
 
 pub struct ChatService {
     db: Arc<dyn DatabasePort>,
-    team_bus: Arc<TeamBusRouter>,
 }
 
 impl ChatService {
-    pub fn new(db: Arc<dyn DatabasePort>, team_bus: Arc<TeamBusRouter>) -> Self {
-        Self { db, team_bus }
+    pub fn new(db: Arc<dyn DatabasePort>, _team_bus: Arc<TeamBusRouter>) -> Self {
+        Self { db }
     }
 
     pub fn build_dynamic_system_prompt(
@@ -109,126 +108,13 @@ impl ChatService {
         Some(dynamic_prompt)
     }
 
-    pub fn parse_and_write_files(
+    pub fn parse_generated_response(
         &self,
         text: &str,
-        workspace_dir: Option<&String>,
+        _workspace_dir: Option<&String>,
     ) -> (Vec<String>, String) {
-        let mut files_written = Vec::new();
-        let mut current_text = text.to_string();
-
-        loop {
-            // Handle ```file:<path> — write entire file
-            if let Some(start_idx) = current_text.find("```file:") {
-                let rest = &current_text[start_idx + 8..];
-                if let Some(newline_idx) = rest.find('\n') {
-                    let filepath = rest[..newline_idx].trim().to_string();
-                    let file_content_start = &rest[newline_idx + 1..];
-                    if let Some(end_idx) = file_content_start.find("```") {
-                        let file_content = &file_content_start[..end_idx];
-
-                        let resolved_path = self.resolve_path(&filepath, workspace_dir);
-
-                        if let Some(parent) = resolved_path.parent() {
-                            let _ = std::fs::create_dir_all(parent);
-                        }
-
-                        if std::fs::write(&resolved_path, file_content).is_ok() {
-                            let path_str = resolved_path.to_string_lossy().to_string();
-                            files_written.push(path_str.clone());
-                            // Broadcast FILE_WRITTEN event so other agents/panels can react
-                            let team_bus = self.team_bus.clone();
-                            tokio::spawn(async move {
-                                use crate::infrastructure::message_bus::routing::TeamMessage;
-                                let mut event = TeamMessage::new_broadcast(
-                                    "global".to_string(),
-                                    "system".to_string(),
-                                    format!("[FILE_WRITTEN] {}", path_str),
-                                );
-                                event.metadata = Some(
-                                    serde_json::json!({"event": "file_written", "path": path_str}).to_string()
-                                );
-                                let _ = team_bus.route_message(event).await;
-                            });
-                        }
-
-                        let block_end = start_idx + 8 + newline_idx + 1 + end_idx + 3;
-                        current_text = current_text[block_end..].to_string();
-                        continue;
-                    }
-                }
-            }
-            // Handle ```edit:<path> — find-replace in existing file
-            // Format: ```edit:<path>\n<<<FIND>>>\nold text\n<<<REPLACE>>>\nnew text\n```
-            else if let Some(start_idx) = current_text.find("```edit:") {
-                let rest = &current_text[start_idx + 8..];
-                if let Some(newline_idx) = rest.find('\n') {
-                    let filepath = rest[..newline_idx].trim().to_string();
-                    let edit_content_start = &rest[newline_idx + 1..];
-                    if let Some(end_idx) = edit_content_start.find("```") {
-                        let edit_block = &edit_content_start[..end_idx];
-
-                        let resolved_path = self.resolve_path(&filepath, workspace_dir);
-
-                        // Parse <<<FIND>>> and <<<REPLACE>>> markers
-                        if let (Some(find_start), Some(replace_marker)) = (
-                            edit_block.find("<<<FIND>>>"),
-                            edit_block.find("<<<REPLACE>>>"),
-                        ) {
-                            let find_text = edit_block[find_start + 10..replace_marker].trim();
-                            let replace_text = edit_block[replace_marker + 13..].trim();
-
-                            if let Ok(existing_content) = std::fs::read_to_string(&resolved_path) {
-                                if existing_content.contains(find_text) {
-                                    let new_content =
-                                        existing_content.replacen(find_text, replace_text, 1);
-                                    if std::fs::write(&resolved_path, &new_content).is_ok() {
-                                        let path_str = format!("(edited) {}", resolved_path.display());
-                                        files_written.push(path_str.clone());
-                                        // Broadcast FILE_EDITED event
-                                        let team_bus = self.team_bus.clone();
-                                        let abs_path = resolved_path.to_string_lossy().to_string();
-                                        tokio::spawn(async move {
-                                            use crate::infrastructure::message_bus::routing::TeamMessage;
-                                            let mut event = TeamMessage::new_broadcast(
-                                                "global".to_string(),
-                                                "system".to_string(),
-                                                format!("[FILE_EDITED] {}", abs_path),
-                                            );
-                                            event.metadata = Some(
-                                                serde_json::json!({"event": "file_edited", "path": abs_path}).to_string()
-                                            );
-                                            let _ = team_bus.route_message(event).await;
-                                        });
-                                    }
-                                }
-                            }
-                        }
-
-                        let block_end = start_idx + 8 + newline_idx + 1 + end_idx + 3;
-                        current_text = current_text[block_end..].to_string();
-                        continue;
-                    }
-                }
-            }
-            break;
-        }
-
-        (files_written, current_text)
+        // Markdown is display content only. File side effects must use governed tools.
+        (Vec::new(), text.to_string())
     }
 
-    fn resolve_path(&self, filepath: &str, workspace_dir: Option<&String>) -> std::path::PathBuf {
-        let path = std::path::Path::new(filepath);
-        if path.is_relative() {
-            if let Some(ws) = workspace_dir {
-                let mut full_path = std::path::PathBuf::from(ws);
-                full_path.push(path);
-                full_path
-            } else {
-                path.to_path_buf()
-            }
-        } else {
-            path.to_path_buf()
-        }
-    }
 }

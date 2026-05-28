@@ -1,18 +1,32 @@
+use crate::application::orchestration::tool_gateway::ToolExecutionGateway;
 use crate::core::traits::database::DatabasePort;
+use crate::infrastructure::security::keychain::resolve_credential_reference;
 use anyhow::{anyhow, Result};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 use std::sync::Arc;
 
 pub struct OutputTools {
     db: Arc<dyn DatabasePort>,
     team_instance_id: String,
+    run_id: Option<String>,
+    session_id: Option<String>,
+    agent_id: Option<String>,
+    invocation_id: Option<String>,
     client: reqwest::Client,
 }
 
 impl OutputTools {
-    pub fn new(db: Arc<dyn DatabasePort>, team_instance_id: String) -> Self {
+    pub fn new(
+        db: Arc<dyn DatabasePort>,
+        team_instance_id: String,
+        run_id: Option<String>,
+        session_id: Option<String>,
+        agent_id: Option<String>,
+        invocation_id: Option<String>,
+    ) -> Self {
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(120))
             .build()
@@ -21,6 +35,10 @@ impl OutputTools {
         Self {
             db,
             team_instance_id,
+            run_id,
+            session_id,
+            agent_id,
+            invocation_id,
             client,
         }
     }
@@ -31,16 +49,16 @@ impl OutputTools {
             .setting_or_env("output_image_endpoint", "AGENTFORGE_IMAGE_OUTPUT_URL")
             .unwrap_or_else(|| "https://api.openai.com/v1/images/generations".to_string());
         let api_key = self
-            .setting_or_env("output_image_api_key", "AGENTFORGE_IMAGE_OUTPUT_API_KEY")
-            .or_else(|| {
-                std::env::var("OPENAI_API_KEY")
-                    .ok()
-                    .filter(|v| !v.trim().is_empty())
-            });
+            .output_credential(
+                "output_image_api_key_ref",
+                "output_image_api_key",
+                &["AGENTFORGE_IMAGE_OUTPUT_API_KEY", "OPENAI_API_KEY"],
+            )
+            .await?;
 
         if endpoint.contains("api.openai.com") && api_key.is_none() {
             return Err(anyhow!(
-                "Image output service requires an API key. Set output_image_api_key or OPENAI_API_KEY."
+                "Image output service requires an API key. Set output_image_api_key_ref to secret:// or env:, or set OPENAI_API_KEY."
             ));
         }
 
@@ -73,7 +91,13 @@ impl OutputTools {
                     "PDF output service is not configured. Set output_pdf_endpoint or AGENTFORGE_PDF_OUTPUT_URL."
                 )
             })?;
-        let api_key = self.setting_or_env("output_pdf_api_key", "AGENTFORGE_PDF_OUTPUT_API_KEY");
+        let api_key = self
+            .output_credential(
+                "output_pdf_api_key_ref",
+                "output_pdf_api_key",
+                &["AGENTFORGE_PDF_OUTPUT_API_KEY"],
+            )
+            .await?;
 
         let (content, source_format) = if let Some(html) = arg_string(args, "html") {
             (html, "html".to_string())
@@ -112,8 +136,13 @@ impl OutputTools {
                     "Video output service is not configured. Set output_video_endpoint or AGENTFORGE_VIDEO_OUTPUT_URL."
                 )
             })?;
-        let api_key =
-            self.setting_or_env("output_video_api_key", "AGENTFORGE_VIDEO_OUTPUT_API_KEY");
+        let api_key = self
+            .output_credential(
+                "output_video_api_key_ref",
+                "output_video_api_key",
+                &["AGENTFORGE_VIDEO_OUTPUT_API_KEY"],
+            )
+            .await?;
 
         let mut payload = Map::new();
         payload.insert("prompt".to_string(), Value::String(prompt));
@@ -200,6 +229,36 @@ impl OutputTools {
             .flatten()
             .filter(|v| !v.trim().is_empty())
             .or_else(|| std::env::var(env_key).ok().filter(|v| !v.trim().is_empty()))
+    }
+
+    async fn output_credential(
+        &self,
+        reference_setting_key: &str,
+        legacy_raw_setting_key: &str,
+        fallback_env_keys: &[&str],
+    ) -> Result<Option<String>> {
+        let reference = self
+            .db
+            .get_setting(reference_setting_key)?
+            .filter(|value| !value.trim().is_empty());
+        if reference.is_some() {
+            return resolve_credential_reference(reference.as_deref(), fallback_env_keys).await;
+        }
+
+        if self
+            .db
+            .get_setting(legacy_raw_setting_key)?
+            .filter(|value| !value.trim().is_empty())
+            .is_some()
+        {
+            return Err(anyhow!(
+                "Legacy raw credential setting '{}' is blocked. Replace it with '{}' using a secret:// or env: reference.",
+                legacy_raw_setting_key,
+                reference_setting_key
+            ));
+        }
+
+        resolve_credential_reference(None, fallback_env_keys).await
     }
 
     async fn post_for_artifact(
@@ -306,6 +365,20 @@ impl OutputTools {
             std::fs::create_dir_all(parent)?;
         }
         std::fs::write(&path, bytes)?;
+        let content_hash = format!("{:x}", Sha256::digest(bytes));
+        self.db
+            .insert_artifact(&crate::core::models::ArtifactRecord {
+                id: uuid::Uuid::new_v4().to_string(),
+                run_id: self.run_id.clone(),
+                session_id: self.session_id.clone(),
+                instance_id: self.team_instance_id.clone(),
+                agent_id: self.agent_id.clone(),
+                invocation_id: self.invocation_id.clone(),
+                artifact_kind: format!("{}.{}", category, extension.trim_start_matches('.')),
+                path: path.to_string_lossy().to_string(),
+                content_hash,
+                created_at: chrono::Utc::now().to_rfc3339(),
+            })?;
         Ok(path)
     }
 
@@ -315,45 +388,23 @@ impl OutputTools {
         category: &str,
         extension: &str,
     ) -> Result<PathBuf> {
-        let workspace = self.workspace_dir();
-
-        if let Some(requested_path) = requested_path.filter(|v| !v.trim().is_empty()) {
-            let path = PathBuf::from(requested_path);
-            if path.is_absolute() {
-                return Ok(path);
-            }
-            if let Some(workspace) = workspace {
-                return Ok(workspace.join(path));
-            }
-            return Ok(std::env::current_dir()?.join(path));
-        }
-
-        let output_dir = self
-            .setting_or_env("output_tools_dir", "AGENTFORGE_OUTPUT_TOOLS_DIR")
-            .unwrap_or_else(|| "outputs".to_string());
-        let output_dir = PathBuf::from(output_dir);
-        let base = if output_dir.is_absolute() {
-            output_dir
-        } else if let Some(workspace) = workspace {
-            workspace.join(output_dir)
+        let requested = if let Some(path) = requested_path.filter(|v| !v.trim().is_empty()) {
+            PathBuf::from(path)
         } else {
-            std::env::current_dir()?.join(output_dir)
+            PathBuf::from(
+                self.setting_or_env("output_tools_dir", "AGENTFORGE_OUTPUT_TOOLS_DIR")
+                    .unwrap_or_else(|| "outputs".to_string()),
+            )
+            .join(category)
+            .join(format!(
+                "{}.{}",
+                uuid::Uuid::new_v4(),
+                extension.trim_start_matches('.')
+            ))
         };
-
-        Ok(base.join(category).join(format!(
-            "{}.{}",
-            uuid::Uuid::new_v4(),
-            extension.trim_start_matches('.')
-        )))
-    }
-
-    fn workspace_dir(&self) -> Option<PathBuf> {
-        self.db
-            .get_setting(&format!("workspace_{}", self.team_instance_id))
-            .ok()
-            .flatten()
-            .filter(|v| !v.trim().is_empty())
-            .map(PathBuf::from)
+        ToolExecutionGateway::new(self.db.clone())
+            .resolve_workspace_path(&self.team_instance_id, &requested.to_string_lossy())
+            .map_err(anyhow::Error::msg)
     }
 }
 
@@ -480,8 +531,8 @@ fn build_xlsx(args: &Value, content: &str) -> Result<Vec<u8>> {
     let rows = rows_from_args(args).unwrap_or_else(|| parse_csv_like(content));
     let cursor = std::io::Cursor::new(Vec::<u8>::new());
     let mut zip = zip::ZipWriter::new(cursor);
-    let options = zip::write::FileOptions::default()
-        .compression_method(zip::CompressionMethod::Deflated);
+    let options =
+        zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
 
     zip.start_file("[Content_Types].xml", options)?;
     zip.write_all(br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>

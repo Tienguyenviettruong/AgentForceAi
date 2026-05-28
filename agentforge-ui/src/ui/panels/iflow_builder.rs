@@ -7,10 +7,10 @@ use crate::core::traits::database::DatabasePort;
 use gpui::*;
 use gpui_component::button::Button;
 use gpui_component::dock::{Panel, PanelEvent, TitleStyle};
+use gpui_component::ActiveTheme as _;
 use gpui_component::Sizable;
 use gpui_component::WindowExt;
 use gpui_component::{h_flex, v_flex};
-use gpui_component::ActiveTheme as _;
 use std::collections::HashMap;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -98,6 +98,11 @@ pub struct IFlowBuilderPanel {
 
     workflow_engine: WorkflowEngine,
     workflow_id: Option<String>,
+    workflow_version_id: Option<String>,
+    active_run_id: Option<String>,
+    team_id: Option<String>,
+    instance_id: Option<String>,
+    validation_status: Option<String>,
     execution_id: Option<String>,
     last_execution_state: Option<WorkflowState>,
     workflow_to_canvas: HashMap<String, Uuid>,
@@ -109,8 +114,15 @@ pub struct IFlowBuilderPanel {
 impl IFlowBuilderPanel {
     pub fn new(_window: &mut Window, cx: &mut App) -> Self {
         let db = crate::AppState::global(cx).db.clone();
+        let team_bus = crate::AppState::global(cx).team_bus.clone();
 
-        let workflow_engine = WorkflowEngine::new();
+        let workflow_engine = WorkflowEngine::new_with_context(Arc::new(
+            crate::application::iflow_engine::engine::WorkflowExecutionContext {
+                db: db.clone(),
+                team_bus,
+                team_instance_id: None,
+            },
+        ));
         let workflow = crate::application::iflow_engine::engine::Workflow {
             id: uuid::Uuid::new_v4().to_string(),
             name: "New Workflow".to_string(),
@@ -125,7 +137,7 @@ impl IFlowBuilderPanel {
         let (state, workflow_to_canvas, canvas_to_workflow) =
             Self::build_canvas_from_workflow(&workflow);
 
-        Self {
+        let mut panel = Self {
             focus_handle: cx.focus_handle(),
             state,
             undo_stack: vec![],
@@ -137,18 +149,39 @@ impl IFlowBuilderPanel {
             connecting: None,
             workflow_engine,
             workflow_id: Some(workflow_id),
+            workflow_version_id: None,
+            active_run_id: None,
+            team_id: None,
+            instance_id: None,
+            validation_status: None,
             execution_id: None,
             last_execution_state: None,
             workflow_to_canvas,
             canvas_to_workflow,
             db,
+        };
+        let selected_run = crate::AppState::global(cx)
+            .selected_iflow_run_id
+            .read(cx)
+            .clone();
+        if let Some(run_id) = selected_run {
+            let _ = panel.load_run_workflow(&run_id);
         }
+        panel
     }
 
     fn load_workflow_record(&mut self, record: &WorkflowRecord) {
         if let Ok(wf) = WorkflowEngine::parse_workflow(&record.definition) {
+            self.validation_status = Some(
+                WorkflowEngine::validate_workflow(&wf)
+                    .map(|_| "valid".to_string())
+                    .unwrap_or_else(|reason| format!("invalid: {}", reason)),
+            );
             self.workflow_engine.register_workflow(wf.clone());
             self.workflow_id = Some(wf.id.clone());
+            self.active_run_id = record.run_id.clone();
+            self.team_id = wf.team_id.clone();
+            self.instance_id = wf.instance_id.clone();
             let (state, workflow_to_canvas, canvas_to_workflow) =
                 Self::build_canvas_from_workflow(&wf);
             self.state = state;
@@ -156,6 +189,83 @@ impl IFlowBuilderPanel {
             self.canvas_to_workflow = canvas_to_workflow;
             self.execution_id = None;
             self.last_execution_state = None;
+            if let Ok(Some(version)) = self.db.get_latest_workflow_version_for_workflow(&wf.id) {
+                self.workflow_version_id = Some(version.id.clone());
+                if let Ok(Some(execution)) = self
+                    .db
+                    .get_latest_workflow_execution_for_version(&version.id)
+                {
+                    if let Ok(state) = serde_json::from_str(&execution.state_json) {
+                        self.execution_id = Some(execution.id);
+                        self.last_execution_state = Some(state);
+                    }
+                }
+            } else {
+                self.workflow_version_id = None;
+            }
+        }
+    }
+
+    fn load_run_workflow(&mut self, run_id: &str) -> Result<(), String> {
+        let version = self
+            .db
+            .get_latest_workflow_version_for_run(run_id)
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "This run does not contain a validated iFlow version.".to_string())?;
+        let workflow = WorkflowEngine::parse_validated_workflow(&version.definition_json)?;
+        let base = self
+            .db
+            .get_workflow(&version.workflow_id)
+            .map_err(|error| error.to_string())?;
+        let record = WorkflowRecord {
+            id: workflow.id.clone(),
+            run_id: Some(run_id.to_string()),
+            origin_kind: base
+                .as_ref()
+                .map(|record| record.origin_kind.clone())
+                .unwrap_or_else(|| "planned".to_string()),
+            activation_status: base
+                .as_ref()
+                .map(|record| record.activation_status.clone())
+                .unwrap_or_else(|| "active".to_string()),
+            name: base
+                .as_ref()
+                .map(|record| record.name.clone())
+                .unwrap_or_else(|| workflow.name.clone()),
+            definition: version.definition_json.clone(),
+            version: version.version.to_string(),
+            created_at: version.created_at.clone(),
+            updated_at: version.created_at.clone(),
+        };
+        self.load_workflow_record(&record);
+        self.active_run_id = Some(run_id.to_string());
+        self.workflow_version_id = Some(version.id.clone());
+        self.validation_status = Some(version.validation_status);
+        self.instance_id = Some(version.instance_id);
+        if let Ok(Some(execution)) = self
+            .db
+            .get_latest_workflow_execution_for_version(&version.id)
+        {
+            if let Ok(state) = serde_json::from_str(&execution.state_json) {
+                self.execution_id = Some(execution.id);
+                self.last_execution_state = Some(state);
+            }
+        }
+        Ok(())
+    }
+
+    fn refresh_latest_execution_state(&mut self) {
+        let Some(version_id) = self.workflow_version_id.clone() else {
+            return;
+        };
+        if let Ok(Some(execution)) = self
+            .db
+            .get_latest_workflow_execution_for_version(&version_id)
+        {
+            if let Ok(state) = serde_json::from_str(&execution.state_json) {
+                self.execution_id = Some(execution.id);
+                self.last_execution_state = Some(state);
+            }
         }
     }
 
@@ -333,14 +443,58 @@ impl IFlowBuilderPanel {
         self.state.nodes.push(node);
     }
 
-    fn start_execution(&mut self, strategy: ExecutionStrategy) -> Result<(), String> {
+    fn start_execution(&mut self, strategy: ExecutionStrategy) -> Result<String, String> {
         let workflow_id = self.workflow_id.clone().ok_or("No workflow")?;
+        if self.workflow_version_id.is_none() || self.active_run_id.is_none() {
+            return Err(
+                "Save or select a validated run-linked workflow before execution.".to_string(),
+            );
+        }
         let exec_id =
             self.workflow_engine
                 .start_workflow(&workflow_id, strategy, WorkflowData::new())?;
         self.execution_id = Some(exec_id.clone());
         self.last_execution_state = self.workflow_engine.get_state(&exec_id);
-        Ok(())
+        if let Some(run_id) = &self.active_run_id {
+            let _ = self
+                .db
+                .insert_run_event(&crate::core::models::RunEventRecord {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    run_id: run_id.clone(),
+                    event_type: "workflow_execution_started".to_string(),
+                    actor_type: "user".to_string(),
+                    actor_id: Some("user".to_string()),
+                    task_id: None,
+                    payload: self.workflow_version_id.clone(),
+                    created_at: chrono::Utc::now().to_rfc3339(),
+                });
+        }
+        Ok(exec_id)
+    }
+
+    fn run_until_blocked(&self, execution_id: String, cx: &mut Context<Self>) {
+        let engine = self.workflow_engine.clone();
+        cx.spawn(async move |this, cx| loop {
+            let state = match engine.step_execution(&execution_id).await {
+                Ok(state) => state,
+                Err(_) => return,
+            };
+            let should_stop = matches!(
+                state.status,
+                WorkflowStatus::Paused | WorkflowStatus::Completed | WorkflowStatus::Failed(_)
+            );
+            let _ = this.update(cx, |this, cx| {
+                this.last_execution_state = Some(state);
+                cx.notify();
+            });
+            if should_stop {
+                return;
+            }
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(100))
+                .await;
+        })
+        .detach();
     }
 
     fn resolve_review(&mut self, approved: bool) -> Result<(), String> {
@@ -566,6 +720,29 @@ impl IFlowBuilderPanel {
             )
             .child(
                 div()
+                    .text_size(px(12.))
+                    .text_color(theme.muted_foreground)
+                    .child(format!(
+                        "Run: {}",
+                        self.active_run_id
+                            .as_ref()
+                            .map(|id| id.chars().take(8).collect::<String>())
+                            .unwrap_or_else(|| "Not selected".to_string())
+                    )),
+            )
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(theme.muted_foreground)
+                    .child(format!(
+                        "Validation: {}",
+                        self.validation_status
+                            .as_deref()
+                            .unwrap_or("draft / not validated")
+                    )),
+            )
+            .child(
+                div()
                     .flex()
                     .flex_col()
                     .gap_2()
@@ -578,7 +755,11 @@ impl IFlowBuilderPanel {
                             .on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(|this, _, _, cx| {
-                                    let _ = this.start_execution(ExecutionStrategy::Serial);
+                                    if let Ok(execution_id) =
+                                        this.start_execution(ExecutionStrategy::Serial)
+                                    {
+                                        this.run_until_blocked(execution_id, cx);
+                                    }
                                     cx.notify();
                                 }),
                             ),
@@ -592,7 +773,11 @@ impl IFlowBuilderPanel {
                             .on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(|this, _, _, cx| {
-                                    let _ = this.start_execution(ExecutionStrategy::Parallel);
+                                    if let Ok(execution_id) =
+                                        this.start_execution(ExecutionStrategy::Parallel)
+                                    {
+                                        this.run_until_blocked(execution_id, cx);
+                                    }
                                     cx.notify();
                                 }),
                             ),
@@ -678,17 +863,6 @@ impl IFlowBuilderPanel {
         let theme = cx.theme().clone();
 
         let mut log_items = vec![];
-        log_items.push(
-            div()
-                .text_color(theme.muted_foreground)
-                .child("• Initialize Environment..."),
-        );
-        log_items.push(
-            div()
-                .text_color(theme.muted_foreground)
-                .child("• Ready for execution..."),
-        );
-
         if let Some(state) = &self.last_execution_state {
             for node_id in &state.completed_nodes {
                 let name = self
@@ -718,15 +892,26 @@ impl IFlowBuilderPanel {
                         .child(format!("> Running: {}", name)),
                 );
             }
-        }
-
-        log_items.push(
-            h_flex().gap_2().mt_4().items_center().child(
+            let status = match &state.status {
+                WorkflowStatus::Pending => "Pending".to_string(),
+                WorkflowStatus::Running => "Running".to_string(),
+                WorkflowStatus::Paused => "Paused".to_string(),
+                WorkflowStatus::Completed => "Completed".to_string(),
+                WorkflowStatus::Failed(reason) => format!("Failed: {}", reason),
+            };
+            log_items.push(
                 div()
-                    .text_color(theme.primary)
-                    .child("Waiting for AI response..."),
-            ),
-        );
+                    .mt_4()
+                    .text_color(theme.muted_foreground)
+                    .child(format!("Execution status: {}", status)),
+            );
+        } else {
+            log_items.push(
+                div()
+                    .text_color(theme.muted_foreground)
+                    .child("No workflow execution activity."),
+            );
+        }
 
         div()
             .w_full()
@@ -923,22 +1108,37 @@ impl IFlowBuilderPanel {
                             .child("Save Workflow")
                             .on_mouse_down(
                                 MouseButton::Left,
-                                cx.listener(|this, _e: &MouseDownEvent, _w, cx| {
-                                    this.save_workflow(cx);
+                                cx.listener(|this, _e: &MouseDownEvent, window, cx| {
+                                    this.save_workflow(window, cx);
                                 }),
                             ),
                     ),
             )
     }
 
-    fn save_workflow(&mut self, _cx: &mut Context<Self>) {
+    fn save_workflow(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let workflow = self.serialize_to_workflow();
+        let validation = WorkflowEngine::validate_workflow(&workflow);
+        if let Err(reason) = validation {
+            self.validation_status = Some(format!("invalid: {}", reason));
+            window.push_notification(
+                (
+                    gpui_component::notification::NotificationType::Error,
+                    gpui::SharedString::from(format!("Workflow not executable: {}", reason)),
+                ),
+                cx,
+            );
+            return;
+        }
 
         let json = serde_json::to_string(&workflow).unwrap_or_default();
         let record = WorkflowRecord {
             id: workflow.id.clone(),
+            run_id: self.active_run_id.clone(),
+            origin_kind: "planned".to_string(),
+            activation_status: "active".to_string(),
             name: workflow.name.clone(),
-            definition: json,
+            definition: json.clone(),
             version: workflow.version.clone(),
             created_at: chrono::Utc::now().to_rfc3339(),
             updated_at: chrono::Utc::now().to_rfc3339(),
@@ -947,9 +1147,64 @@ impl IFlowBuilderPanel {
         if let Err(e) = self.db.upsert_workflow(&record) {
             eprintln!("Failed to save workflow: {}", e);
         } else {
-            println!("Workflow saved successfully to DB.");
-            // Update the internal engine too
+            if let Some(instance_id) = workflow.instance_id.as_ref() {
+                let version_number = self
+                    .db
+                    .next_workflow_version_number(&workflow.id)
+                    .unwrap_or(1);
+                let version = crate::core::models::WorkflowVersionRecord {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    workflow_id: workflow.id.clone(),
+                    run_id: self.active_run_id.clone(),
+                    instance_id: instance_id.clone(),
+                    version: version_number,
+                    definition_json: json,
+                    validation_status: "valid".to_string(),
+                    created_at: chrono::Utc::now().to_rfc3339(),
+                };
+                if let Err(error) = self.db.save_workflow_version(&version) {
+                    window.push_notification(
+                        (
+                            gpui_component::notification::NotificationType::Error,
+                            gpui::SharedString::from(format!(
+                                "Unable to save workflow version: {}",
+                                error
+                            )),
+                        ),
+                        cx,
+                    );
+                    return;
+                }
+                self.workflow_version_id = Some(version.id);
+                self.validation_status = Some("valid".to_string());
+                if let Some(run_id) = &self.active_run_id {
+                    let _ = self.db.update_orchestration_run_status(
+                        run_id,
+                        "running",
+                        Some(&workflow.id),
+                    );
+                    let _ = self
+                        .db
+                        .insert_run_event(&crate::core::models::RunEventRecord {
+                            id: uuid::Uuid::new_v4().to_string(),
+                            run_id: run_id.clone(),
+                            event_type: "workflow_version_created".to_string(),
+                            actor_type: "user".to_string(),
+                            actor_id: Some("user".to_string()),
+                            task_id: None,
+                            payload: Some(format!("Saved iFlow version {}", version_number)),
+                            created_at: chrono::Utc::now().to_rfc3339(),
+                        });
+                }
+            }
             self.workflow_engine.register_workflow(workflow);
+            window.push_notification(
+                (
+                    gpui_component::notification::NotificationType::Success,
+                    "Validated workflow version saved.",
+                ),
+                cx,
+            );
         }
     }
 
@@ -1027,15 +1282,22 @@ impl IFlowBuilderPanel {
             .workflow_id
             .clone()
             .unwrap_or_else(|| Uuid::new_v4().to_string());
+        let existing = self.workflow_engine.get_workflow(&wf_id);
 
         crate::application::iflow_engine::engine::Workflow {
             id: wf_id,
-            name: "Custom Workflow".to_string(),
-            version: "1.0.0".to_string(),
+            name: existing
+                .as_ref()
+                .map(|workflow| workflow.name.clone())
+                .unwrap_or_else(|| "Custom Workflow".to_string()),
+            version: existing
+                .as_ref()
+                .map(|workflow| workflow.version.clone())
+                .unwrap_or_else(|| "1.0.0".to_string()),
             nodes: nodes_map,
             start_node_id: start_id,
-            team_id: Some("sdg-team-123".to_string()),
-            instance_id: Some("sdg-instance-123".to_string()),
+            team_id: self.team_id.clone(),
+            instance_id: self.instance_id.clone(),
         }
     }
 
@@ -1189,6 +1451,24 @@ impl Focusable for IFlowBuilderPanel {
 
 impl Render for IFlowBuilderPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let selected_run = crate::AppState::global(cx)
+            .selected_iflow_run_id
+            .read(cx)
+            .clone();
+        if let Some(run_id) = selected_run {
+            let latest_version_id = self
+                .db
+                .get_latest_workflow_version_for_run(&run_id)
+                .ok()
+                .flatten()
+                .map(|version| version.id);
+            if self.active_run_id.as_deref() != Some(run_id.as_str())
+                || latest_version_id != self.workflow_version_id
+            {
+                let _ = self.load_run_workflow(&run_id);
+            }
+        }
+        self.refresh_latest_execution_state();
         let theme = cx.theme().clone();
         let zoom = self.zoom;
         let pan = self.pan;

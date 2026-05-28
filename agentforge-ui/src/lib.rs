@@ -82,7 +82,9 @@ pub struct NotificationEntry {
 
 pub struct AppState {
     pub active_panel: Entity<String>,
+    pub selected_iflow_run_id: Entity<Option<String>>,
     pub notifications: Entity<Vec<NotificationEntry>>,
+    pub current_actor_id: String,
     pub db: Arc<dyn DatabasePort>,
     pub team_bus: std::sync::Arc<crate::infrastructure::message_bus::routing::TeamBusRouter>,
     pub tokio_runtime: std::sync::Arc<tokio::runtime::Runtime>,
@@ -103,6 +105,14 @@ impl AppState {
         let notifications = cx.new(|_| Vec::new());
         let db: Arc<dyn DatabasePort> =
             Arc::new(Database::new().expect("Failed to initialize database"));
+        let current_actor_id =
+            crate::application::orchestration::tool_gateway::LOCAL_DESKTOP_ACTOR_ID.to_string();
+        db.ensure_local_security_owner(&current_actor_id)
+            .expect("Failed to initialize local security principal");
+        let selected_iflow_run_id = {
+            let selected = db.get_setting("iflow_selected_run_id").ok().flatten();
+            cx.new(|_| selected)
+        };
         {
             let registry = crate::mcp::registry::McpToolRegistry::new(db.clone());
             let _ = crate::mcp::tools::register_team_tools(&registry);
@@ -116,10 +126,16 @@ impl AppState {
                 .expect("Failed to init tokio runtime"),
         );
         let obsidian_watcher = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let initial_mode = db
+            .get_setting("orchestration_mode")
+            .ok()
+            .flatten()
+            .and_then(|value| {
+                crate::application::orchestration::modes::OperatingMode::from_storage(&value)
+            })
+            .unwrap_or(crate::application::orchestration::modes::OperatingMode::HumanInteraction);
         let mode_manager = std::sync::Arc::new(std::sync::Mutex::new(
-            crate::application::orchestration::modes::ModeManager::new(
-                crate::application::orchestration::modes::OperatingMode::HumanInteraction,
-            ),
+            crate::application::orchestration::modes::ModeManager::new(initial_mode),
         ));
         let chat_service = std::sync::Arc::new(
             crate::application::services::chat_service::ChatService::new(
@@ -135,7 +151,9 @@ impl AppState {
         );
         cx.set_global::<AppState>(Self {
             active_panel,
+            selected_iflow_run_id,
             notifications,
+            current_actor_id,
             db,
             team_bus,
             tokio_runtime,
@@ -182,16 +200,6 @@ pub fn init(cx: &mut App) {
     if let Err(e) = AppState::global(cx).db.seed_sdg_team() {
         eprintln!("Failed to seed SDG team: {}", e);
     }
-    let _ = AppState::global(cx)
-        .db
-        .create_role(&crate::teams::role::Role {
-            id: "admin-role-123".to_string(),
-            team_id: "sdg-team-123".to_string(),
-            name: "Admin".to_string(),
-            permissions: Some("[\"all\"]".to_string()),
-            capabilities: Some("[\"all\"]".to_string()),
-        });
-
     let vault_path = std::env::var("AGENTFORGE_OBSIDIAN_VAULT").ok().or_else(|| {
         AppState::global(cx)
             .db
@@ -626,6 +634,17 @@ impl MainWindow {
         )
         .detach();
 
+        let active_panel_request = AppState::global(cx).active_panel.clone();
+        cx.observe_in(
+            &active_panel_request,
+            window,
+            |this, request, window, cx| {
+                let id: SharedString = request.read(cx).clone().into();
+                this.switch_panel(id, window, cx);
+            },
+        )
+        .detach();
+
         Self {
             title_bar,
             activity_bar,
@@ -642,6 +661,11 @@ impl MainWindow {
             let is_teams = id == "teams";
 
             self.active_page = id;
+            let selected_page = self.active_page.clone();
+            self.activity_bar.update(cx, |bar, cx| {
+                bar.active_item = selected_page;
+                cx.notify();
+            });
             cx.notify();
 
             if was_teams != is_teams {

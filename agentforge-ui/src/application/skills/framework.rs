@@ -9,6 +9,7 @@ pub struct SkillMetadata {
     pub id: String,
     pub name: String,
     pub description: String,
+    pub instructions: String,
     pub version: String,
     pub category: String,
 }

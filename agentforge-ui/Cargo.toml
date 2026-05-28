@@ -36,15 +36,26 @@ rand = "0.10.1"
 thiserror = "2.0.18"
 docx-rs = "0.4.20"
 printpdf = { version = "0.7.0", default-features = false }
-fastembed = "5.13.3"
+fastembed = { version = "5.13.3", default-features = false, features = ["hf-hub-native-tls", "ort-load-dynamic"] }
 urlencoding = "2.1.3"
 base64 = "0.22"
 pdf-extract = "0.7"
 zip = { version = "0.6", default-features = false, features = ["deflate"] }
+sha2 = "0.10"
+ring = "0.17"
+
+[dev-dependencies]
+gpui = { version = "0.2.2", features = ["test-support"] }
 
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
 
 tao = { version = "0.25.0", default-features = false, features = ["rwh_05"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3.6.3", features = ["windows-native"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3.6.3", features = ["apple-native"] }
 
 
 [target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]

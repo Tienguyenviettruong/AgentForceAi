@@ -93,6 +93,119 @@ impl WorkflowEngine {
         Ok(wf)
     }
 
+    pub fn validate_workflow(workflow: &Workflow) -> Result<(), String> {
+        Self::validate_workflow_contract(workflow, true)
+    }
+
+    pub fn validate_workflow_draft(workflow: &Workflow) -> Result<(), String> {
+        Self::validate_workflow_contract(workflow, false)
+    }
+
+    fn validate_workflow_contract(
+        workflow: &Workflow,
+        require_instance_scope: bool,
+    ) -> Result<(), String> {
+        if workflow.nodes.is_empty() {
+            return Err("Workflow must contain at least one node.".to_string());
+        }
+        let start = workflow
+            .nodes
+            .get(&workflow.start_node_id)
+            .ok_or_else(|| "Workflow start node does not exist.".to_string())?;
+        if !matches!(
+            start.node_type,
+            NodeType::Start | NodeType::CronTrigger { .. }
+        ) {
+            return Err(
+                "Workflow start_node_id must reference a Start or CronTrigger node.".to_string(),
+            );
+        }
+        if require_instance_scope
+            && workflow
+                .instance_id
+                .as_deref()
+                .unwrap_or("")
+                .trim()
+                .is_empty()
+        {
+            return Err("Workflow must be scoped to an instance before execution.".to_string());
+        }
+
+        let mut has_end = false;
+        for (node_id, node) in &workflow.nodes {
+            if matches!(
+                node.node_type,
+                NodeType::SystemCommand { .. } | NodeType::HttpRequest { .. }
+            ) {
+                return Err(format!(
+                    "Node {} uses a direct side effect that is disabled until the governed execution gateway is implemented.",
+                    node_id
+                ));
+            }
+            if matches!(node.node_type, NodeType::End) {
+                has_end = true;
+            }
+            if let NodeType::AgentTask {
+                agent_id,
+                instruction,
+                ..
+            } = &node.node_type
+            {
+                if agent_id.trim().is_empty() || instruction.trim().is_empty() {
+                    return Err(format!(
+                        "Agent task node {} requires an agent and instruction.",
+                        node_id
+                    ));
+                }
+            }
+
+            let mut destinations = node.next_nodes.clone();
+            match &node.node_type {
+                NodeType::Decision {
+                    true_next,
+                    false_next,
+                    ..
+                } => {
+                    destinations.push(true_next.clone());
+                    destinations.push(false_next.clone());
+                }
+                NodeType::HumanReview {
+                    approved_next,
+                    rejected_next,
+                    ..
+                } => {
+                    destinations.push(approved_next.clone());
+                    destinations.push(rejected_next.clone());
+                }
+                _ => {}
+            }
+            for destination in destinations {
+                if destination.trim().is_empty() || !workflow.nodes.contains_key(&destination) {
+                    return Err(format!(
+                        "Node {} references a missing destination node.",
+                        node_id
+                    ));
+                }
+            }
+        }
+        if !has_end {
+            return Err("Workflow must contain an End node.".to_string());
+        }
+        Ok(())
+    }
+
+    pub fn parse_validated_workflow(json: &str) -> Result<Workflow, String> {
+        let workflow = Self::parse_workflow(json).map_err(|error| error.to_string())?;
+        Self::validate_workflow(&workflow)?;
+        Ok(workflow)
+    }
+
+    pub fn parse_validated_draft(json: &str) -> Result<Workflow, String> {
+        let workflow = Self::parse_workflow(json).map_err(|error| error.to_string())?;
+        Self::validate_workflow_draft(&workflow)?;
+        Ok(workflow)
+    }
+
     pub fn register_workflow(&self, workflow: Workflow) {
         let mut store = self.workflow_store.write().unwrap();
         store.insert(workflow.id.clone(), workflow);
@@ -116,6 +229,7 @@ impl WorkflowEngine {
                 .cloned()
                 .ok_or_else(|| "Workflow not found".to_string())?
         };
+        Self::validate_workflow(&workflow)?;
 
         let execution_id = Uuid::new_v4().to_string();
         let mut data = initial_data;
@@ -149,9 +263,64 @@ impl WorkflowEngine {
     pub fn persist_state(&self, state: &WorkflowState) -> Result<(), String> {
         let mut store = self.state_store.write().unwrap();
         store.insert(state.execution_id.clone(), state.clone());
-        // Also persist to database for durability
         if let Some(ctx) = &self.execution_context {
-            let _ = ctx.db.save_workflow_state(state);
+            ctx.db
+                .save_workflow_state(state)
+                .map_err(|error| format!("Unable to persist workflow state: {}", error))?;
+            if let Ok(Some(version)) = ctx
+                .db
+                .get_latest_workflow_version_for_workflow(&state.workflow_id)
+            {
+                if let Some(run_id) = version.run_id {
+                    let status = match &state.status {
+                        WorkflowStatus::Pending => "pending".to_string(),
+                        WorkflowStatus::Running => "running".to_string(),
+                        WorkflowStatus::Paused => "paused".to_string(),
+                        WorkflowStatus::Completed => "completed".to_string(),
+                        WorkflowStatus::Failed(reason) => format!("failed: {}", reason),
+                    };
+                    let state_json =
+                        serde_json::to_string(state).map_err(|error| error.to_string())?;
+                    ctx.db
+                        .save_workflow_execution(&crate::core::models::WorkflowExecutionRecord {
+                            id: state.execution_id.clone(),
+                            workflow_version_id: version.id,
+                            run_id: run_id.clone(),
+                            status: status.clone(),
+                            state_json,
+                            updated_at: chrono::Utc::now().to_rfc3339(),
+                        })
+                        .map_err(|error| {
+                            format!("Unable to persist workflow execution: {}", error)
+                        })?;
+                    let run_status = match &state.status {
+                        WorkflowStatus::Pending | WorkflowStatus::Running => "running",
+                        WorkflowStatus::Paused => "paused",
+                        WorkflowStatus::Completed => "completed",
+                        WorkflowStatus::Failed(_) => "failed",
+                    };
+                    ctx.db
+                        .update_orchestration_run_status(&run_id, run_status, None)
+                        .map_err(|error| {
+                            format!("Unable to update run from workflow execution: {}", error)
+                        })?;
+                    let _ = ctx
+                        .db
+                        .insert_run_event(&crate::core::models::RunEventRecord {
+                            id: uuid::Uuid::new_v4().to_string(),
+                            run_id,
+                            event_type: "workflow_execution_state".to_string(),
+                            actor_type: "system".to_string(),
+                            actor_id: None,
+                            task_id: None,
+                            payload: Some(format!(
+                                "Execution {} status {}",
+                                state.execution_id, status
+                            )),
+                            created_at: chrono::Utc::now().to_rfc3339(),
+                        });
+                }
+            }
         }
         Ok(())
     }
@@ -165,6 +334,13 @@ impl WorkflowEngine {
         drop(store);
         if let Some(ctx) = &self.execution_context {
             if let Ok(Some(state)) = ctx.db.load_workflow_state(execution_id) {
+                if self.get_workflow(&state.workflow_id).is_none() {
+                    if let Ok(Some(record)) = ctx.db.get_workflow(&state.workflow_id) {
+                        if let Ok(workflow) = Self::parse_validated_workflow(&record.definition) {
+                            self.register_workflow(workflow);
+                        }
+                    }
+                }
                 let mut store = self.state_store.write().unwrap();
                 store.insert(execution_id.to_string(), state.clone());
                 return Some(state);
@@ -272,10 +448,14 @@ impl WorkflowEngine {
                 }
 
                 if let Some(ctx) = &self.execution_context {
-                    let instance_id = ctx
-                        .team_instance_id
+                    let instance_id = workflow
+                        .instance_id
                         .clone()
-                        .unwrap_or_else(|| "sdg-instance-123".to_string());
+                        .or_else(|| ctx.team_instance_id.clone())
+                        .ok_or_else(|| {
+                            "Cannot dispatch an iFlow agent task without instance context."
+                                .to_string()
+                        })?;
 
                     let msg = crate::infrastructure::message_bus::routing::TeamMessage {
                         id: uuid::Uuid::new_v4().to_string(),
@@ -302,63 +482,11 @@ impl WorkflowEngine {
                     state.current_nodes.extend(node.next_nodes.clone());
                 }
             }
-            NodeType::SystemCommand {
-                command,
-                output_var,
-            } => {
-                if let Some(_ctx) = &self.execution_context {
-                    let output = tokio::process::Command::new("bash")
-                        .arg("-lc")
-                        .arg(command)
-                        .output()
-                        .await
-                        .map_err(|e| e.to_string())?;
-                    let mut text = String::from_utf8_lossy(&output.stdout).to_string();
-                    if !output.status.success() {
-                        let err = String::from_utf8_lossy(&output.stderr).to_string();
-                        text.push_str(&format!("\n{}", err));
-                    }
-                    if let Some(out_var) = output_var {
-                        state
-                            .data
-                            .set(out_var.clone(), serde_json::Value::String(text));
-                    }
-                    state.current_nodes.extend(node.next_nodes.clone());
-                } else {
-                    state.current_nodes.extend(node.next_nodes.clone());
-                }
-            }
-            NodeType::HttpRequest {
-                method,
-                url,
-                body_var,
-                output_var,
-            } => {
-                if let Some(_ctx) = &self.execution_context {
-                    let client = reqwest::Client::new();
-                    let mut req = match method.to_uppercase().as_str() {
-                        "POST" => client.post(url),
-                        "PUT" => client.put(url),
-                        "PATCH" => client.patch(url),
-                        "DELETE" => client.delete(url),
-                        _ => client.get(url),
-                    };
-                    if let Some(body_var) = body_var {
-                        if let Some(val) = state.data.get(body_var) {
-                            req = req.body(val.to_string());
-                        }
-                    }
-                    let resp = req.send().await.map_err(|e| e.to_string())?;
-                    let text = resp.text().await.map_err(|e| e.to_string())?;
-                    if let Some(out_var) = output_var {
-                        state
-                            .data
-                            .set(out_var.clone(), serde_json::Value::String(text));
-                    }
-                    state.current_nodes.extend(node.next_nodes.clone());
-                } else {
-                    state.current_nodes.extend(node.next_nodes.clone());
-                }
+            NodeType::SystemCommand { .. } | NodeType::HttpRequest { .. } => {
+                return Err(format!(
+                    "Node {} uses a disabled direct side effect. Execute mutations through governed agent tools.",
+                    node_id
+                ));
             }
             NodeType::Transform {
                 input_var,
@@ -473,6 +601,58 @@ impl WorkflowEngine {
         } else {
             Err("Pending node is not AgentTask".to_string())
         }
+    }
+
+    pub async fn redispatch_pending_agent_tasks(&self, execution_id: &str) -> Result<(), String> {
+        let state = self.get_state(execution_id).ok_or("Execution not found")?;
+        let workflow = self
+            .get_workflow(&state.workflow_id)
+            .ok_or("Workflow not found")?;
+        let ctx = self
+            .execution_context
+            .as_ref()
+            .ok_or("Execution context is not configured")?;
+        let instance_id = workflow
+            .instance_id
+            .clone()
+            .or_else(|| ctx.team_instance_id.clone())
+            .ok_or("Workflow has no instance scope")?;
+        for node_id in &state.pending_agent_tasks {
+            let node = workflow
+                .nodes
+                .get(node_id)
+                .ok_or_else(|| format!("Pending node {} is missing", node_id))?;
+            if let NodeType::AgentTask {
+                agent_id,
+                instruction,
+                input_vars,
+                ..
+            } = &node.node_type
+            {
+                let mut prompt = format!("Task Instruction:\n{}\n\nInputs:\n", instruction);
+                for var in input_vars {
+                    if let Some(value) = state.data.get(var) {
+                        prompt.push_str(&format!("{}: {}\n", var, value));
+                    }
+                }
+                ctx.team_bus
+                    .route_message(crate::infrastructure::message_bus::routing::TeamMessage {
+                        id: uuid::Uuid::new_v4().to_string(),
+                        team_instance_id: instance_id.clone(),
+                        sender_member_id: "system".to_string(),
+                        recipient_member_id: Some(agent_id.clone()),
+                        recipient_role: None,
+                        message_type:
+                            crate::infrastructure::message_bus::routing::MessageType::Direct,
+                        content: prompt,
+                        metadata: Some(format!("iflow_dispatch:{}:{}", execution_id, node_id)),
+                        delivery_status: "delivered".to_string(),
+                        created_at: chrono::Utc::now().to_rfc3339(),
+                    })
+                    .await?;
+            }
+        }
+        Ok(())
     }
 
     pub fn resolve_review(

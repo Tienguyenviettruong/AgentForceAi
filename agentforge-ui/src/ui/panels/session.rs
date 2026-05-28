@@ -1,15 +1,15 @@
-use crate::application::iflow_engine::engine::Workflow;
+use crate::application::iflow_engine::engine::WorkflowEngine;
 use gpui::EventEmitter;
 use gpui::{
     div, App, Context, Focusable, InteractiveElement, IntoElement, ParentElement, Render, Styled,
     Window,
 };
-use gpui_component::button::ButtonVariants;
 use gpui_component::dock::PanelEvent;
 use gpui_component::dock::{Panel, TitleStyle};
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::StyledExt;
-use gpui_component::{button::Button, h_flex, theme::ActiveTheme, v_flex};
+use gpui_component::{h_flex, theme::ActiveTheme, v_flex};
+use std::collections::HashSet;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum SkillStatus {
@@ -30,6 +30,8 @@ pub struct LearnedSkill {
 
 pub struct SessionPanel {
     focus_handle: gpui::FocusHandle,
+    builtin_skills: Vec<crate::application::skills::SkillMetadata>,
+    enabled_skill_ids: HashSet<String>,
     skills: Vec<LearnedSkill>,
     selected_skill_id: Option<String>,
 }
@@ -37,12 +39,23 @@ pub struct SessionPanel {
 impl SessionPanel {
     pub fn new(_window: &mut Window, cx: &mut App) -> Self {
         let db = crate::AppState::global(cx).db.clone();
+        let builtin_skills = crate::application::skills::builtin_skill_catalog();
+        let enabled_skill_ids = db
+            .list_capability_selections("default", "")
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|selection| selection.enabled && selection.capability_kind == "skill")
+            .map(|selection| selection.capability_id)
+            .collect();
         let mut skills = Vec::new();
 
         if let Ok(workflows) = db.list_workflows() {
             for wf in workflows {
+                if wf.origin_kind != "learned" {
+                    continue;
+                }
                 let mut steps = Vec::new();
-                if let Ok(workflow_def) = serde_json::from_str::<Workflow>(&wf.definition) {
+                if let Ok(workflow_def) = WorkflowEngine::parse_validated_draft(&wf.definition) {
                     for (_, node) in workflow_def.nodes {
                         steps.push(node.name);
                     }
@@ -53,8 +66,12 @@ impl SessionPanel {
                 skills.push(LearnedSkill {
                     id: wf.id.clone(),
                     name: wf.name,
-                    description: "Learned from MCP tool actions.".to_string(),
-                    status: SkillStatus::Active,
+                    description: "Learned workflow from recorded MCP actions. Review is required before it can be linked to an execution run.".to_string(),
+                    status: match wf.activation_status.as_str() {
+                        "active" => SkillStatus::Active,
+                        "paused" => SkillStatus::Paused,
+                        _ => SkillStatus::Learning,
+                    },
                     steps,
                     execution_count: 0,
                 });
@@ -65,6 +82,8 @@ impl SessionPanel {
 
         Self {
             focus_handle: cx.focus_handle(),
+            builtin_skills,
+            enabled_skill_ids,
             skills,
             selected_skill_id,
         }
@@ -73,7 +92,7 @@ impl SessionPanel {
 
 impl Panel for SessionPanel {
     fn panel_name(&self) -> &'static str {
-        "Skills & Behaviors"
+        "Learned Automations"
     }
 
     fn title(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
@@ -103,6 +122,80 @@ impl Render for SessionPanel {
             .bg(theme.background);
 
         let mut list_container = v_flex().flex_1().overflow_y_scrollbar();
+
+        list_container = list_container.child(
+            div()
+                .p_3()
+                .text_sm()
+                .font_bold()
+                .text_color(theme.muted_foreground)
+                .child("Agent Skills"),
+        );
+        for skill in self.builtin_skills.clone() {
+            let enabled = self.enabled_skill_ids.contains(&skill.id);
+            let skill_id = skill.id.clone();
+            let status = if enabled { "Enabled" } else { "Enable" };
+            let status_color = if enabled {
+                gpui::green()
+            } else {
+                theme.muted_foreground
+            };
+            list_container = list_container.child(
+                h_flex()
+                    .justify_between()
+                    .items_center()
+                    .p_3()
+                    .border_b_1()
+                    .border_color(theme.border)
+                    .cursor_pointer()
+                    .hover(|s| s.bg(theme.secondary))
+                    .on_mouse_down(
+                        gpui::MouseButton::Left,
+                        cx.listener(move |this, _, _, cx| {
+                            let enabled = !this.enabled_skill_ids.contains(&skill_id);
+                            let now = chrono::Utc::now().to_rfc3339();
+                            let state = crate::AppState::global(cx);
+                            let _ = state.db.upsert_capability_selection(
+                                &crate::core::models::CapabilitySelectionRecord {
+                                    id: uuid::Uuid::new_v4().to_string(),
+                                    scope_kind: "default".to_string(),
+                                    scope_id: String::new(),
+                                    capability_kind: "skill".to_string(),
+                                    capability_id: skill_id.clone(),
+                                    enabled,
+                                    selected_by: Some(state.current_actor_id.clone()),
+                                    created_at: now.clone(),
+                                    updated_at: now,
+                                },
+                            );
+                            if enabled {
+                                this.enabled_skill_ids.insert(skill_id.clone());
+                            } else {
+                                this.enabled_skill_ids.remove(&skill_id);
+                            }
+                            cx.notify();
+                        }),
+                    )
+                    .child(
+                        v_flex().child(div().text_sm().child(skill.name)).child(
+                            div()
+                                .text_xs()
+                                .text_color(theme.muted_foreground)
+                                .child(skill.category),
+                        ),
+                    )
+                    .child(div().text_xs().text_color(status_color).child(status)),
+            );
+        }
+        list_container = list_container.child(
+            div()
+                .p_3()
+                .mt_2()
+                .text_sm()
+                .font_bold()
+                .text_color(theme.muted_foreground)
+                .child("Learned Automations"),
+        );
 
         for skill in &self.skills {
             let is_selected = self.selected_skill_id == Some(skill.id.clone());
@@ -189,32 +282,20 @@ impl Render for SessionPanel {
                                     .child(skill.description.clone()),
                             ),
                     )
-                    .child(h_flex().gap_2().items_center().child({
-                        let mut btn = Button::new("toggle-status").label(
-                            if skill.status == SkillStatus::Active {
-                                "Pause Skill"
-                            } else {
-                                "Enable Auto-Run"
-                            },
-                        );
-                        if skill.status != SkillStatus::Active {
-                            btn = btn.primary();
-                        }
-                        let sid = selected_id.clone();
-                        btn.on_mouse_down(
-                            gpui::MouseButton::Left,
-                            cx.listener(move |this, _, _, cx| {
-                                if let Some(s) = this.skills.iter_mut().find(|s| s.id == sid) {
-                                    s.status = if s.status == SkillStatus::Active {
-                                        SkillStatus::Paused
-                                    } else {
-                                        SkillStatus::Active
-                                    };
-                                    cx.notify();
-                                }
+                    .child(
+                        div()
+                            .px_3()
+                            .py_2()
+                            .rounded_md()
+                            .bg(theme.secondary)
+                            .text_sm()
+                            .text_color(theme.muted_foreground)
+                            .child(match skill.status {
+                                SkillStatus::Learning => "Review required",
+                                SkillStatus::Active => "Linked to execution",
+                                SkillStatus::Paused => "Paused",
                             }),
-                        )
-                    }));
+                    );
 
                 let mut steps_list = v_flex().gap_3().mt_4();
                 for (i, step) in skill.steps.iter().enumerate() {
@@ -281,7 +362,7 @@ impl Render for SessionPanel {
                         div()
                             .text_sm()
                             .text_color(theme.muted_foreground)
-                            .child("Select a learned skill to view details"),
+                            .child("Select a learned automation to view its validated workflow"),
                     ),
             );
         }

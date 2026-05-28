@@ -14,7 +14,7 @@ impl<'a> DependencyManager<'a> {
         self.conn.execute(
             "CREATE TABLE IF NOT EXISTS task_dependencies (
                 task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-                depends_on_task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                depends_on_task_id TEXT NOT NULL,
                 PRIMARY KEY (task_id, depends_on_task_id)
             )",
             [],

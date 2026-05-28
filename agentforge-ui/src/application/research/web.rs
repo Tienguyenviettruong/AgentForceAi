@@ -60,7 +60,10 @@ impl WebSearchEngine {
 
         let search_query = build_search_query(&raw_query, &query.domains, query.recency_days);
         let engine = query.search_engine.to_ascii_lowercase();
-        let mut results = if engine == "bing" || has_env("BING_SEARCH_API_KEY") || has_env("AGENTFORGE_BING_SEARCH_API_KEY") {
+        let mut results = if engine == "bing"
+            || has_env("BING_SEARCH_API_KEY")
+            || has_env("AGENTFORGE_BING_SEARCH_API_KEY")
+        {
             bing_search(&search_query, max_results, query.recency_days).await
         } else if engine == "serpapi" || has_env("SERPAPI_API_KEY") {
             serpapi_search(&search_query, max_results, query.recency_days).await
@@ -122,7 +125,9 @@ pub fn build_research_notebook(query: &str, results: &[WebSearchResult]) -> Stri
     out.push_str(&format!("# Research Notebook: {}\n\n", query.trim()));
     out.push_str(&format!("- Created: {}\n", now));
     out.push_str(&format!("- Sources: {}\n", results.len()));
-    out.push_str("- Method: search results were fetched and normalized by AgentForge file intelligence.\n\n");
+    out.push_str(
+        "- Method: search results were fetched and normalized by AgentForge file intelligence.\n\n",
+    );
 
     out.push_str("## Source Index\n\n");
     for (ix, result) in results.iter().enumerate() {
@@ -142,7 +147,12 @@ pub fn build_research_notebook(query: &str, results: &[WebSearchResult]) -> Stri
         } else {
             result.content_summary.clone()
         };
-        out.push_str(&format!("### [{}] {}\n\n{}\n\n", ix + 1, result.title, summary));
+        out.push_str(&format!(
+            "### [{}] {}\n\n{}\n\n",
+            ix + 1,
+            result.title,
+            summary
+        ));
     }
 
     out.push_str("## Extracted Source Notes\n\n");
@@ -188,7 +198,7 @@ pub async fn save_research_notebook(
         return Ok(path.display().to_string());
     }
 
-    let item = KnowledgeItem::new(
+    let mut item = KnowledgeItem::new(
         if query.trim().is_empty() {
             "Research Notebook"
         } else {
@@ -198,6 +208,10 @@ pub async fn save_research_notebook(
         vec![Tag("research".to_string()), Tag("web".to_string())],
         RetentionPolicy::KeepForever,
     );
+    item.source_kind = "web_research".to_string();
+    if !query.trim().is_empty() {
+        item.source_uri_normalized = Some(format!("research://query/{}", slugify(query)));
+    }
     db.upsert_knowledge_item(&item)?;
     Ok("knowledge_db".to_string())
 }
@@ -510,10 +524,7 @@ fn serpapi_recency(days: Option<u32>) -> Option<String> {
 }
 
 fn summarize_content(content: &str, max_chars: usize) -> String {
-    let normalized = content
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
+    let normalized = content.split_whitespace().collect::<Vec<_>>().join(" ");
     file_intelligence::truncate_chars(&normalized, max_chars)
 }
 

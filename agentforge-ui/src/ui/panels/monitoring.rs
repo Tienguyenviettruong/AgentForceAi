@@ -134,10 +134,13 @@ impl Render for MonitoringPanel {
             );
 
         let content = match self.active_tab {
-            MonitoringTab::Dashboard => div()
-                .size_full()
-                .child(self.dashboard.render(cx))
-                .into_any_element(),
+            MonitoringTab::Dashboard => {
+                let db = crate::AppState::global(cx).db.clone();
+                div()
+                    .size_full()
+                    .child(self.dashboard.render(&db, cx))
+                    .into_any_element()
+            }
             MonitoringTab::TokenUsage => div()
                 .size_full()
                 .child(self.token_dashboard.clone())

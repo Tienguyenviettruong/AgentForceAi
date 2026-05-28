@@ -53,6 +53,7 @@ pub struct TeamWorkspacePanel {
     pub(crate) is_workspace_dropdown_open: bool,
     pub(crate) is_slash_dropdown_open: bool,
     pub(crate) selected_slash_command: Option<String>,
+    pub(crate) available_iflow_run_id: Option<String>,
     pub(crate) is_generating: bool,
     pub(crate) generation_cancel_flag: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     pub(crate) recent_workspaces: Vec<String>,
@@ -69,7 +70,7 @@ pub struct TeamWorkspacePanel {
 
 impl TeamWorkspacePanel {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let _db = crate::AppState::global(cx).db.clone();
+        let db = crate::AppState::global(cx).db.clone();
         let team_bus = crate::AppState::global(cx).team_bus.clone();
         let team_service = crate::AppState::global(cx).team_service.clone();
 
@@ -114,6 +115,7 @@ impl TeamWorkspacePanel {
             is_workspace_dropdown_open: false,
             is_slash_dropdown_open: false,
             selected_slash_command: None,
+            available_iflow_run_id: db.get_setting("iflow_selected_run_id").ok().flatten(),
             is_generating: false,
             generation_cancel_flag: None,
             recent_workspaces: Vec::new(),

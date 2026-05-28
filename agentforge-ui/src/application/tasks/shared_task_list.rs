@@ -14,12 +14,13 @@ impl<'a> SharedTaskList<'a> {
 
     pub fn create_task(&self, task: &Task) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO tasks (id, team_id, instance_id, assignee_id, status, priority, payload, claimed_at, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            "INSERT INTO tasks (id, team_id, instance_id, run_id, assignee_id, status, priority, payload, claimed_at, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 task.id,
                 task.team_id,
                 task.instance_id,
+                task.run_id,
                 task.assignee_id,
                 task.status,
                 task.priority,

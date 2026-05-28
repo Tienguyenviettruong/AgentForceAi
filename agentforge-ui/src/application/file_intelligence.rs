@@ -71,8 +71,8 @@ impl FileAnalysis {
 
 pub async fn analyze_path(path: impl AsRef<Path>, options: AnalyzeOptions) -> Result<FileAnalysis> {
     let path = path.as_ref().to_path_buf();
-    let bytes = std::fs::read(&path)
-        .with_context(|| format!("Failed to read file {}", path.display()))?;
+    let bytes =
+        std::fs::read(&path).with_context(|| format!("Failed to read file {}", path.display()))?;
     let source = path.display().to_string();
     let file_name = path
         .file_name()
@@ -95,7 +95,8 @@ pub async fn analyze_path(path: impl AsRef<Path>, options: AnalyzeOptions) -> Re
     if extension.as_deref() == Some("pdf") {
         match pdf_extract::extract_text(&path) {
             Ok(text) if !text.trim().is_empty() => {
-                analysis.text = truncate_chars(&normalize_space_loose(&text), options.max_text_chars)
+                analysis.text =
+                    truncate_chars(&normalize_space_loose(&text), options.max_text_chars)
             }
             Ok(_) => analysis
                 .notes
@@ -377,8 +378,8 @@ fn classify_kind(extension: Option<&str>, mime: Option<&str>, bytes: &[u8]) -> S
             "mp3" | "wav" | "m4a" | "aac" | "ogg" | "flac" => return "audio".to_string(),
             "txt" | "md" | "markdown" | "json" | "jsonl" | "toml" | "yaml" | "yml" | "csv"
             | "tsv" | "log" | "rs" | "py" | "js" | "jsx" | "ts" | "tsx" | "css" | "scss"
-            | "java" | "c" | "h" | "cpp" | "hpp" | "cs" | "go" | "php" | "rb" | "sql"
-            | "sh" | "ps1" | "bat" => return "text".to_string(),
+            | "java" | "c" | "h" | "cpp" | "hpp" | "cs" | "go" | "php" | "rb" | "sql" | "sh"
+            | "ps1" | "bat" => return "text".to_string(),
             "doc" | "xls" | "ppt" => return "binary".to_string(),
             _ => {}
         }
@@ -681,7 +682,9 @@ fn extract_xlsx_sheet(xml: &str, shared_strings: &[String]) -> String {
 fn extract_zip_listing(bytes: &[u8], notes: &mut Vec<String>) -> Result<String> {
     let mut archive = ZipArchive::new(Cursor::new(bytes))?;
     let names = zip_names(&mut archive)?;
-    notes.push("Archive listing only; nested file extraction is not expanded automatically.".to_string());
+    notes.push(
+        "Archive listing only; nested file extraction is not expanded automatically.".to_string(),
+    );
     Ok(names.join("\n"))
 }
 
@@ -741,7 +744,8 @@ fn media_metadata(file_name: &str, bytes: &[u8], kind: &str, notes: &mut Vec<Str
         } else {
             notes.push("Image dimensions could not be detected from header.".to_string());
         }
-        notes.push("For visual semantics, configure AGENTFORGE_FILE_UNDERSTANDING_URL.".to_string());
+        notes
+            .push("For visual semantics, configure AGENTFORGE_FILE_UNDERSTANDING_URL.".to_string());
     } else {
         notes.push(format!(
             "Built-in {} support extracts metadata only. Configure AGENTFORGE_FILE_UNDERSTANDING_URL for semantic analysis.",
@@ -789,7 +793,18 @@ fn jpeg_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
         }
         if matches!(
             marker,
-            0xc0 | 0xc1 | 0xc2 | 0xc3 | 0xc5 | 0xc6 | 0xc7 | 0xc9 | 0xca | 0xcb | 0xcd | 0xce | 0xcf
+            0xc0 | 0xc1
+                | 0xc2
+                | 0xc3
+                | 0xc5
+                | 0xc6
+                | 0xc7
+                | 0xc9
+                | 0xca
+                | 0xcb
+                | 0xcd
+                | 0xce
+                | 0xcf
         ) {
             let height = u16::from_be_bytes(bytes[pos + 3..pos + 5].try_into().ok()?) as u32;
             let width = u16::from_be_bytes(bytes[pos + 5..pos + 7].try_into().ok()?) as u32;
@@ -995,4 +1010,3 @@ fn display_name_from_source(source: &str) -> String {
         .unwrap_or(source)
         .to_string()
 }
-

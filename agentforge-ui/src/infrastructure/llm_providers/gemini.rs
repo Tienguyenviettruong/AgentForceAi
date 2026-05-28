@@ -1,8 +1,8 @@
 use super::{BaseProviderAdapter, ChatMessage, ChatResponse, TokenUsage};
+use crate::infrastructure::security::keychain::resolve_credential_reference;
 use anyhow::{anyhow, Result};
 use futures::stream::StreamExt;
 use gpui::SharedString;
-use std::env;
 use std::future::Future;
 use std::pin::Pin;
 
@@ -53,16 +53,12 @@ impl GeminiAdapter {
 
         Box::pin(async move {
             let config = config.ok_or_else(|| anyhow!("Adapter not initialized"))?;
-            let api_key = match config.api_key_ref.clone() {
-                Some(v) if v.starts_with("env:") => std::env::var(v.trim_start_matches("env:"))
-                    .ok()
-                    .ok_or_else(|| anyhow!("API key env var missing"))?,
-                Some(v) => v,
-                None => std::env::var("GEMINI_API_KEY")
-                    .ok()
-                    .or_else(|| std::env::var("GOOGLE_API_KEY").ok())
-                    .ok_or_else(|| anyhow!("API key missing"))?,
-            };
+            let api_key = resolve_credential_reference(
+                config.api_key_ref.as_deref(),
+                &["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+            )
+            .await?
+            .ok_or_else(|| anyhow!("API key missing"))?;
             let model = config.model;
 
             // Build parts array: text + media files
@@ -185,20 +181,16 @@ impl BaseProviderAdapter for GeminiAdapter {
         let client = self.client.clone();
         Box::pin(async move {
             let config = config.ok_or_else(|| anyhow!("Adapter not initialized"))?;
-            let api_key = match config.api_key_ref.clone() {
-                Some(v) if v.starts_with("env:") => {
-                    env::var(v.trim_start_matches("env:")).ok().ok_or_else(|| {
-                        anyhow!("API key env var missing: {}", v.trim_start_matches("env:"))
-                    })?
-                }
-                Some(v) => v,
-                None => env::var("GEMINI_API_KEY")
-                    .ok()
-                    .or_else(|| env::var("GOOGLE_API_KEY").ok())
-                    .ok_or_else(|| {
-                        anyhow!("API key missing (set provider api_key_ref or env GEMINI_API_KEY)")
-                    })?,
-            };
+            let api_key = resolve_credential_reference(
+                config.api_key_ref.as_deref(),
+                &["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+            )
+            .await?
+            .ok_or_else(|| {
+                anyhow!(
+                    "API key missing (set provider api_key_ref to secret:// or env:, or configure GEMINI_API_KEY)"
+                )
+            })?;
             let model = config.model;
 
             let prompt = messages
@@ -293,20 +285,16 @@ impl BaseProviderAdapter for GeminiAdapter {
         let client = self.client.clone();
         Box::pin(async move {
             let config = config.ok_or_else(|| anyhow!("Adapter not initialized"))?;
-            let api_key = match config.api_key_ref.clone() {
-                Some(v) if v.starts_with("env:") => {
-                    env::var(v.trim_start_matches("env:")).ok().ok_or_else(|| {
-                        anyhow!("API key env var missing: {}", v.trim_start_matches("env:"))
-                    })?
-                }
-                Some(v) => v,
-                None => env::var("GEMINI_API_KEY")
-                    .ok()
-                    .or_else(|| env::var("GOOGLE_API_KEY").ok())
-                    .ok_or_else(|| {
-                        anyhow!("API key missing (set provider api_key_ref or env GEMINI_API_KEY)")
-                    })?,
-            };
+            let api_key = resolve_credential_reference(
+                config.api_key_ref.as_deref(),
+                &["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+            )
+            .await?
+            .ok_or_else(|| {
+                anyhow!(
+                    "API key missing (set provider api_key_ref to secret:// or env:, or configure GEMINI_API_KEY)"
+                )
+            })?;
             let model = config.model;
 
             let prompt = messages

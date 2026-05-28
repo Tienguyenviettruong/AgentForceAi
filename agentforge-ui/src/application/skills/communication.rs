@@ -10,6 +10,7 @@ impl Skill for SummarizeSkill {
             id: "communication.summarize".to_string(),
             name: "Summarize".to_string(),
             description: "Condenses long text into key points.".to_string(),
+            instructions: "Summarize the supplied material accurately and preserve decisions, risks and unresolved questions.".to_string(),
             version: "1.0".to_string(),
             category: "Communication".to_string(),
         }
@@ -38,6 +39,7 @@ impl Skill for TranslateSkill {
             id: "communication.translate".to_string(),
             name: "Translate".to_string(),
             description: "Translates text between languages.".to_string(),
+            instructions: "Translate faithfully while preserving technical identifiers, formatting and intended tone.".to_string(),
             version: "1.0".to_string(),
             category: "Communication".to_string(),
         }
@@ -72,6 +74,7 @@ impl Skill for ExplainSkill {
             id: "communication.explain".to_string(),
             name: "Explain".to_string(),
             description: "Explains complex concepts in simple terms.".to_string(),
+            instructions: "Explain concepts precisely using the current context, separating verified behavior from proposals.".to_string(),
             version: "1.0".to_string(),
             category: "Communication".to_string(),
         }

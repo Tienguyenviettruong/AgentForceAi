@@ -11,6 +11,33 @@ pub enum OperatingMode {
     Autonomous,
 }
 
+impl OperatingMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::HumanInteraction => "Human Interaction",
+            Self::Supervision => "Supervision",
+            Self::Autonomous => "Autonomous",
+        }
+    }
+
+    pub fn storage_value(self) -> &'static str {
+        match self {
+            Self::HumanInteraction => "human_interaction",
+            Self::Supervision => "supervision",
+            Self::Autonomous => "autonomous",
+        }
+    }
+
+    pub fn from_storage(value: &str) -> Option<Self> {
+        match value {
+            "human_interaction" | "Human Interaction" => Some(Self::HumanInteraction),
+            "supervision" | "Supervision" => Some(Self::Supervision),
+            "autonomous" | "Autonomous" | "Autonomous Mode" => Some(Self::Autonomous),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModeTransitionEvent {
     pub from: OperatingMode,
@@ -64,5 +91,37 @@ impl ModeManager {
 
     pub fn history(&self) -> &[ModeTransitionEvent] {
         &self.history
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ModeManager, OperatingMode};
+
+    #[test]
+    fn storage_values_round_trip() {
+        for mode in [
+            OperatingMode::HumanInteraction,
+            OperatingMode::Supervision,
+            OperatingMode::Autonomous,
+        ] {
+            assert_eq!(
+                OperatingMode::from_storage(mode.storage_value()),
+                Some(mode)
+            );
+        }
+    }
+
+    #[test]
+    fn transition_updates_current_mode_and_history() {
+        let mut manager = ModeManager::new(OperatingMode::HumanInteraction);
+
+        manager
+            .transition_to(OperatingMode::Autonomous, "test transition")
+            .expect("valid transition");
+
+        assert_eq!(manager.current_mode(), OperatingMode::Autonomous);
+        assert_eq!(manager.history().len(), 1);
+        assert_eq!(manager.history()[0].reason, "test transition");
     }
 }

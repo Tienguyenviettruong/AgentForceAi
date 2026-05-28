@@ -1,8 +1,8 @@
 use super::{BaseProviderAdapter, ChatMessage, ChatResponse, TokenUsage};
+use crate::infrastructure::security::keychain::resolve_credential_reference;
 use anyhow::{anyhow, Result};
 use futures::stream::StreamExt;
 use gpui::SharedString;
-use std::env;
 use std::future::Future;
 use std::pin::Pin;
 
@@ -105,16 +105,16 @@ impl BaseProviderAdapter for OpenRouterAdapter {
 
         Box::pin(async move {
             let config = config.ok_or_else(|| anyhow!("Adapter not initialized"))?;
-            let api_key = match config.api_key_ref.clone() {
-                Some(v) if v.starts_with("env:") => env::var(v.trim_start_matches("env:"))
-                    .ok()
-                    .ok_or_else(|| anyhow!("API key env var missing: {}", v.trim_start_matches("env:")))?,
-                Some(v) => v,
-                None => env::var("AGENTFORGE_OPENROUTER_API_KEY")
-                    .ok()
-                    .or_else(|| env::var("OPENROUTER_API_KEY").ok())
-                    .ok_or_else(|| anyhow!("API key missing (set provider api_key_ref or env AGENTFORGE_OPENROUTER_API_KEY)"))?,
-            };
+            let api_key = resolve_credential_reference(
+                config.api_key_ref.as_deref(),
+                &["AGENTFORGE_OPENROUTER_API_KEY", "OPENROUTER_API_KEY"],
+            )
+            .await?
+            .ok_or_else(|| {
+                anyhow!(
+                    "API key missing (set provider api_key_ref to secret:// or env:, or configure AGENTFORGE_OPENROUTER_API_KEY)"
+                )
+            })?;
             let model = config.model;
 
             let req_messages: Vec<OpenRouterMessage> = messages
@@ -205,16 +205,16 @@ impl BaseProviderAdapter for OpenRouterAdapter {
 
         Box::pin(async move {
             let config = config.ok_or_else(|| anyhow!("Adapter not initialized"))?;
-            let api_key = match config.api_key_ref.clone() {
-                Some(v) if v.starts_with("env:") => env::var(v.trim_start_matches("env:"))
-                    .ok()
-                    .ok_or_else(|| anyhow!("API key env var missing: {}", v.trim_start_matches("env:")))?,
-                Some(v) => v,
-                None => env::var("AGENTFORGE_OPENROUTER_API_KEY")
-                    .ok()
-                    .or_else(|| env::var("OPENROUTER_API_KEY").ok())
-                    .ok_or_else(|| anyhow!("API key missing (set provider api_key_ref or env AGENTFORGE_OPENROUTER_API_KEY)"))?,
-            };
+            let api_key = resolve_credential_reference(
+                config.api_key_ref.as_deref(),
+                &["AGENTFORGE_OPENROUTER_API_KEY", "OPENROUTER_API_KEY"],
+            )
+            .await?
+            .ok_or_else(|| {
+                anyhow!(
+                    "API key missing (set provider api_key_ref to secret:// or env:, or configure AGENTFORGE_OPENROUTER_API_KEY)"
+                )
+            })?;
             let model = config.model;
 
             let req_messages: Vec<OpenRouterMessage> = messages

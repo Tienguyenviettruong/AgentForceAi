@@ -32,17 +32,7 @@ impl RoleManager {
     }
 
     pub fn load_roles(&self) -> Result<()> {
-        // Here we could load existing roles into memory, or ensure some default roles exist.
-        // For example, ensuring an 'admin' role exists for the SDG team.
-        let admin_role = Role {
-            id: "admin-role-123".to_string(),
-            team_id: "sdg-team-123".to_string(), // Ensure this matches SDG team ID
-            name: "Admin".to_string(),
-            permissions: Some("all".to_string()),
-            capabilities: Some("all".to_string()),
-        };
-        // ignore error if it already exists
-        let _ = self.create_role(&admin_role);
+        // Routing roles are user-managed business data; security grants use security_roles.
         Ok(())
     }
 }
