@@ -122,7 +122,7 @@ impl CapabilityRouter {
     ///
     /// # Arguments
     /// * `path` - Đường dẫn tới file
-    /// * `capability` - Khả năng của model hiện tại  
+    /// * `capability` - Khả năng của model hiện tại
     /// * `options` - Tuỳ chọn extraction (text limit, ...)
     pub async fn route_attachment(
         path: &Path,

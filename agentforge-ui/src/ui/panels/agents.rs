@@ -209,7 +209,7 @@ impl Render for AgentsPanel {
                         .content_start()
                         .gap(px(16.))
                         .children(self.agents.iter().map(|agent| {
-                            
+
                             let role = agent.profile_position();
                             let details = agent
                                 .profile_details()

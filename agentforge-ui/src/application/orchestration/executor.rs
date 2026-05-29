@@ -21,6 +21,104 @@ pub struct ToolCall {
     pub arguments: serde_json::Value,
 }
 
+#[derive(Clone, Debug)]
+struct ContextTokenizerProfile {
+    chars_per_token: usize,
+    cjk_chars_per_token: usize,
+    punctuation_chars_per_token: usize,
+    newline_chars_per_token: usize,
+}
+
+impl ContextTokenizerProfile {
+    fn for_provider_model(provider_id: &str, model: &str) -> Self {
+        let identity = format!(
+            "{} {}",
+            provider_id.to_ascii_lowercase(),
+            model.to_ascii_lowercase()
+        );
+        if identity.contains("claude") {
+            Self {
+                chars_per_token: 3,
+                cjk_chars_per_token: 1,
+                punctuation_chars_per_token: 4,
+                newline_chars_per_token: 2,
+            }
+        } else if identity.contains("qwen")
+            || identity.contains("deepseek")
+            || identity.contains("llama")
+            || identity.contains("mistral")
+            || identity.contains("codestral")
+            || identity.contains("gemma")
+        {
+            Self {
+                chars_per_token: 3,
+                cjk_chars_per_token: 1,
+                punctuation_chars_per_token: 4,
+                newline_chars_per_token: 2,
+            }
+        } else if identity.contains("gemini") {
+            Self {
+                chars_per_token: 4,
+                cjk_chars_per_token: 1,
+                punctuation_chars_per_token: 5,
+                newline_chars_per_token: 2,
+            }
+        } else {
+            Self {
+                chars_per_token: 4,
+                cjk_chars_per_token: 1,
+                punctuation_chars_per_token: 6,
+                newline_chars_per_token: 2,
+            }
+        }
+    }
+
+    fn estimate_tokens(&self, content: &str) -> usize {
+        if content.is_empty() {
+            return 0;
+        }
+
+        let mut text_chars = 0usize;
+        let mut cjk_chars = 0usize;
+        let mut punctuation_chars = 0usize;
+        let mut newline_chars = 0usize;
+        for character in content.chars() {
+            if character == '\n' {
+                newline_chars += 1;
+            } else if Self::is_cjk(character) {
+                cjk_chars += 1;
+            } else if character.is_ascii_punctuation() {
+                punctuation_chars += 1;
+            } else {
+                text_chars += 1;
+            }
+        }
+
+        let char_based = text_chars.div_ceil(self.chars_per_token)
+            + cjk_chars.div_ceil(self.cjk_chars_per_token)
+            + punctuation_chars.div_ceil(self.punctuation_chars_per_token)
+            + newline_chars.div_ceil(self.newline_chars_per_token);
+        let word_based = content.split_whitespace().count();
+        char_based.max(word_based).max(1)
+    }
+
+    fn is_cjk(character: char) -> bool {
+        let codepoint = character as u32;
+        matches!(
+            codepoint,
+            0x4E00..=0x9FFF
+                | 0x3400..=0x4DBF
+                | 0x20000..=0x2A6DF
+                | 0x2A700..=0x2B73F
+                | 0x2B740..=0x2B81F
+                | 0x2B820..=0x2CEAF
+                | 0x3040..=0x309F
+                | 0x30A0..=0x30FF
+                | 0xAC00..=0xD7AF
+        )
+    }
+}
+
 pub struct AgentExecutor {
     provider: Arc<dyn BaseProviderAdapter>,
     mcp_registry: Arc<McpToolRegistry>,
@@ -83,15 +181,13 @@ impl AgentExecutor {
     }
 
     fn invocation_record_id(&self, invocation_id: &str) -> Option<String> {
-        self.run_id
-            .as_ref()
-            .map(|run_id| {
-                if invocation_id.starts_with(&format!("{}:", run_id)) {
-                    invocation_id.to_string()
-                } else {
-                    format!("{}:{}", run_id, invocation_id)
-                }
-            })
+        self.run_id.as_ref().map(|run_id| {
+            if invocation_id.starts_with(&format!("{}:", run_id)) {
+                invocation_id.to_string()
+            } else {
+                format!("{}:{}", run_id, invocation_id)
+            }
+        })
     }
 
     fn finalize_invocation(&self, invocation_id: Option<&str>, result: &str) {
@@ -128,22 +224,21 @@ impl AgentExecutor {
             return Ok(());
         };
         for _ in 0..8 {
-            let Some(invocation) = self
-                .db
-                .get_next_approved_tool_invocation_for_run(run_id)?
+            let Some(invocation) = self.db.get_next_approved_tool_invocation_for_run(run_id)?
             else {
                 break;
             };
-            let associated_data =
-                format!("{}:{}:{}", invocation.run_id, invocation.tool_name, invocation.id);
-            let opened_payload =
-                crate::infrastructure::security::keychain::open_sensitive_payload(
-                    &invocation.sealed_payload_json,
-                    &associated_data,
-                )
-                .map_err(|error| {
-                    anyhow::anyhow!("Approved invocation payload cannot be opened: {}", error)
-                })?;
+            let associated_data = format!(
+                "{}:{}:{}",
+                invocation.run_id, invocation.tool_name, invocation.id
+            );
+            let opened_payload = crate::infrastructure::security::keychain::open_sensitive_payload(
+                &invocation.sealed_payload_json,
+                &associated_data,
+            )
+            .map_err(|error| {
+                anyhow::anyhow!("Approved invocation payload cannot be opened: {}", error)
+            })?;
             let payload: serde_json::Value =
                 serde_json::from_str(&opened_payload).map_err(|error| {
                     anyhow::anyhow!("Approved invocation payload cannot be decoded: {}", error)
@@ -238,23 +333,50 @@ impl AgentExecutor {
             .join("\n")
     }
 
-    fn bounded_untrusted_context(content: &str, remaining_chars: &mut usize) -> String {
-        if *remaining_chars == 0 {
+    fn context_tokenizer_profile(&self) -> ContextTokenizerProfile {
+        let provider = self.provider.provider_id();
+        let model = self
+            .db
+            .get_agent(&self.agent_id)
+            .ok()
+            .flatten()
+            .and_then(|agent| self.db.get_provider_by_name(&agent.provider).ok().flatten())
+            .map(|provider| provider.model.to_ascii_lowercase())
+            .unwrap_or_default();
+        ContextTokenizerProfile::for_provider_model(provider, &model)
+    }
+
+    fn take_context_budget(&self, content: &str, remaining_tokens: &mut usize) -> String {
+        if *remaining_tokens == 0 {
             return String::new();
         }
-        let sanitized = Self::redact_untrusted_context(content);
-        let output = sanitized.chars().take(*remaining_chars).collect::<String>();
-        *remaining_chars = remaining_chars.saturating_sub(output.chars().count());
+        let profile = self.context_tokenizer_profile();
+        let mut output = String::new();
+        for character in content.chars() {
+            output.push(character);
+            if profile.estimate_tokens(&output) > *remaining_tokens {
+                output.pop();
+                break;
+            }
+        }
+        let consumed = profile.estimate_tokens(&output);
+        *remaining_tokens = remaining_tokens.saturating_sub(consumed);
         output
     }
 
-    fn bounded_governed_context(content: &str, remaining_chars: &mut usize) -> String {
-        if *remaining_chars == 0 {
+    fn bounded_untrusted_context(&self, content: &str, remaining_tokens: &mut usize) -> String {
+        if *remaining_tokens == 0 {
             return String::new();
         }
-        let output = content.chars().take(*remaining_chars).collect::<String>();
-        *remaining_chars = remaining_chars.saturating_sub(output.chars().count());
-        output
+        let sanitized = Self::redact_untrusted_context(content);
+        self.take_context_budget(&sanitized, remaining_tokens)
+    }
+
+    fn bounded_governed_context(&self, content: &str, remaining_tokens: &mut usize) -> String {
+        if *remaining_tokens == 0 {
+            return String::new();
+        }
+        self.take_context_budget(content, remaining_tokens)
     }
 
     fn persist_request_context_snapshot(
@@ -789,14 +911,22 @@ impl AgentExecutor {
         // 2. Semantic Memory (RAG) — hybrid FTS + vector search
         let mut context_sources = Vec::<crate::core::models::LlmContextSourceRecord>::new();
         let mut rag_context = String::new();
-        let mut remaining_retrieval_chars = self
+        let mut remaining_retrieval_tokens = self
             .db
-            .get_setting("governance_max_retrieved_context_chars")
+            .get_setting("governance_max_retrieved_context_tokens")
             .ok()
             .flatten()
             .and_then(|value| value.parse::<usize>().ok())
-            .unwrap_or(12_000)
-            .clamp(1_000, 50_000);
+            .or_else(|| {
+                self.db
+                    .get_setting("governance_max_retrieved_context_chars")
+                    .ok()
+                    .flatten()
+                    .and_then(|value| value.parse::<usize>().ok())
+                    .map(|chars| chars.div_ceil(4))
+            })
+            .unwrap_or(3_000)
+            .clamp(250, 12_500);
         if let Some(last_msg) = history.last() {
             if last_msg.role == "user" {
                 let query = last_msg.content.to_string();
@@ -815,9 +945,9 @@ impl AgentExecutor {
                                 entry.run_id.as_deref().unwrap_or("none"),
                                 entry.content
                             );
-                            let injected = Self::bounded_untrusted_context(
+                            let injected = self.bounded_untrusted_context(
                                 &source_block,
-                                &mut remaining_retrieval_chars,
+                                &mut remaining_retrieval_tokens,
                             );
                             if injected.is_empty() {
                                 break;
@@ -854,9 +984,9 @@ impl AgentExecutor {
                                 item.origin_session_id.as_deref().unwrap_or("none"),
                                 item.content
                             );
-                            let injected = Self::bounded_untrusted_context(
+                            let injected = self.bounded_untrusted_context(
                                 &source_block,
-                                &mut remaining_retrieval_chars,
+                                &mut remaining_retrieval_tokens,
                             );
                             if injected.is_empty() {
                                 break;
@@ -893,9 +1023,9 @@ impl AgentExecutor {
                                         "Document: {} (sim: {:.2})\n{}\n\n",
                                         title, sim, chunk_content
                                     );
-                                    let injected = Self::bounded_untrusted_context(
+                                    let injected = self.bounded_untrusted_context(
                                         &source_block,
-                                        &mut remaining_retrieval_chars,
+                                        &mut remaining_retrieval_tokens,
                                     );
                                     if injected.is_empty() {
                                         break;
@@ -930,14 +1060,22 @@ impl AgentExecutor {
 
         // 3. Include persisted runtime context in the auditable prompt assembly.
         let mut orchestration_context = String::new();
-        let mut remaining_governed_chars = self
+        let mut remaining_governed_tokens = self
             .db
-            .get_setting("governance_max_governed_context_chars")
+            .get_setting("governance_max_governed_context_tokens")
             .ok()
             .flatten()
             .and_then(|value| value.parse::<usize>().ok())
-            .unwrap_or(16_000)
-            .clamp(2_000, 64_000);
+            .or_else(|| {
+                self.db
+                    .get_setting("governance_max_governed_context_chars")
+                    .ok()
+                    .flatten()
+                    .and_then(|value| value.parse::<usize>().ok())
+                    .map(|chars| chars.div_ceil(4))
+            })
+            .unwrap_or(4_000)
+            .clamp(500, 16_000);
         let mut snapshot_mode = None;
         if let Some(run_id) = &self.run_id {
             if let Ok(Some(run)) = self.db.get_orchestration_run(run_id) {
@@ -948,7 +1086,7 @@ impl AgentExecutor {
                     run.id, run.goal, run.mode, run.status, run.instance_id
                 );
                 let injected =
-                    Self::bounded_governed_context(&run_context, &mut remaining_governed_chars);
+                    self.bounded_governed_context(&run_context, &mut remaining_governed_tokens);
                 if !injected.is_empty() {
                     orchestration_context.push_str(&injected);
                     context_sources.push(crate::core::models::LlmContextSourceRecord {
@@ -974,7 +1112,7 @@ impl AgentExecutor {
                     case_context
                 );
                 let injected =
-                    Self::bounded_governed_context(&case_block, &mut remaining_governed_chars);
+                    self.bounded_governed_context(&case_block, &mut remaining_governed_tokens);
                 if !injected.is_empty() {
                     orchestration_context.push_str(&injected);
                     context_sources.push(crate::core::models::LlmContextSourceRecord {
@@ -999,10 +1137,8 @@ impl AgentExecutor {
                             grant.token_limit,
                             grant.expires_at
                         );
-                        let injected = Self::bounded_governed_context(
-                            &grant_text,
-                            &mut remaining_governed_chars,
-                        );
+                        let injected = self
+                            .bounded_governed_context(&grant_text, &mut remaining_governed_tokens);
                         if !injected.is_empty() {
                             orchestration_context.push_str(&injected);
                             context_sources.push(crate::core::models::LlmContextSourceRecord {
@@ -1026,10 +1162,8 @@ impl AgentExecutor {
                         "\n--- RUN ARTIFACT METADATA ---\nKind: {}\nPath: {}\nHash: {}\n---\n",
                         artifact.artifact_kind, artifact.path, artifact.content_hash
                     );
-                    let injected = Self::bounded_governed_context(
-                        &artifact_text,
-                        &mut remaining_governed_chars,
-                    );
+                    let injected = self
+                        .bounded_governed_context(&artifact_text, &mut remaining_governed_tokens);
                     if !injected.is_empty() {
                         orchestration_context.push_str(&injected);
                         context_sources.push(crate::core::models::LlmContextSourceRecord {
@@ -1048,25 +1182,22 @@ impl AgentExecutor {
             }
         }
 
-        let learning = crate::application::orchestration::learning::LearningService::new(
-            self.db.clone(),
-        );
+        let learning =
+            crate::application::orchestration::learning::LearningService::new(self.db.clone());
         if let Ok(lessons) = learning.active_lessons_context(&self.team_instance_id) {
             if !lessons.is_empty() {
-                let header =
-                    "\n--- GOVERNED ACTIVE LESSONS (PROMOTED OPERATING GUIDANCE) ---\n";
-                orchestration_context.push_str(&Self::bounded_governed_context(
-                    header,
-                    &mut remaining_governed_chars,
-                ));
+                let header = "\n--- GOVERNED ACTIVE LESSONS (PROMOTED OPERATING GUIDANCE) ---\n";
+                orchestration_context.push_str(
+                    &self.bounded_governed_context(header, &mut remaining_governed_tokens),
+                );
                 for lesson in lessons {
                     let lesson_text = format!(
                         "Lesson {} [{}:{}]: {}",
                         lesson.id, lesson.scope_kind, lesson.scope_id, lesson.instruction
                     );
-                    let injected = Self::bounded_governed_context(
+                    let injected = self.bounded_governed_context(
                         &format!("- {}\n", lesson_text),
-                        &mut remaining_governed_chars,
+                        &mut remaining_governed_tokens,
                     );
                     if !injected.is_empty() {
                         orchestration_context.push_str(&injected);
@@ -1083,10 +1214,9 @@ impl AgentExecutor {
                         });
                     }
                 }
-                orchestration_context.push_str(&Self::bounded_governed_context(
-                    "---\n",
-                    &mut remaining_governed_chars,
-                ));
+                orchestration_context.push_str(
+                    &self.bounded_governed_context("---\n", &mut remaining_governed_tokens),
+                );
             }
         }
 
@@ -1105,9 +1235,9 @@ impl AgentExecutor {
             .filter(|skill| selected_skill_ids.contains(&skill.skill_id))
             .collect::<Vec<_>>();
         if !selected_skills.is_empty() || !selected_promoted_skills.is_empty() {
-            skills_context.push_str(&Self::bounded_governed_context(
+            skills_context.push_str(&self.bounded_governed_context(
                 "\n\n--- ENABLED SKILL INSTRUCTIONS ---\n",
-                &mut remaining_governed_chars,
+                &mut remaining_governed_tokens,
             ));
             for skill in &selected_skills {
                 let skill_text = format!(
@@ -1115,7 +1245,7 @@ impl AgentExecutor {
                     skill.name, skill.id, skill.description, skill.instructions
                 );
                 let injected =
-                    Self::bounded_governed_context(&skill_text, &mut remaining_governed_chars);
+                    self.bounded_governed_context(&skill_text, &mut remaining_governed_tokens);
                 if !injected.is_empty() {
                     skills_context.push_str(&injected);
                     context_sources.push(crate::core::models::LlmContextSourceRecord {
@@ -1137,7 +1267,7 @@ impl AgentExecutor {
                     skill.skill_id, skill.version, skill.instructions
                 );
                 let injected =
-                    Self::bounded_governed_context(&skill_text, &mut remaining_governed_chars);
+                    self.bounded_governed_context(&skill_text, &mut remaining_governed_tokens);
                 if !injected.is_empty() {
                     skills_context.push_str(&injected);
                     context_sources.push(crate::core::models::LlmContextSourceRecord {
@@ -1153,10 +1283,8 @@ impl AgentExecutor {
                     });
                 }
             }
-            skills_context.push_str(&Self::bounded_governed_context(
-                "---\n",
-                &mut remaining_governed_chars,
-            ));
+            skills_context
+                .push_str(&self.bounded_governed_context("---\n", &mut remaining_governed_tokens));
         }
 
         let injection = format!(
@@ -1630,8 +1758,8 @@ impl AgentExecutor {
                 crate::application::orchestration::collaboration::CollaborationService::new(
                     self.db.clone(),
                 );
-            let (case_id, handoff_id, persisted_correlation_id) =
-                match collaboration.create_handoff(
+            let (case_id, handoff_id, persisted_correlation_id) = match collaboration
+                .create_handoff(
                     crate::application::orchestration::collaboration::HandoffInput {
                         run_id: self.run_id.as_deref(),
                         correlation_id: Some(&correlation_id),
@@ -1664,9 +1792,9 @@ impl AgentExecutor {
                             .unwrap_or("medium"),
                     },
                 ) {
-                    Ok(result) => result,
-                    Err(error) => return format!("Failed to persist governed handoff: {}", error),
-                };
+                Ok(result) => result,
+                Err(error) => return format!("Failed to persist governed handoff: {}", error),
+            };
             correlation_id = persisted_correlation_id;
 
             let payload = serde_json::json!({
@@ -1688,11 +1816,17 @@ impl AgentExecutor {
             msg.metadata = Some(payload_str);
             let _ = self.db.insert_team_message(&msg);
             let _ = self.team_bus.route_message(msg).await;
-            return format!("Governed handoff package sent to {} for case {}.", target_team, case_id);
+            return format!(
+                "Governed handoff package sent to {} for case {}.",
+                target_team, case_id
+            );
         }
 
         if name == "submit_readback" {
-            let case_id = args.get("case_id").and_then(|value| value.as_str()).unwrap_or("");
+            let case_id = args
+                .get("case_id")
+                .and_then(|value| value.as_str())
+                .unwrap_or("");
             let understanding = args
                 .get("understanding")
                 .and_then(|value| value.as_str())
@@ -1731,11 +1865,17 @@ impl AgentExecutor {
                     self.db.clone(),
                 );
             return match service.record_decision(
-                args.get("case_id").and_then(|value| value.as_str()).unwrap_or(""),
+                args.get("case_id")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or(""),
                 self.run_id.as_deref(),
                 &self.agent_id,
-                args.get("decision").and_then(|value| value.as_str()).unwrap_or(""),
-                args.get("rationale").and_then(|value| value.as_str()).unwrap_or(""),
+                args.get("decision")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or(""),
+                args.get("rationale")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or(""),
                 &args
                     .get("evidence_refs")
                     .cloned()
@@ -1753,10 +1893,14 @@ impl AgentExecutor {
                     self.db.clone(),
                 );
             return match service.submit_deliverable(
-                args.get("case_id").and_then(|value| value.as_str()).unwrap_or(""),
+                args.get("case_id")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or(""),
                 self.run_id.as_deref(),
                 &self.agent_id,
-                args.get("title").and_then(|value| value.as_str()).unwrap_or("Untitled"),
+                args.get("title")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("Untitled"),
                 &args
                     .get("artifact_refs")
                     .cloned()
@@ -1768,7 +1912,9 @@ impl AgentExecutor {
                     .unwrap_or_else(|| serde_json::json!([]))
                     .to_string(),
             ) {
-                Ok(deliverable_id) => format!("Deliverable submitted for review: {}.", deliverable_id),
+                Ok(deliverable_id) => {
+                    format!("Deliverable submitted for review: {}.", deliverable_id)
+                }
                 Err(error) => format!("Failed to submit deliverable: {}", error),
             };
         }
@@ -1779,12 +1925,16 @@ impl AgentExecutor {
                     self.db.clone(),
                 );
             return match service.review_deliverable(
-                args.get("case_id").and_then(|value| value.as_str()).unwrap_or(""),
+                args.get("case_id")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or(""),
                 args.get("deliverable_id")
                     .and_then(|value| value.as_str())
                     .unwrap_or(""),
                 &self.agent_id,
-                args.get("verdict").and_then(|value| value.as_str()).unwrap_or(""),
+                args.get("verdict")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or(""),
                 &args
                     .get("findings")
                     .cloned()
@@ -1807,10 +1957,16 @@ impl AgentExecutor {
                     self.db.clone(),
                 );
             return match service.escalate(
-                args.get("case_id").and_then(|value| value.as_str()).unwrap_or(""),
+                args.get("case_id")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or(""),
                 &self.agent_id,
-                args.get("severity").and_then(|value| value.as_str()).unwrap_or("medium"),
-                args.get("reason").and_then(|value| value.as_str()).unwrap_or(""),
+                args.get("severity")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("medium"),
+                args.get("reason")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or(""),
             ) {
                 Ok(escalation_id) => format!("Case escalation opened: {}.", escalation_id),
                 Err(error) => format!("Failed to raise escalation: {}", error),
@@ -1832,8 +1988,12 @@ impl AgentExecutor {
             return match service.record_evaluation(
                 target_run_id,
                 &self.agent_id,
-                args.get("score").and_then(|value| value.as_f64()).unwrap_or(0.0),
-                args.get("verdict").and_then(|value| value.as_str()).unwrap_or("needs_review"),
+                args.get("score")
+                    .and_then(|value| value.as_f64())
+                    .unwrap_or(0.0),
+                args.get("verdict")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("needs_review"),
                 &args
                     .get("evidence")
                     .cloned()
@@ -1853,9 +2013,15 @@ impl AgentExecutor {
                 args.get("case_id").and_then(|value| value.as_str()),
                 "agent",
                 &self.agent_id,
-                args.get("subject_kind").and_then(|value| value.as_str()).unwrap_or("run"),
-                args.get("subject_id").and_then(|value| value.as_str()).unwrap_or(""),
-                args.get("content").and_then(|value| value.as_str()).unwrap_or(""),
+                args.get("subject_kind")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("run"),
+                args.get("subject_id")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or(""),
+                args.get("content")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or(""),
             ) {
                 Ok(feedback_id) => format!("Feedback quarantined for validation: {}.", feedback_id),
                 Err(error) => format!("Failed to record feedback: {}", error),
@@ -2375,7 +2541,7 @@ impl AgentExecutor {
                     let new_content = content.replacen(find_text, replace_text, 1);
                     match std::fs::write(&resolved, &new_content) {
                         Ok(_) => {
-                            return format!("File edited successfully: {}", resolved.display())
+                            return format!("File edited successfully: {}", resolved.display());
                         }
                         Err(e) => return format!("Failed to write edited file: {}", e),
                     }

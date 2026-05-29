@@ -116,5 +116,4 @@ impl ChatService {
         // Markdown is display content only. File side effects must use governed tools.
         (Vec::new(), text.to_string())
     }
-
 }

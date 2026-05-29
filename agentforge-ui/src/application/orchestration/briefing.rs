@@ -59,7 +59,7 @@ impl ContextWindow {
             self.current_tokens -= removed.tokens;
         }
     }
-    
+
     pub fn clear(&mut self) {
         self.messages.clear();
         self.current_tokens = 0;
@@ -180,7 +180,7 @@ mod tests {
     #[test]
     fn test_briefing_generation() {
         let mut manager = BriefingManager::new();
-        
+
         let template = BriefingTemplate {
             id: "t1".to_string(),
             name: "Task Briefing".to_string(),
@@ -191,7 +191,7 @@ mod tests {
         manager.register_template(template);
 
         let cw_id = manager.create_context_window(1000);
-        
+
         let mut data = HashMap::new();
         data.insert("Objective".to_string(), "Fix bug".to_string());
         data.insert("Constraints".to_string(), "No downtime".to_string());

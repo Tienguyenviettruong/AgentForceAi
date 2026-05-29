@@ -88,6 +88,50 @@ pub struct BenchmarkRunRecord {
 }
 
 #[derive(Debug, Clone)]
+pub struct BenchmarkSuiteRecord {
+    pub id: String,
+    pub name: String,
+    pub version: i64,
+    pub status: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct BenchmarkCaseRecord {
+    pub id: String,
+    pub suite_id: String,
+    pub input_json: String,
+    pub expectation_json: String,
+    pub risk_level: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct BenchmarkResultRecord {
+    pub id: String,
+    pub benchmark_run_id: String,
+    pub benchmark_case_id: String,
+    pub score: f64,
+    pub verdict: String,
+    pub evidence_json: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct BenchmarkRunnerJobRecord {
+    pub id: String,
+    pub candidate_id: String,
+    pub suite_id: String,
+    pub status: String,
+    pub requested_by: String,
+    pub benchmark_run_id: Option<String>,
+    pub error: Option<String>,
+    pub created_at: String,
+    pub started_at: Option<String>,
+    pub completed_at: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 pub struct CanaryDeploymentRecord {
     pub id: String,
     pub candidate_id: String,
@@ -96,6 +140,16 @@ pub struct CanaryDeploymentRecord {
     pub status: String,
     pub started_at: String,
     pub ended_at: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CanaryObservationRecord {
+    pub id: String,
+    pub deployment_id: String,
+    pub run_id: Option<String>,
+    pub metric_json: String,
+    pub verdict: String,
+    pub created_at: String,
 }
 
 #[derive(Debug, Clone)]

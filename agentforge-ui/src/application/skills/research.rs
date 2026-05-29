@@ -183,7 +183,14 @@ impl Skill for DocumentAnalysisSkill {
             code_block_count,
             link_count,
             if !headings.is_empty() {
-                format!("\nDocument Structure:\n{}", headings.iter().map(|h| format!("  {}", h)).collect::<Vec<_>>().join("\n"))
+                format!(
+                    "\nDocument Structure:\n{}",
+                    headings
+                        .iter()
+                        .map(|h| format!("  {}", h))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                )
             } else {
                 String::new()
             }
@@ -247,11 +254,31 @@ impl Skill for DataExtractionSkill {
         let result = format!(
             "Data Extraction Results:\n- URLs found: {} {}\n- Emails found: {} {}\n- Numbers found: {} {}\n- Total text length: {} chars",
             urls.len(),
-            if urls.is_empty() { String::new() } else { format!("({})", urls.join(", ")) },
+            if urls.is_empty() {
+                String::new()
+            } else {
+                format!("({})", urls.join(", "))
+            },
             emails.len(),
-            if emails.is_empty() { String::new() } else { format!("({})", emails.join(", ")) },
+            if emails.is_empty() {
+                String::new()
+            } else {
+                format!("({})", emails.join(", "))
+            },
             numbers.len(),
-            if numbers.is_empty() { String::new() } else { format!("(first 10: {})", numbers.iter().take(10).cloned().collect::<Vec<_>>().join(", ")) },
+            if numbers.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "(first 10: {})",
+                    numbers
+                        .iter()
+                        .take(10)
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            },
             text.len()
         );
 

@@ -91,6 +91,8 @@ pub struct AppState {
     pub obsidian_watcher: std::sync::Arc<std::sync::Mutex<Option<notify::RecommendedWatcher>>>,
     pub mode_manager:
         std::sync::Arc<std::sync::Mutex<crate::application::orchestration::modes::ModeManager>>,
+    pub governance_manager:
+        std::sync::Arc<crate::application::orchestration::governance::GovernanceManager>,
     pub chat_service: std::sync::Arc<crate::application::services::chat_service::ChatService>,
     pub team_service: std::sync::Arc<crate::application::services::team_service::TeamService>,
     pub knowledge_service:
@@ -137,6 +139,10 @@ impl AppState {
         let mode_manager = std::sync::Arc::new(std::sync::Mutex::new(
             crate::application::orchestration::modes::ModeManager::new(initial_mode),
         ));
+        let governance_manager = std::sync::Arc::new(
+            crate::application::orchestration::governance::GovernanceManager::default()
+                .with_db(db.clone()),
+        );
         let chat_service = std::sync::Arc::new(
             crate::application::services::chat_service::ChatService::new(
                 db.clone(),
@@ -159,6 +165,7 @@ impl AppState {
             tokio_runtime,
             obsidian_watcher,
             mode_manager,
+            governance_manager,
             chat_service,
             team_service,
             knowledge_service,
@@ -238,17 +245,34 @@ pub fn init(cx: &mut App) {
             ),
         );
         let wm_clone = worker_manager.clone();
+        let worker_discovery_poll_ms = state
+            .db
+            .get_setting("worker_manager_poll_ms")
+            .ok()
+            .flatten()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(5_000)
+            .clamp(1_000, 300_000);
         state.tokio_runtime.spawn(async move {
             // Check instances periodically and start workers
             loop {
                 if let Ok(instances) = wm_clone.db.list_instances() {
                     for instance in instances {
-                        wm_clone.start_workers_for_instance(&instance.id).await;
+                        wm_clone
+                            .start_workers_for_instance(&instance.id, &instance.team_id)
+                            .await;
                     }
                 }
-                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                tokio::time::sleep(std::time::Duration::from_millis(worker_discovery_poll_ms))
+                    .await;
             }
         });
+
+        crate::application::orchestration::benchmark_runner::BenchmarkRunner::start_scheduler(
+            state.db.clone(),
+            state.tokio_runtime.clone(),
+            state.current_actor_id.clone(),
+        );
     }
 
     // 4. Register dock panels

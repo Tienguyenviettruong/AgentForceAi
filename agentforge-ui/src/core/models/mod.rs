@@ -15,18 +15,19 @@ pub mod workflow;
 pub use agent::Agent;
 pub use capability::{Modality, ModelCapability};
 pub use chat::{ChatMessage, ChatResponse, ContentPart, StreamChunk, TokenUsage};
-pub use cross_team::{CrossTeamCaseEventRecord, CrossTeamCaseRecord};
 pub use collaboration::{
     AgentCompetencyRecord, CaseConsensusRecord, CaseConsensusVoteRecord, CaseDecisionRecord,
     CaseDeliverableRecord, CaseEscalationRecord, CaseReadbackRecord, CaseReviewRecord,
     CollaborationCaseRecord, DelegatedGrantRecord, HandoffPackageRecord, RoutingDecisionRecord,
 };
+pub use cross_team::{CrossTeamCaseEventRecord, CrossTeamCaseRecord};
+pub use knowledge::{Brain, KnowledgeItem, KnowledgeRecordKind, RetentionPolicy, Tag};
 pub use learning::{
-    BenchmarkRunRecord, CanaryDeploymentRecord, EvaluationRubricRecord, FeedbackRecord,
-    LearningCandidateRecord, LessonRecord, PromotionDecisionRecord, RollbackRecord,
+    BenchmarkCaseRecord, BenchmarkResultRecord, BenchmarkRunRecord, BenchmarkRunnerJobRecord,
+    BenchmarkSuiteRecord, CanaryDeploymentRecord, CanaryObservationRecord, EvaluationRubricRecord,
+    FeedbackRecord, LearningCandidateRecord, LessonRecord, PromotionDecisionRecord, RollbackRecord,
     RunEvaluationRecord, SkillVersionRecord,
 };
-pub use knowledge::{Brain, KnowledgeItem, KnowledgeRecordKind, RetentionPolicy, Tag};
 pub use orchestration::{
     ApprovalRequestRecord, ArtifactRecord, CapabilitySelectionRecord, LlmContextSnapshotRecord,
     LlmContextSourceRecord, ModeTransitionRecord, OrchestrationRunRecord, RunEventRecord,

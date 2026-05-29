@@ -17,7 +17,7 @@ impl<'a> TaskQueue<'a> {
             "SELECT id, team_id, instance_id, run_id, assignee_id, status, priority, payload, claimed_at, created_at, updated_at
              FROM tasks
              WHERE team_id = ?1 AND status = 'pending'
-             ORDER BY 
+             ORDER BY
                  CASE priority
                      WHEN 'high' THEN 1
                      WHEN 'medium' THEN 2

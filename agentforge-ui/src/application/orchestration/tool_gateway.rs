@@ -114,9 +114,12 @@ impl ToolExecutionGateway {
                 actor_id, permission
             );
             self.write_decision(request, Some(actor_id), "denied", &reason);
-            let _ = self
-                .db
-                .update_tool_invocation_status(&invocation_id, "denied", None, Some(&reason));
+            let _ = self.db.update_tool_invocation_status(
+                &invocation_id,
+                "denied",
+                None,
+                Some(&reason),
+            );
             return PolicyDecision::Denied(reason);
         }
 
@@ -161,13 +164,15 @@ impl ToolExecutionGateway {
             .as_ref()
             .is_some_and(|case| case.target_instance_id == request.instance_id);
         if is_receiving_delegated_run && grant.is_none() {
-            let reason =
-                "Delegated tool denied: the receiving run has no active persisted grant."
-                    .to_string();
+            let reason = "Delegated tool denied: the receiving run has no active persisted grant."
+                .to_string();
             self.write_decision(request, Some(actor_id), "denied", &reason);
-            let _ = self
-                .db
-                .update_tool_invocation_status(&invocation_id, "denied", None, Some(&reason));
+            let _ = self.db.update_tool_invocation_status(
+                &invocation_id,
+                "denied",
+                None,
+                Some(&reason),
+            );
             return PolicyDecision::Denied(reason);
         }
         if let Some(grant) = grant {
@@ -176,8 +181,7 @@ impl ToolExecutionGateway {
                 .is_some_and(|case| case.id != grant.case_id)
             {
                 let reason =
-                    "Delegated tool denied: grant and collaboration case do not match."
-                        .to_string();
+                    "Delegated tool denied: grant and collaboration case do not match.".to_string();
                 self.write_decision(request, Some(actor_id), "denied", &reason);
                 let _ = self.db.update_tool_invocation_status(
                     &invocation_id,
@@ -193,7 +197,10 @@ impl ToolExecutionGateway {
                 &grant.allowed_tools_json
             };
             let allowed = serde_json::from_str::<Vec<String>>(allowed_json).unwrap_or_default();
-            if !allowed.iter().any(|name| name == "all" || name == request.tool_name) {
+            if !allowed
+                .iter()
+                .any(|name| name == "all" || name == request.tool_name)
+            {
                 let reason = format!(
                     "Delegated grant denied tool '{}': it is outside the case mandate.",
                     request.tool_name
@@ -230,9 +237,9 @@ impl ToolExecutionGateway {
             OperatingMode::from_storage(&run.mode).unwrap_or(OperatingMode::HumanInteraction);
         if risk == ToolRisk::ReadOnly {
             self.write_decision(request, Some(actor_id), "allowed", "read-only operation");
-            let _ =
-                self.db
-                    .update_tool_invocation_status(&invocation_id, "authorized", None, None);
+            let _ = self
+                .db
+                .update_tool_invocation_status(&invocation_id, "authorized", None, None);
             return PolicyDecision::Allowed;
         }
 
@@ -351,9 +358,9 @@ impl ToolExecutionGateway {
                 OperatingMode::Autonomous => "authorized autonomous policy operation",
             },
         );
-        let _ =
-            self.db
-                .update_tool_invocation_status(&invocation_id, "authorized", None, None);
+        let _ = self
+            .db
+            .update_tool_invocation_status(&invocation_id, "authorized", None, None);
         PolicyDecision::Allowed
     }
 
@@ -381,34 +388,10 @@ impl ToolExecutionGateway {
     }
 
     pub fn enforce_run_budget(&self, run_id: Option<&str>) -> Result<(), String> {
-        let Some(run_id) = run_id else {
-            return Ok(());
-        };
-        let limit = self
-            .db
-            .get_setting("governance_max_tokens_per_run")
-            .ok()
-            .flatten()
-            .and_then(|value| value.parse::<usize>().ok())
-            .unwrap_or(100_000);
-        let used = self.db.get_total_tokens_for_run(run_id).unwrap_or(0);
-        if used >= limit {
-            let reason = format!("Token budget exhausted: {} / {} tokens.", used, limit);
-            let _ = self
-                .db
-                .insert_run_event(&crate::core::models::RunEventRecord {
-                    id: uuid::Uuid::new_v4().to_string(),
-                    run_id: run_id.to_string(),
-                    event_type: "budget_blocked".to_string(),
-                    actor_type: "policy".to_string(),
-                    actor_id: None,
-                    task_id: None,
-                    payload: Some(reason.clone()),
-                    created_at: chrono::Utc::now().to_rfc3339(),
-                });
-            return Err(reason);
-        }
-        Ok(())
+        crate::application::orchestration::governance::GovernanceManager::enforce_run_budget_for_db(
+            self.db.as_ref(),
+            run_id,
+        )
     }
 
     pub fn resolve_workspace_path(
@@ -497,7 +480,12 @@ impl ToolExecutionGateway {
             &payload,
             &associated_data,
         )
-        .map_err(|error| format!("Tool denied: invocation payload encryption failed: {}", error))?;
+        .map_err(|error| {
+            format!(
+                "Tool denied: invocation payload encryption failed: {}",
+                error
+            )
+        })?;
         let now = chrono::Utc::now().to_rfc3339();
         self.db
             .upsert_tool_invocation(&crate::core::models::ToolInvocationRecord {

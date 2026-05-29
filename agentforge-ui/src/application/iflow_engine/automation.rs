@@ -156,11 +156,8 @@ impl IFlowAutomation {
         });
         let engine = Arc::new(WorkflowEngine::new_with_context(ctx));
         engine.register_workflow(workflow);
-        let execution_id = engine.start_workflow(
-            workflow_id,
-            ExecutionStrategy::Serial,
-            Default::default(),
-        )?;
+        let execution_id =
+            engine.start_workflow(workflow_id, ExecutionStrategy::Serial, Default::default())?;
         let engine_for_run = engine.clone();
         let execution_for_run = execution_id.clone();
         runtime.spawn(async move {

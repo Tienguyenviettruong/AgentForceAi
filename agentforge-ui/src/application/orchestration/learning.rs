@@ -1,7 +1,7 @@
 use crate::core::models::{
-    BenchmarkRunRecord, CanaryDeploymentRecord, FeedbackRecord, LearningCandidateRecord,
-    LessonRecord, PromotionDecisionRecord, RollbackRecord, RunEvaluationRecord,
-    SkillVersionRecord, WorkflowRecord, WorkflowVersionRecord,
+    BenchmarkRunRecord, BenchmarkRunnerJobRecord, CanaryDeploymentRecord, CanaryObservationRecord,
+    FeedbackRecord, LearningCandidateRecord, LessonRecord, PromotionDecisionRecord, RollbackRecord,
+    RunEvaluationRecord, SkillVersionRecord, WorkflowRecord, WorkflowVersionRecord,
 };
 use crate::core::traits::database::DatabasePort;
 use anyhow::{anyhow, Result};
@@ -17,6 +17,10 @@ fn candidate_transition_allowed(from: &str, to: &str) -> bool {
         (from, to),
         ("draft", "benchmark_passed")
             | ("draft", "benchmark_failed")
+            | ("draft", "benchmark_running")
+            | ("benchmark_failed", "benchmark_running")
+            | ("benchmark_running", "benchmark_passed")
+            | ("benchmark_running", "benchmark_failed")
             | ("benchmark_failed", "benchmark_passed")
             | ("benchmark_failed", "benchmark_failed")
             | ("benchmark_passed", "canary_running")
@@ -50,9 +54,7 @@ impl LearningService {
         }
         let evidence: serde_json::Value = serde_json::from_str(evidence_json)
             .map_err(|_| anyhow!("Evaluation evidence must be valid JSON."))?;
-        let has_evidence = evidence
-            .as_array()
-            .is_some_and(|values| !values.is_empty())
+        let has_evidence = evidence.as_array().is_some_and(|values| !values.is_empty())
             || evidence
                 .as_object()
                 .is_some_and(|values| !values.is_empty());
@@ -69,7 +71,7 @@ impl LearningService {
             ));
         }
         let id = Uuid::new_v4().to_string();
-        self.db.insert_run_evaluation(&RunEvaluationRecord {
+        let evaluation = RunEvaluationRecord {
             id: id.clone(),
             run_id: run_id.to_string(),
             rubric_id: None,
@@ -78,7 +80,24 @@ impl LearningService {
             verdict: verdict.to_string(),
             evidence_json: evidence_json.to_string(),
             created_at: chrono::Utc::now().to_rfc3339(),
-        })?;
+        };
+        self.db.insert_run_evaluation(&evaluation)?;
+        if let Err(error) =
+            self.collect_canary_observation_from_evaluation(&run, &evaluation, &evidence)
+        {
+            let _ = self
+                .db
+                .insert_run_event(&crate::core::models::RunEventRecord {
+                    id: Uuid::new_v4().to_string(),
+                    run_id: run.id.clone(),
+                    event_type: "canary_observation_collection_failed".to_string(),
+                    actor_type: "system".to_string(),
+                    actor_id: Some(evaluator_id.to_string()),
+                    task_id: None,
+                    payload: Some(error.to_string()),
+                    created_at: chrono::Utc::now().to_rfc3339(),
+                });
+        }
         Ok(id)
     }
 
@@ -92,9 +111,13 @@ impl LearningService {
         subject_id: &str,
         content: &str,
     ) -> Result<String> {
-        if subject_kind.trim().is_empty() || subject_id.trim().is_empty() || content.trim().is_empty()
+        if subject_kind.trim().is_empty()
+            || subject_id.trim().is_empty()
+            || content.trim().is_empty()
         {
-            return Err(anyhow!("Feedback requires a subject and non-empty content."));
+            return Err(anyhow!(
+                "Feedback requires a subject and non-empty content."
+            ));
         }
         if let Some(run_id) = run_id {
             self.db
@@ -138,7 +161,9 @@ impl LearningService {
             ));
         }
         if instruction.trim().is_empty() {
-            return Err(anyhow!("A validated lesson cannot contain an empty instruction."));
+            return Err(anyhow!(
+                "A validated lesson cannot contain an empty instruction."
+            ));
         }
         if let Some(evaluation_id) = source_evaluation_id {
             self.db
@@ -150,8 +175,13 @@ impl LearningService {
                 .db
                 .get_feedback_record(feedback_id)?
                 .ok_or_else(|| anyhow!("Lesson references unknown feedback."))?;
-            if !matches!(feedback.validation_status.as_str(), "quarantined" | "validated") {
-                return Err(anyhow!("Lesson references feedback that cannot be admitted."));
+            if !matches!(
+                feedback.validation_status.as_str(),
+                "quarantined" | "validated"
+            ) {
+                return Err(anyhow!(
+                    "Lesson references feedback that cannot be admitted."
+                ));
             }
         }
         let id = Uuid::new_v4().to_string();
@@ -256,10 +286,50 @@ impl LearningService {
                     .unwrap_or_default()
                     .to_string(),
                 activation_status: "candidate".to_string(),
-                created_at: now,
+                created_at: now.clone(),
             })?;
         }
+        let auto_benchmark = self
+            .db
+            .get_setting("learning_auto_benchmark_on_candidate_create")
+            .ok()
+            .flatten()
+            .map(|value| value != "false")
+            .unwrap_or(true);
+        if auto_benchmark {
+            let _ = self
+                .db
+                .insert_benchmark_runner_job(&BenchmarkRunnerJobRecord {
+                    id: Uuid::new_v4().to_string(),
+                    candidate_id: id.clone(),
+                    suite_id: String::new(),
+                    status: "queued".to_string(),
+                    requested_by: created_by.to_string(),
+                    benchmark_run_id: None,
+                    error: None,
+                    created_at: chrono::Utc::now().to_rfc3339(),
+                    started_at: None,
+                    completed_at: None,
+                });
+        }
         Ok(id)
+    }
+
+    pub(crate) fn begin_benchmark(
+        &self,
+        candidate_id: &str,
+        requested_by: &str,
+    ) -> Result<LearningCandidateRecord> {
+        self.require_learning_governor(requested_by)?;
+        let candidate = self.required_candidate(candidate_id)?;
+        if !matches!(candidate.status.as_str(), "draft" | "benchmark_failed") {
+            return Err(anyhow!(
+                "Automatic benchmark cannot start from candidate state '{}'.",
+                candidate.status
+            ));
+        }
+        self.transition_candidate(candidate_id, "benchmark_running")?;
+        self.required_candidate(candidate_id)
     }
 
     pub fn record_benchmark(
@@ -273,14 +343,19 @@ impl LearningService {
     ) -> Result<String> {
         self.require_learning_governor(recorded_by)?;
         let candidate = self.required_candidate(candidate_id)?;
-        if !matches!(candidate.status.as_str(), "draft" | "benchmark_failed") {
+        if !matches!(
+            candidate.status.as_str(),
+            "draft" | "benchmark_failed" | "benchmark_running"
+        ) {
             return Err(anyhow!(
                 "Benchmark cannot be recorded from candidate state '{}'.",
                 candidate.status
             ));
         }
         if suite_id.trim().is_empty() || !(0.0..=1.0).contains(&score) || regression_count < 0 {
-            return Err(anyhow!("Benchmark requires a suite, normalized score, and valid regression count."));
+            return Err(anyhow!(
+                "Benchmark requires a suite, normalized score, and valid regression count."
+            ));
         }
         let evidence: serde_json::Value = serde_json::from_str(result_json)
             .map_err(|_| anyhow!("Benchmark result must be a JSON evidence object."))?;
@@ -314,6 +389,32 @@ impl LearningService {
             created_at: now.clone(),
             completed_at: Some(now),
         })?;
+        if !passed {
+            let failed_runs = self
+                .db
+                .list_benchmark_runs_for_candidate(candidate_id)?
+                .into_iter()
+                .filter(|run| run.status == "failed")
+                .count();
+            if has_safety_violation || failed_runs >= 3 {
+                self.db.insert_promotion_decision(&PromotionDecisionRecord {
+                    id: Uuid::new_v4().to_string(),
+                    candidate_id: candidate_id.to_string(),
+                    decided_by: recorded_by.to_string(),
+                    decision: "blocked_by_benchmark_circuit".to_string(),
+                    rationale: if has_safety_violation {
+                        "Automatic benchmark circuit breaker: safety violation or unauthorized side effect was detected."
+                            .to_string()
+                    } else {
+                        format!(
+                            "Automatic benchmark circuit breaker: {} failed benchmark runs.",
+                            failed_runs
+                        )
+                    },
+                    created_at: chrono::Utc::now().to_rfc3339(),
+                })?;
+            }
+        }
         self.transition_candidate(
             candidate_id,
             if passed {
@@ -375,6 +476,16 @@ impl LearningService {
         recorded_by: &str,
     ) -> Result<()> {
         self.require_learning_governor(recorded_by)?;
+        self.apply_canary_outcome(candidate_id, deployment_id, passed, recorded_by)
+    }
+
+    fn apply_canary_outcome(
+        &self,
+        candidate_id: &str,
+        deployment_id: &str,
+        passed: bool,
+        recorded_by: &str,
+    ) -> Result<()> {
         let candidate = self.required_candidate(candidate_id)?;
         if candidate.status != "canary_running" {
             return Err(anyhow!(
@@ -395,15 +506,136 @@ impl LearningService {
             deployment_id,
             if passed { "passed" } else { "failed" },
         )?;
-        self.transition_candidate(
-            candidate_id,
-            if passed {
-                "canary_passed"
-            } else {
-                "canary_failed"
-            },
-        )?;
+        if passed {
+            self.transition_candidate(candidate_id, "canary_passed")?;
+            return Ok(());
+        }
+
+        self.rollback_candidate_activation(&candidate)?;
+        self.db.insert_rollback_record(&RollbackRecord {
+            id: Uuid::new_v4().to_string(),
+            candidate_id: candidate_id.to_string(),
+            deployment_id: Some(deployment_id.to_string()),
+            initiated_by: recorded_by.to_string(),
+            reason: "Automatic canary circuit breaker: failed canary outcome triggered pullback."
+                .to_string(),
+            restored_version_id: candidate.baseline_version_id.clone(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+        })?;
+        self.transition_candidate(candidate_id, "rolled_back")?;
+        self.db
+            .update_lesson_status(&candidate.source_lesson_id, "validated")?;
         Ok(())
+    }
+
+    pub fn record_canary_observation(
+        &self,
+        deployment_id: &str,
+        run_id: Option<&str>,
+        metric_json: &str,
+        recorded_by: &str,
+    ) -> Result<String> {
+        self.require_learning_governor(recorded_by)?;
+        let deployment = self
+            .find_canary_deployment(deployment_id)?
+            .ok_or_else(|| anyhow!("Canary deployment was not found."))?;
+        self.record_canary_observation_for_deployment(&deployment, run_id, metric_json, recorded_by)
+    }
+
+    fn record_canary_observation_for_deployment(
+        &self,
+        deployment: &CanaryDeploymentRecord,
+        run_id: Option<&str>,
+        metric_json: &str,
+        recorded_by: &str,
+    ) -> Result<String> {
+        if deployment.status != "running" {
+            return Err(anyhow!("Canary observation requires a running deployment."));
+        }
+        if let Some(run_id) = run_id {
+            self.db
+                .get_orchestration_run(run_id)?
+                .ok_or_else(|| anyhow!("Canary observation references an unknown run."))?;
+        }
+        let metric: serde_json::Value = serde_json::from_str(metric_json)
+            .map_err(|_| anyhow!("Canary metric_json must be valid JSON."))?;
+        let quality_score = metric
+            .get("quality_score")
+            .and_then(|value| value.as_f64())
+            .unwrap_or(0.0);
+        let error_rate = metric
+            .get("error_rate")
+            .and_then(|value| value.as_f64())
+            .unwrap_or(1.0);
+        let latency_ms = metric
+            .get("latency_ms")
+            .and_then(|value| value.as_f64())
+            .unwrap_or(0.0);
+        let max_latency_ms = self
+            .db
+            .get_setting("learning_canary_max_latency_ms")
+            .ok()
+            .flatten()
+            .and_then(|value| value.parse::<f64>().ok())
+            .unwrap_or(30_000.0);
+        let has_safety_violation = metric
+            .get("safety_violations")
+            .and_then(|value| value.as_array())
+            .is_some_and(|violations| !violations.is_empty())
+            || metric
+                .get("unauthorized_side_effects")
+                .and_then(|value| value.as_u64())
+                .unwrap_or(0)
+                > 0;
+        let passed = quality_score >= 0.8
+            && error_rate <= 0.05
+            && latency_ms <= max_latency_ms
+            && !has_safety_violation;
+        let id = Uuid::new_v4().to_string();
+        self.db
+            .insert_canary_observation(&CanaryObservationRecord {
+                id: id.clone(),
+                deployment_id: deployment.id.clone(),
+                run_id: run_id.map(str::to_string),
+                metric_json: metric_json.to_string(),
+                verdict: if passed { "pass" } else { "fail" }.to_string(),
+                created_at: chrono::Utc::now().to_rfc3339(),
+            })?;
+
+        if !passed {
+            self.apply_canary_outcome(
+                &deployment.candidate_id,
+                &deployment.id,
+                false,
+                recorded_by,
+            )?;
+            return Ok(id);
+        }
+
+        let observations = self
+            .db
+            .list_canary_observations_for_deployment(&deployment.id)?;
+        let required_passes = self
+            .db
+            .get_setting("learning_canary_required_passes")
+            .ok()
+            .flatten()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(3)
+            .clamp(1, 100);
+        let pass_count = observations
+            .iter()
+            .filter(|observation| observation.verdict == "pass")
+            .count();
+        let fail_count = observations
+            .iter()
+            .filter(|observation| observation.verdict == "fail")
+            .count();
+        if pass_count >= required_passes && fail_count == 0 {
+            self.apply_canary_outcome(&deployment.candidate_id, &deployment.id, true, recorded_by)?;
+        }
+
+        Ok(id)
     }
 
     pub fn promote(&self, candidate_id: &str, decided_by: &str, rationale: &str) -> Result<String> {
@@ -481,6 +713,171 @@ impl LearningService {
             .ok_or_else(|| anyhow!("Learning candidate '{}' was not found.", candidate_id))
     }
 
+    fn find_canary_deployment(
+        &self,
+        deployment_id: &str,
+    ) -> Result<Option<CanaryDeploymentRecord>> {
+        for candidate in self.db.list_recent_learning_candidates(500)? {
+            if let Some(deployment) = self
+                .db
+                .list_canary_deployments_for_candidate(&candidate.id)?
+                .into_iter()
+                .find(|deployment| deployment.id == deployment_id)
+            {
+                return Ok(Some(deployment));
+            }
+        }
+        Ok(None)
+    }
+
+    fn collect_canary_observation_from_evaluation(
+        &self,
+        run: &crate::core::models::OrchestrationRunRecord,
+        evaluation: &RunEvaluationRecord,
+        evidence: &serde_json::Value,
+    ) -> Result<()> {
+        for deployment in self.matching_running_canary_deployments(run)? {
+            let metric = Self::canary_metric_from_evaluation(run, evaluation, evidence);
+            self.record_canary_observation_for_deployment(
+                &deployment,
+                Some(run.id.as_str()),
+                &metric.to_string(),
+                &evaluation.evaluator_id,
+            )?;
+        }
+        Ok(())
+    }
+
+    fn matching_running_canary_deployments(
+        &self,
+        run: &crate::core::models::OrchestrationRunRecord,
+    ) -> Result<Vec<CanaryDeploymentRecord>> {
+        let mut deployments = Vec::new();
+        for candidate in self
+            .db
+            .list_recent_learning_candidates(500)?
+            .into_iter()
+            .filter(|candidate| candidate.status == "canary_running")
+        {
+            for deployment in self
+                .db
+                .list_canary_deployments_for_candidate(&candidate.id)?
+                .into_iter()
+                .filter(|deployment| deployment.status == "running")
+            {
+                if Self::canary_scope_matches_run(&deployment.scope_json, run) {
+                    deployments.push(deployment);
+                }
+            }
+        }
+        Ok(deployments)
+    }
+
+    fn canary_scope_matches_run(
+        scope_json: &str,
+        run: &crate::core::models::OrchestrationRunRecord,
+    ) -> bool {
+        let Ok(scope) = serde_json::from_str::<serde_json::Value>(scope_json) else {
+            return false;
+        };
+        let Some(scope) = scope.as_object() else {
+            return false;
+        };
+        let mut has_runtime_constraint = false;
+
+        if let Some(value) = scope.get("run_id").and_then(|value| value.as_str()) {
+            has_runtime_constraint = true;
+            if value != run.id {
+                return false;
+            }
+        }
+        if let Some(values) = scope.get("run_ids").and_then(|value| value.as_array()) {
+            has_runtime_constraint = true;
+            if !values
+                .iter()
+                .any(|value| value.as_str() == Some(run.id.as_str()))
+            {
+                return false;
+            }
+        }
+        if let Some(value) = scope.get("instance_id").and_then(|value| value.as_str()) {
+            has_runtime_constraint = true;
+            if value != run.instance_id {
+                return false;
+            }
+        }
+        if let Some(value) = scope.get("mode").and_then(|value| value.as_str()) {
+            has_runtime_constraint = true;
+            if value != run.mode {
+                return false;
+            }
+        }
+        if let Some(value) = scope.get("workflow_id").and_then(|value| value.as_str()) {
+            has_runtime_constraint = true;
+            if run.workflow_id.as_deref() != Some(value) {
+                return false;
+            }
+        }
+        if let Some(values) = scope.get("workflow_ids").and_then(|value| value.as_array()) {
+            has_runtime_constraint = true;
+            let workflow_id = run.workflow_id.as_deref().unwrap_or_default();
+            if !values
+                .iter()
+                .any(|value| value.as_str() == Some(workflow_id))
+            {
+                return false;
+            }
+        }
+
+        has_runtime_constraint
+    }
+
+    fn canary_metric_from_evaluation(
+        run: &crate::core::models::OrchestrationRunRecord,
+        evaluation: &RunEvaluationRecord,
+        evidence: &serde_json::Value,
+    ) -> serde_json::Value {
+        let verdict = evaluation.verdict.to_ascii_lowercase();
+        let default_error_rate =
+            if verdict.contains("pass") || verdict.contains("success") || evaluation.score >= 0.8 {
+                0.0
+            } else {
+                (1.0 - evaluation.score).clamp(0.05, 1.0)
+            };
+        serde_json::json!({
+            "source": "run_evaluation",
+            "evaluation_id": evaluation.id.clone(),
+            "quality_score": evaluation.score,
+            "verdict": evaluation.verdict.clone(),
+            "error_rate": Self::evidence_number(evidence, "error_rate").unwrap_or(default_error_rate),
+            "latency_ms": Self::evidence_number(evidence, "latency_ms")
+                .or_else(|| Self::run_latency_ms(run))
+                .unwrap_or(0.0),
+            "safety_violations": evidence
+                .get("safety_violations")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!([])),
+            "unauthorized_side_effects": evidence
+                .get("unauthorized_side_effects")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!(0)),
+        })
+    }
+
+    fn evidence_number(evidence: &serde_json::Value, key: &str) -> Option<f64> {
+        evidence.get(key).and_then(|value| {
+            value
+                .as_f64()
+                .or_else(|| value.as_str().and_then(|text| text.parse::<f64>().ok()))
+        })
+    }
+
+    fn run_latency_ms(run: &crate::core::models::OrchestrationRunRecord) -> Option<f64> {
+        let created = chrono::DateTime::parse_from_rfc3339(&run.created_at).ok()?;
+        let updated = chrono::DateTime::parse_from_rfc3339(&run.updated_at).ok()?;
+        Some((updated - created).num_milliseconds().max(0) as f64)
+    }
+
     fn require_learning_governor(&self, actor_id: &str) -> Result<()> {
         if self
             .db
@@ -502,7 +899,8 @@ impl LearningService {
                     .db
                     .get_skill_version_for_candidate(&candidate.id)?
                     .ok_or_else(|| anyhow!("Skill candidate has no immutable proposed version."))?;
-                self.db.update_skill_version_activation(&version.id, "active")
+                self.db
+                    .update_skill_version_activation(&version.id, "active")
             }
             "workflow" => {
                 let mut parsed =
@@ -554,9 +952,11 @@ impl LearningService {
                     .db
                     .get_skill_version_for_candidate(&candidate.id)?
                     .ok_or_else(|| anyhow!("Skill candidate version is missing."))?;
-                self.db.update_skill_version_activation(&version.id, "rolled_back")?;
+                self.db
+                    .update_skill_version_activation(&version.id, "rolled_back")?;
                 if let Some(baseline) = candidate.baseline_version_id.as_deref() {
-                    self.db.update_skill_version_activation(baseline, "active")?;
+                    self.db
+                        .update_skill_version_activation(baseline, "active")?;
                 }
                 Ok(())
             }

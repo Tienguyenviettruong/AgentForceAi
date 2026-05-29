@@ -29,7 +29,11 @@ impl KnowledgeService {
             .map_err(|e| crate::core::errors::CoreError::Database(e.to_string()))?;
         records.extend(memories.into_iter().map(Self::memory_as_record));
         let mut seen_artifacts = HashSet::new();
-        for run in self.db.list_recent_orchestration_runs(100).unwrap_or_default() {
+        for run in self
+            .db
+            .list_recent_orchestration_runs(100)
+            .unwrap_or_default()
+        {
             for artifact in self.db.list_artifacts_for_run(&run.id).unwrap_or_default() {
                 if seen_artifacts.insert(artifact.id.clone()) {
                     records.push(Self::artifact_as_record(artifact));
@@ -79,7 +83,10 @@ impl KnowledgeService {
                 .to_string(),
             content_hash: Some(artifact.content_hash),
             content,
-            tags: vec![Tag("artifact".to_string()), Tag(artifact.artifact_kind.clone())],
+            tags: vec![
+                Tag("artifact".to_string()),
+                Tag(artifact.artifact_kind.clone()),
+            ],
             created_at,
             updated_at: created_at,
             retention_policy: RetentionPolicy::KeepForever,

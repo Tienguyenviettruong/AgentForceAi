@@ -17,8 +17,8 @@ impl<'a> ReassignmentManager<'a> {
         // Log the reassignment reason somewhere if history table exists,
         // here we just update the task assignment
         self.conn.execute(
-            "UPDATE tasks 
-             SET assignee_id = ?1, updated_at = ?2 
+            "UPDATE tasks
+             SET assignee_id = ?1, updated_at = ?2
              WHERE id = ?3",
             params![new_agent_id, now, task_id],
         )?;
@@ -32,13 +32,13 @@ impl<'a> ReassignmentManager<'a> {
         let now = Utc::now().to_rfc3339();
 
         self.conn.execute(
-            "UPDATE tasks 
-             SET priority = CASE 
+            "UPDATE tasks
+             SET priority = CASE
                  WHEN priority = 'low' THEN 'medium'
                  WHEN priority = 'medium' THEN 'high'
-                 ELSE 'high' 
-             END, 
-             updated_at = ?1 
+                 ELSE 'high'
+             END,
+             updated_at = ?1
              WHERE id = ?2",
             params![now, task_id],
         )?;

@@ -372,7 +372,7 @@ fn classify_kind(extension: Option<&str>, mime: Option<&str>, bytes: &[u8]) -> S
             "odt" | "ods" | "odp" => return "odf".to_string(),
             "zip" => return "zip".to_string(),
             "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "tif" | "tiff" => {
-                return "image".to_string()
+                return "image".to_string();
             }
             "mp4" | "mov" | "mkv" | "avi" | "webm" | "m4v" => return "video".to_string(),
             "mp3" | "wav" | "m4a" | "aac" | "ogg" | "flac" => return "audio".to_string(),

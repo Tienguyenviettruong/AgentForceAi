@@ -228,16 +228,17 @@ impl CollaborationService {
                     &grant.grantee_agent_id,
                     "[\"read_file\",\"analyze_file\",\"save_to_knowledge\",\"record_decision\",\"create_subtasks\",\"submit_deliverable\",\"record_review\",\"declare_consensus\",\"handoff_to_team\",\"raise_escalation\",\"record_feedback\"]",
                 )?;
-                self.db.insert_run_event(&crate::core::models::RunEventRecord {
-                    id: Uuid::new_v4().to_string(),
-                    run_id: run_id.to_string(),
-                    event_type: "delegated_readback_accepted".to_string(),
-                    actor_type: "user".to_string(),
-                    actor_id: Some(actor_id.to_string()),
-                    task_id: None,
-                    payload: Some(format!("case_id={} readback_id={}", case_id, readback_id)),
-                    created_at: chrono::Utc::now().to_rfc3339(),
-                })?;
+                self.db
+                    .insert_run_event(&crate::core::models::RunEventRecord {
+                        id: Uuid::new_v4().to_string(),
+                        run_id: run_id.to_string(),
+                        event_type: "delegated_readback_accepted".to_string(),
+                        actor_type: "user".to_string(),
+                        actor_id: Some(actor_id.to_string()),
+                        task_id: None,
+                        payload: Some(format!("case_id={} readback_id={}", case_id, readback_id)),
+                        created_at: chrono::Utc::now().to_rfc3339(),
+                    })?;
             }
         }
         self.db.insert_audit_log(&AuditEvent {
@@ -448,7 +449,9 @@ impl CollaborationService {
         }
         let case = self.required_case(case_id)?;
         if case.state != "consensus_pending" {
-            return Err(anyhow!("Consensus voting requires a pending consensus case."));
+            return Err(anyhow!(
+                "Consensus voting requires a pending consensus case."
+            ));
         }
         let consensus = self
             .db
@@ -456,14 +459,15 @@ impl CollaborationService {
             .into_iter()
             .find(|record| record.id == consensus_id && record.status == "proposed")
             .ok_or_else(|| anyhow!("Consensus proposal is not pending for this case."))?;
-        self.db.insert_case_consensus_vote(&CaseConsensusVoteRecord {
-            id: Uuid::new_v4().to_string(),
-            consensus_id: consensus.id.clone(),
-            voter_id: voter_id.to_string(),
-            vote: vote.to_string(),
-            rationale: (!rationale.trim().is_empty()).then(|| rationale.to_string()),
-            created_at: chrono::Utc::now().to_rfc3339(),
-        })?;
+        self.db
+            .insert_case_consensus_vote(&CaseConsensusVoteRecord {
+                id: Uuid::new_v4().to_string(),
+                consensus_id: consensus.id.clone(),
+                voter_id: voter_id.to_string(),
+                vote: vote.to_string(),
+                rationale: (!rationale.trim().is_empty()).then(|| rationale.to_string()),
+                created_at: chrono::Utc::now().to_rfc3339(),
+            })?;
         let votes = self.db.list_case_consensus_votes(consensus_id)?;
         if votes.iter().any(|vote| vote.vote == "reject") {
             self.db.resolve_case_consensus(
@@ -496,14 +500,18 @@ impl CollaborationService {
             .check_actor_permission(actor_id, "tool:execute:resolve_consensus")
             .unwrap_or(false)
         {
-            return Err(anyhow!("Only an authorized human actor may resolve consensus."));
+            return Err(anyhow!(
+                "Only an authorized human actor may resolve consensus."
+            ));
         }
         if resolution.trim().is_empty() {
             return Err(anyhow!("Consensus resolution must state its rationale."));
         }
         let case = self.required_case(case_id)?;
         if case.state != "consensus_pending" {
-            return Err(anyhow!("Consensus resolution requires a pending consensus case."));
+            return Err(anyhow!(
+                "Consensus resolution requires a pending consensus case."
+            ));
         }
         if !self
             .db
@@ -519,14 +527,15 @@ impl CollaborationService {
             .iter()
             .any(|vote| vote.voter_id == actor_id)
         {
-            self.db.insert_case_consensus_vote(&CaseConsensusVoteRecord {
-                id: Uuid::new_v4().to_string(),
-                consensus_id: consensus_id.to_string(),
-                voter_id: actor_id.to_string(),
-                vote: if accepted { "accept" } else { "reject" }.to_string(),
-                rationale: Some(resolution.to_string()),
-                created_at: chrono::Utc::now().to_rfc3339(),
-            })?;
+            self.db
+                .insert_case_consensus_vote(&CaseConsensusVoteRecord {
+                    id: Uuid::new_v4().to_string(),
+                    consensus_id: consensus_id.to_string(),
+                    voter_id: actor_id.to_string(),
+                    vote: if accepted { "accept" } else { "reject" }.to_string(),
+                    rationale: Some(resolution.to_string()),
+                    created_at: chrono::Utc::now().to_rfc3339(),
+                })?;
         }
         self.db.resolve_case_consensus(
             consensus_id,
@@ -581,7 +590,9 @@ impl CollaborationService {
             .check_actor_permission(actor_id, "tool:execute:resolve_escalation")
             .unwrap_or(false)
         {
-            return Err(anyhow!("Only an authorized human actor may resolve escalation."));
+            return Err(anyhow!(
+                "Only an authorized human actor may resolve escalation."
+            ));
         }
         if resolution.trim().is_empty() {
             return Err(anyhow!("Escalation resolution cannot be empty."));
@@ -596,7 +607,11 @@ impl CollaborationService {
             .resolve_case_escalation(escalation_id, actor_id, resolution)?;
         self.transition_case(
             &escalation.case_id,
-            if resume_case { "in_progress" } else { "cancelled" },
+            if resume_case {
+                "in_progress"
+            } else {
+                "cancelled"
+            },
         )?;
         self.db.insert_audit_log(&AuditEvent {
             timestamp: chrono::Utc::now(),
@@ -761,8 +776,16 @@ impl CollaborationService {
             case.constraints_json,
             readback_status,
             accepted_readback,
-            if decisions.is_empty() { "None" } else { &decisions },
-            if deliverables.is_empty() { "None" } else { &deliverables }
+            if decisions.is_empty() {
+                "None"
+            } else {
+                &decisions
+            },
+            if deliverables.is_empty() {
+                "None"
+            } else {
+                &deliverables
+            }
         );
         Ok(Some((case.id, text)))
     }

@@ -806,7 +806,7 @@ impl KnowledgePanel {
                         if let Some(last_pos) = this.last_mouse_pos {
                             let dx = current_pos.x - last_pos.x;
                             let dy = current_pos.y - last_pos.y;
-                            
+
                             if let Some(node_idx) = this.dragging_node {
                                 if node_idx < this.node_positions.len() {
                                     let zoom = this.graph_zoom;
@@ -817,8 +817,8 @@ impl KnowledgePanel {
                                     this.dragging_node = None;
                                 }
                             } else if this.is_panning_minimap {
-                                // Minimap scale is 0.05. Moving mouse by dx on minimap means 
-                                // moving viewport by dx. Since vp_x = ... - pan.x * scale, 
+                                // Minimap scale is 0.05. Moving mouse by dx on minimap means
+                                // moving viewport by dx. Since vp_x = ... - pan.x * scale,
                                 // to move vp_x by dx we need pan.x -= dx / scale.
                                 this.graph_pan.x -= dx / 0.05;
                                 this.graph_pan.y -= dy / 0.05;
@@ -833,7 +833,7 @@ impl KnowledgePanel {
                     }))
                     .on_scroll_wheel(cx.listener(|this, event: &gpui::ScrollWheelEvent, _window, cx| {
                         let old_zoom = this.graph_zoom;
-                        
+
                         let delta = match event.delta {
                             gpui::ScrollDelta::Pixels(p) => {
                                 let py: f32 = p.y.into();
@@ -841,17 +841,17 @@ impl KnowledgePanel {
                             },
                             gpui::ScrollDelta::Lines(l) => l.y * 20.0,
                         };
-                        
+
                         let new_zoom = (this.graph_zoom + (delta / 500.0)).clamp(0.1, 5.0);
                         this.graph_zoom = new_zoom;
-                        
+
                         let mouse_x: f32 = event.position.x.into();
                         let mouse_y: f32 = event.position.y.into();
                         let zoom_ratio = new_zoom / old_zoom;
-                        
+
                         this.graph_pan.x = mouse_x - (mouse_x - this.graph_pan.x) * zoom_ratio;
                         this.graph_pan.y = mouse_y - (mouse_y - this.graph_pan.y) * zoom_ratio;
-                        
+
                         cx.notify();
                     }))
                     .child({
@@ -871,12 +871,12 @@ impl KnowledgePanel {
                                     let start_y = gpui::px((p1_rel.y + center_offset_y) * zoom + pan.y) + bounds.origin.y;
                                     let end_x = gpui::px((p2_rel.x + center_offset_x) * zoom + pan.x) + bounds.origin.x;
                                     let end_y = gpui::px((p2_rel.y + center_offset_y) * zoom + pan.y) + bounds.origin.y;
-                                    
-                                    let is_highlighted = hovered_idx == Some(*from) || hovered_idx == Some(*to) || 
+
+                                    let is_highlighted = hovered_idx == Some(*from) || hovered_idx == Some(*to) ||
                                                          selected_idx == Some(*from) || selected_idx == Some(*to);
                                     let edge_color = if is_highlighted { accent } else { border };
                                     let edge_width = if is_highlighted { 2.0 } else { 1.0 };
-                                    
+
                                     let mut builder = gpui::PathBuilder::stroke(gpui::px(edge_width)).with_style(
                                         gpui::PathStyle::Stroke(gpui::StrokeOptions::default()),
                                     );
@@ -897,7 +897,7 @@ impl KnowledgePanel {
                             let p_rel = node_positions[i];
                             let is_hovered = hovered_idx == Some(i);
                             let is_selected = self.selected_node_idx == Some(i);
-                            
+
                             // Highlight node if hovered, selected, or connected to hovered/selected
                             let mut is_highlighted = is_hovered || is_selected;
                             if !is_highlighted {
@@ -909,19 +909,19 @@ impl KnowledgePanel {
                                     }
                                 }
                             }
-                            
+
                             let node_size = if is_hovered || is_selected { 12.0 } else { 8.0 };
                             let color = if is_highlighted { highlight_node_color } else { base_node_color };
                             let current_text_color = if is_highlighted { text_color } else { muted_text_color };
-                            
+
                             // Base center point in unzoomed coords
                             let center_x = p_rel.x + center_offset_x;
                             let center_y = p_rel.y + center_offset_y;
-                            
+
                             // Left and top relative to parent container (centered)
                             let left_pos = gpui::px(center_x * zoom + pan.x - node_size);
                             let top_pos = gpui::px(center_y * zoom + pan.y - node_size);
-                            
+
                             nodes_ui.push(
                                 div()
                                     .absolute()
@@ -1118,7 +1118,9 @@ impl KnowledgePanel {
         let artifact_count = self
             .all_items
             .iter()
-            .filter(|item| item.record_kind == crate::knowledge::core::KnowledgeRecordKind::Artifact)
+            .filter(|item| {
+                item.record_kind == crate::knowledge::core::KnowledgeRecordKind::Artifact
+            })
             .count();
         let tag_count = self
             .all_items

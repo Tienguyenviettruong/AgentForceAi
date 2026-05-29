@@ -22,51 +22,13 @@ use super::TeamWorkspacePanel;
 use crate::ui::components::markdown::render_markdown_message;
 
 fn provider_kind(p: &crate::db::Provider) -> &str {
-    match p.provider_name.as_str() {
-        "openrouter" | "claude" | "gemini" | "codex" | "opencode" => p.provider_name.as_str(),
-        _ => match p.adapter_type.as_str() {
-            "AnthropicAdapter" => "claude",
-            "OpenAIAdapter" => "codex",
-            "GeminiAdapter" => "gemini",
-            "OpenCodeAdapter" => "opencode",
-            _ => p.provider_name.as_str(),
-        },
-    }
+    crate::application::services::provider_factory::provider_kind(p)
 }
 
 fn build_provider_adapter(
     provider: &crate::db::Provider,
 ) -> Option<Arc<dyn crate::providers::BaseProviderAdapter>> {
-    use crate::providers::BaseProviderAdapter as _;
-
-    match provider_kind(provider) {
-        "openrouter" => {
-            let mut adapter = crate::providers::openrouter::OpenRouterAdapter::new();
-            adapter.initialize(provider).ok()?;
-            Some(Arc::new(adapter))
-        }
-        "claude" => {
-            let mut adapter = crate::providers::claude::ClaudeAdapter::new();
-            adapter.initialize(provider).ok()?;
-            Some(Arc::new(adapter))
-        }
-        "gemini" => {
-            let mut adapter = crate::providers::gemini::GeminiAdapter::new();
-            adapter.initialize(provider).ok()?;
-            Some(Arc::new(adapter))
-        }
-        "codex" => {
-            let mut adapter = crate::providers::codex::CodexAdapter::new();
-            adapter.initialize(provider).ok()?;
-            Some(Arc::new(adapter))
-        }
-        "opencode" => {
-            let mut adapter = crate::providers::opencode::OpenCodeAdapter::new();
-            adapter.initialize(provider).ok()?;
-            Some(Arc::new(adapter))
-        }
-        _ => None,
-    }
+    crate::application::services::provider_factory::create_adapter(provider)
 }
 
 fn format_session_label(s: &crate::core::models::session::SessionRecord) -> String {
@@ -498,7 +460,7 @@ impl TeamWorkspacePanel {
             .flex_col()
             .bg(theme.background)
             .child(
-                // Tabs 
+                // Tabs
                 div()
                     .w_full()
                     .h(px(36.))
@@ -580,13 +542,13 @@ impl TeamWorkspacePanel {
                                             .icon(IconName::Inbox)
                                             .on_click(cx.listener(|this, _, window, cx| {
                                                 let current = this.cross_team_target_instance_id.clone().unwrap_or_default();
-                                                
+
                                                 let mut options = Vec::new();
                                                 let mut instance_ids = Vec::new();
-                                                
+
                                                 options.push(gpui::SharedString::from("None (Disable Cross-Team)"));
                                                 instance_ids.push(String::new());
-                                                
+
                                                 for instance in &this.instances {
                                                     if Some(&instance.id) == this.selected_instance_id.as_ref() {
                                                         continue;
@@ -596,22 +558,22 @@ impl TeamWorkspacePanel {
                                                     options.push(gpui::SharedString::from(label));
                                                     instance_ids.push(instance.id.clone());
                                                 }
-                                                
+
                                                 let selected_idx = if !current.is_empty() {
                                                     instance_ids.iter().position(|id| id == &current)
                                                 } else {
                                                     Some(0)
                                                 };
-                                                
+
                                                 let select_state = cx.new(|cx| {
                                                     SelectState::new(options.clone(), selected_idx.map(IndexPath::new), window, cx)
                                                 });
-                                                
+
                                                 let select_state2 = select_state.clone();
                                                 let instance_ids2 = instance_ids.clone();
                                                 let options2 = options.clone();
                                                 let view = cx.entity().clone();
-                                                
+
                                                 window.open_dialog(cx, move |dialog, _window, _cx| {
                                                     dialog
                                                         .title("Coordinate: Cross-Team Target")
@@ -1020,7 +982,7 @@ impl TeamWorkspacePanel {
                                                         if typ != "office_chat_send" { return; }
                                                         let text = v.get("text").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
                                                         if text.is_empty() { return; }
-                                                        
+
                                                         let instance_id = if let Some(id) = &this.selected_instance_id { id.clone() } else { return };
                                                         let session_id = if let Some(sid) = &this.selected_session_id { sid.clone() } else { return };
                                                         let db = crate::AppState::global(cx).db.clone();
@@ -1256,12 +1218,12 @@ impl TeamWorkspacePanel {
                                         }).detach();
                                     }))
                             )
-                            
+
                         );
 
                     if !self.attached_files.is_empty() {
                         form_header = form_header.child(gpui_component::divider::Divider::vertical());
-                        
+
                         let mut files_container = div().flex().gap_2().flex_wrap().w_full();
                         for (idx, path) in self.attached_files.iter().enumerate() {
                             let p = std::path::Path::new(path);
@@ -1269,9 +1231,9 @@ impl TeamWorkspacePanel {
                             let ext = p.extension().and_then(|s| s.to_str()).unwrap_or("").to_uppercase();
                             let size = std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
                             let size_kb = size as f64 / 1024.0;
-                            
+
                             let is_image = ["PNG", "JPG", "JPEG", "GIF", "WEBP"].contains(&ext.as_str());
-                            
+
                             let icon_box = div()
                                 .w(px(32.))
                                 .h(px(32.))
@@ -1379,10 +1341,10 @@ impl TeamWorkspacePanel {
                                                             this.recent_workspaces = recents;
                                                         }
                                                     }
-                                                    
+
                                                     // Hide/show webview if it's overlaid
                                                     this.sync_office_webview(cx);
-                                                    
+
                                                     cx.notify();
                                                 }))
                                                 .child(Icon::new(IconName::FolderOpen).size(px(14.)).text_color(theme.muted_foreground))
@@ -1401,7 +1363,7 @@ impl TeamWorkspacePanel {
                                                         .and_then(|s| s.to_str())
                                                         .unwrap_or(&r_str)
                                                         .to_string();
-                                                        
+
                                                     let is_selected = self.workspace_path.as_ref().is_some_and(|p| p == &r_str);
 
                                                     recent_list = recent_list.child(
@@ -1424,10 +1386,10 @@ impl TeamWorkspacePanel {
                                                                         let _ = crate::AppState::global(cx).db.set_setting(&key, &path);
                                                                         this.workspace_path = Some(path);
                                                                         this.is_workspace_dropdown_open = false;
-                                                                        
+
                                                                         // Show webview again
                                                                         this.sync_office_webview(cx);
-                                                                        
+
                                                                         cx.notify();
                                                                     }
                                                                 })
@@ -1446,7 +1408,7 @@ impl TeamWorkspacePanel {
                                                             )
                                                     );
                                                 }
-                                                
+
                                                 div()
                                                     .absolute()
                                                     .bottom(px(32.))
@@ -1478,7 +1440,7 @@ impl TeamWorkspacePanel {
                                                                 // Just open the folder picker for now
                                                                 this.is_workspace_dropdown_open = false;
                                                                 cx.notify();
-                                                                
+
                                                                 if let Some(instance_id) = &this.selected_instance_id {
                                                                     let db = crate::AppState::global(cx).db.clone();
                                                                     let instance_id_clone = instance_id.clone();
@@ -2040,8 +2002,7 @@ impl TeamWorkspacePanel {
         };
         let Ok(mut state) = serde_json::from_str::<
             crate::application::iflow_engine::engine::WorkflowState,
-        >(&execution.state_json)
-        else {
+        >(&execution.state_json) else {
             return;
         };
         match run_status {
@@ -2563,9 +2524,9 @@ impl TeamWorkspacePanel {
                                     })
                                 });
                             let Some(provider_config) = provider_config else { break; };
-                            
+
                             let tasks = db_clone_agent.list_tasks_for_instance(&instance_id_clone_agent).unwrap_or_default();
-                            
+
                             let mut next_task = None;
                             for task in &tasks {
                                 if task.status == "pending" && task.assignee_id.as_ref() == Some(&agent_id_clone) {
@@ -2600,16 +2561,16 @@ impl TeamWorkspacePanel {
                             if let Some(sys_prompt) = chat_service.build_dynamic_system_prompt(&team_id_clone_agent, &instance_id_clone_agent, &agent_id_clone) {
                                 task_prompt.push(crate::core::models::ChatMessage { role: "system".into(), content: gpui::SharedString::from(sys_prompt), agent_name: None, thought_duration_secs: None , parts: vec![] });
                             }
-                            
+
                             // Instruct the LLM to output files if needed
                             let instructions = if let Some(ref ws) = workspace_dir_agent {
                                 format!("Execute the following task. You are working in the directory: {}. To generate or modify files, call write_file or edit_file with a relative path inside this workspace. Sensitive tools may pause for governance approval. Do not express file operations as markdown. Task:\n", ws)
                             } else {
                                 "Execute the following task. A configured workspace is required for file changes, and file operations must use write_file or edit_file tools. Sensitive tools may pause for governance approval. Do not express file operations as markdown. Task:\n".to_string()
                             };
-                            
+
                             let task_text = task.payload.clone().unwrap_or_else(|| task.id.clone());
-                            
+
                             task_prompt.push(crate::providers::ChatMessage { role: "user".into(), content: format!("{}{}", instructions, task_text).into(), agent_name: None, thought_duration_secs: None , parts: vec![] });
 
                             let result = if let Some(adapter) = build_provider_adapter(&provider_config) {
@@ -2649,7 +2610,7 @@ impl TeamWorkspacePanel {
                                 Ok(text) => {
                                     let chat_service = crate::application::services::chat_service::ChatService::new(db_clone_agent.clone(), team_bus_clone_agent.clone());
                                     let (files_written, _) = chat_service.parse_generated_response(&text, workspace_dir_agent.as_ref());
-                                    
+
                                     let mut final_text = format!("[Task Completed] {}:\n{}", task.id, text);
                                     if !files_written.is_empty() {
                                         final_text.push_str("\n\n**Files Generated/Modified:**\n");
@@ -2664,7 +2625,7 @@ impl TeamWorkspacePanel {
                                             final_text.push_str(&format!("- `{}`\n", display_path));
                                         }
                                     }
-                                    
+
                                     (final_text, "completed")
                                 },
                                 Err(e) => (format!("[Task Failed] {}:\n{}", task.id, e), "failed"),
@@ -2678,7 +2639,7 @@ impl TeamWorkspacePanel {
 
                             let agent_name_str = agent.name.clone();
                             let metadata = chat_message_metadata(&agent_name_str, None);
-                            
+
                             let mut msg = crate::teambus::routing::TeamMessage::new_broadcast(
                                 instance_id_clone_agent.clone(),
                                 "assistant".to_string(),
@@ -2687,7 +2648,7 @@ impl TeamWorkspacePanel {
                             msg.metadata = Some(metadata.clone());
                             let _ = db_clone_agent.insert_team_message(&msg);
                             let _ = team_bus_clone_agent.route_message(msg).await;
-                            
+
                             // Save to database so it persists across reloads!
                             let _ = db_clone_agent.ensure_session(&session_id_clone_agent, &agent_id_clone, Some(&instance_id_clone_agent));
                             let _ = db_clone_agent.append_conversation_turn(
@@ -2757,34 +2718,34 @@ impl TeamWorkspacePanel {
         // after dispatching their persisted iFlow and cannot enter this legacy direct path.
         #[cfg(any())]
         {
-        let cancel_flag = Arc::new(AtomicBool::new(false));
-        self.is_generating = true;
-        self.generation_cancel_flag = Some(cancel_flag.clone());
-        self.chat_list_state =
-            gpui::ListState::new(display_len, gpui::ListAlignment::Bottom, px(200.));
-        self.chat_input_state.update(cx, |state, cx| {
-            state.set_value("", window, cx);
-        });
-        cx.notify();
+            let cancel_flag = Arc::new(AtomicBool::new(false));
+            self.is_generating = true;
+            self.generation_cancel_flag = Some(cancel_flag.clone());
+            self.chat_list_state =
+                gpui::ListState::new(display_len, gpui::ListAlignment::Bottom, px(200.));
+            self.chat_input_state.update(cx, |state, cx| {
+                state.set_value("", window, cx);
+            });
+            cx.notify();
 
-        // Trigger AI response asynchronously
-        let history_clone = history_snapshot.clone();
-        let view = cx.entity().clone();
-        let db = db.clone();
-        let team_id_clone = team_id.clone();
-        let query_text = text.clone();
-        let instance_id_for_ai = instance_id.clone();
-        let session_id_for_ai = session_id.clone();
-        let run_id_for_ai = run_id.clone();
+            // Trigger AI response asynchronously
+            let history_clone = history_snapshot.clone();
+            let view = cx.entity().clone();
+            let db = db.clone();
+            let team_id_clone = team_id.clone();
+            let query_text = text.clone();
+            let instance_id_for_ai = instance_id.clone();
+            let session_id_for_ai = session_id.clone();
+            let run_id_for_ai = run_id.clone();
 
-        let debate_mode = self.debate_mode;
-        let db_clone = db.clone();
-        let team_bus_for_ai = self.team_bus.clone();
-        let team_bus_clone = self.team_bus.clone();
-        let workspace_dir_for_ai = workspace_dir_clone.clone();
-        let attached_files_for_context = attached_files_for_ai.clone();
-        let cancel_flag_for_ai = cancel_flag.clone();
-        cx.spawn(async move |_, cx| {
+            let debate_mode = self.debate_mode;
+            let db_clone = db.clone();
+            let team_bus_for_ai = self.team_bus.clone();
+            let team_bus_clone = self.team_bus.clone();
+            let workspace_dir_for_ai = workspace_dir_clone.clone();
+            let attached_files_for_context = attached_files_for_ai.clone();
+            let cancel_flag_for_ai = cancel_flag.clone();
+            cx.spawn(async move |_, cx| {
             use crate::providers::BaseProviderAdapter;
 
             let mut use_mock = true;
@@ -2878,7 +2839,7 @@ impl TeamWorkspacePanel {
                                 continue;
                             };
                             use_mock = false;
-                            
+
                             let chat_service = crate::application::services::chat_service::ChatService::new(db.clone(), team_bus_for_ai.clone());
                             let mut full_history = current_history.clone();
 
@@ -2905,263 +2866,169 @@ impl TeamWorkspacePanel {
                             }
 
                             let mut round_result: Option<String> = None;
-                            match provider_kind(&provider_config) {
-                                "openrouter" => {
-                                    let mut adapter = crate::providers::openrouter::OpenRouterAdapter::new();
-                                    if adapter.initialize(&provider_config).is_ok() {
-                                    let agent_name_str = agent.name.clone();
-                                    let metadata = chat_message_metadata(&agent_name_str, None);
-                                    let mut office_msg = crate::teambus::routing::TeamMessage::new_broadcast(
-                                        instance_id_for_ai.clone(),
-                                        "assistant".to_string(),
-                                        format!("[{}]: ", agent.name),
-                                    );
-                                    office_msg.metadata = Some(metadata.clone());
-                                    office_msg.delivery_status = "typing".to_string();
-                                    let office_msg_id = office_msg.id.clone();
-                                    let _ = db_clone.insert_team_message(&office_msg);
+                            if let Some(adapter) = build_provider_adapter(&provider_config) {
+                                let agent_name_str = agent.name.clone();
+                                let metadata = chat_message_metadata(&agent_name_str, None);
+                                let mut office_msg = crate::teambus::routing::TeamMessage::new_broadcast(
+                                    instance_id_for_ai.clone(),
+                                    "assistant".to_string(),
+                                    format!("[{}]: ", agent.name),
+                                );
+                                office_msg.metadata = Some(metadata.clone());
+                                office_msg.delivery_status = "typing".to_string();
+                                let office_msg_id = office_msg.id.clone();
+                                let _ = db_clone.insert_team_message(&office_msg);
 
-                                    // PUSH "AI thinking..." placeholder
-                                    let mut msg_idx = 0;
-                                    let _ = cx.update(|cx| {
-                                        view.update(cx, |this: &mut Self, cx| {
-                                            {
-                                                let history = this.chat_histories.entry(session_id_for_ai.clone()).or_default();
-                                                history.push(crate::providers::ChatMessage {
-                                                    role: "assistant".into(),
-                                                    content: "".into(),
-                                                    parts: vec![],
-                                                    agent_name: Some(agent.name.clone().into()),
-                                                    thought_duration_secs: None,
-                                                });
-                                                msg_idx = history.len() - 1;
-                                            }
-                                            this.rebuild_chat_display(&session_id_for_ai);
-                                            let display_len = this
-                                                .chat_display_rows
-                                                .get(&session_id_for_ai)
-                                                .map(|v| v.len())
-                                                .unwrap_or(0);
-                                            this.chat_list_state = gpui::ListState::new(display_len, gpui::ListAlignment::Bottom, px(200.));
-                                            cx.notify();
-                                        });
+                                let mut msg_idx = 0;
+                                let _ = cx.update(|cx| {
+                                    view.update(cx, |this: &mut Self, cx| {
+                                        {
+                                            let history = this
+                                                .chat_histories
+                                                .entry(session_id_for_ai.clone())
+                                                .or_default();
+                                            history.push(crate::providers::ChatMessage {
+                                                role: "assistant".into(),
+                                                content: "".into(),
+                                                parts: vec![],
+                                                agent_name: Some(agent.name.clone().into()),
+                                                thought_duration_secs: None,
+                                            });
+                                            msg_idx = history.len() - 1;
+                                        }
+                                        this.rebuild_chat_display(&session_id_for_ai);
+                                        let display_len = this
+                                            .chat_display_rows
+                                            .get(&session_id_for_ai)
+                                            .map(|v| v.len())
+                                            .unwrap_or(0);
+                                        this.chat_list_state = gpui::ListState::new(
+                                            display_len,
+                                            gpui::ListAlignment::Bottom,
+                                            px(200.),
+                                        );
+                                        cx.notify();
                                     });
+                                });
 
-                                        let (stream_tx, mut stream_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-                                        let view_stream = view.clone();
-                                        let db_stream = db_clone.clone();
-                                        let office_msg_id_stream = office_msg_id.clone();
-                                        let session_id_stream = session_id_for_ai.clone();
-                                        let msg_idx_stream = msg_idx;
-                                        cx.spawn(async move |cx| {
-                                            while let Some(partial) = stream_rx.recv().await {
-                                                let _ = db_stream.update_team_message_content(&office_msg_id_stream, &partial);
-                                                let _ = cx
-                                                    .update(|cx| {
-                                                        view_stream.update(cx, |this: &mut Self, cx| {
-                                                            this.update_chat_message_content(
-                                                                &session_id_stream,
-                                                                msg_idx_stream,
-                                                                partial.clone(),
-                                                                None,
-                                                                cx,
-                                                            );
-                                                        });
-                                                    })
-                                                    .ok();
-                                            }
-                                        })
-                                        .detach();
-                                        
-                                        let mcp_registry = std::sync::Arc::new(crate::infrastructure::mcp::registry::McpToolRegistry::new(db.clone()));
-                                        let cancel_for_stream = cancel_flag_for_ai.clone();
-                                        let executor = crate::application::orchestration::executor::AgentExecutor::new(
-                                            std::sync::Arc::new(adapter) as std::sync::Arc<dyn crate::providers::BaseProviderAdapter>,
-                                            mcp_registry,
-                                            db.clone(),
-                                            team_bus_clone.clone(),
-                                            instance_id.clone(),
-                                            agent.id.clone(),
-                                            Some(session_id_for_ai.clone()),
-                                            Some(run_id_for_ai.clone()),
-                                            Some(cancel_flag_for_ai.clone()),
-                                            Some(std::sync::Arc::new(move |partial| {
-                                                if !cancel_for_stream.load(Ordering::SeqCst) {
-                                                    let _ = stream_tx.send(partial);
-                                                }
-                                            })),
+                                let (stream_tx, mut stream_rx) =
+                                    tokio::sync::mpsc::unbounded_channel::<String>();
+                                let view_stream = view.clone();
+                                let db_stream = db_clone.clone();
+                                let office_msg_id_stream = office_msg_id.clone();
+                                let session_id_stream = session_id_for_ai.clone();
+                                let msg_idx_stream = msg_idx;
+                                cx.spawn(async move |cx| {
+                                    while let Some(partial) = stream_rx.recv().await {
+                                        let _ = db_stream.update_team_message_content(
+                                            &office_msg_id_stream,
+                                            &partial,
                                         );
-                                        
-                                        let response_started_at = Instant::now();
-                                        match executor.execute_task(full_history).await {
-                                            Ok(full_text) => {
-                                                let thought_duration_secs = response_started_at.elapsed().as_secs_f64();
-                                                let _ = db_clone.update_team_message_content(&office_msg_id, &full_text);
-                                            if cancel_flag_for_ai.load(Ordering::SeqCst) {
-                                                let _ = db_clone.update_team_message_delivery_status(&office_msg_id, "cancelled");
-                                            } else {
-                                                let _ = db_clone.update_team_message_delivery_status(&office_msg_id, "delivered");
-                                            }
-                                                
-                                                let chat_service = crate::application::services::chat_service::ChatService::new(db_clone.clone(), team_bus_clone.clone());
-                                            let (files_written, clean_text) = chat_service.parse_generated_response(&full_text, workspace_dir_for_ai.as_ref());
-                                                if !files_written.is_empty() {
-                                                    let _ = db_clone.update_team_message_content(&office_msg_id, &clean_text);
-                                                }
-                                                let chosen = if files_written.is_empty() { full_text } else { clean_text };
-                                                round_result = Some(chosen.clone());
-                                                let _ = db_clone.ensure_session(&session_id_for_ai, &agent.id, Some(&instance_id_for_ai));
-                                                let final_metadata = chat_message_metadata(&agent_name_str, Some(thought_duration_secs));
-                                                let _ = db_clone.append_conversation_turn(&session_id_for_ai, "assistant", round_result.as_ref().unwrap(), Some(&final_metadata));
-                                                let _ = db_clone.touch_session(&session_id_for_ai);
-                                                
-                                                // Sync AI reply to Office view
-                                                let agent_name_for_office = agent.name.clone();
-                                                let agent_id_for_office = agent.id.clone();
-                                                let chosen_for_office = chosen;
-                                                let _ = cx.update(|cx| view.update(cx, |this: &mut Self, cx| {
+                                        let _ = cx
+                                            .update(|cx| {
+                                                view_stream.update(cx, |this: &mut Self, cx| {
                                                     this.update_chat_message_content(
-                                                        &session_id_for_ai,
-                                                        msg_idx,
-                                                        chosen_for_office.clone(),
-                                                        Some(thought_duration_secs),
-                                                        cx,
-                                                    );
-                                                    this.push_office_chat_message(&agent_id_for_office, &chosen_for_office, false, &agent_name_for_office, cx);
-                                                })).ok();
-                                            }
-                                            Err(e) => {
-                                                let error_text = format!("Error: {}", e);
-                                                let _ = db_clone.update_team_message_content(&office_msg_id, &error_text);
-                                                let _ = db_clone.update_team_message_delivery_status(&office_msg_id, "failed");
-                                                let _ = cx.update(|cx| view.update(cx, |this: &mut Self, cx| {
-                                                    this.update_chat_message_content(
-                                                        &session_id_for_ai,
-                                                        msg_idx,
-                                                        error_text.clone(),
+                                                        &session_id_stream,
+                                                        msg_idx_stream,
+                                                        partial.clone(),
                                                         None,
                                                         cx,
                                                     );
-                                                })).ok();
-                                            }
-                                        }
-
-                                    }
-                                }
-                                "claude" => {
-                                    let mut adapter = crate::providers::claude::ClaudeAdapter::new();
-                                    if adapter.initialize(&provider_config).is_ok() {
-                                    let agent_name_str = agent.name.clone();
-                                    let metadata = chat_message_metadata(&agent_name_str, None);
-                                    let mut office_msg = crate::teambus::routing::TeamMessage::new_broadcast(
-                                        instance_id_for_ai.clone(),
-                                        "assistant".to_string(),
-                                        format!("[{}]: ", agent.name),
-                                    );
-                                    office_msg.metadata = Some(metadata.clone());
-                                    office_msg.delivery_status = "typing".to_string();
-                                    let office_msg_id = office_msg.id.clone();
-                                    let _ = db_clone.insert_team_message(&office_msg);
-
-                                    // PUSH "AI thinking..." placeholder
-                                    let mut msg_idx = 0;
-                                    let _ = cx.update(|cx| {
-                                        view.update(cx, |this: &mut Self, cx| {
-                                            {
-                                                let history = this.chat_histories.entry(session_id_for_ai.clone()).or_default();
-                                                history.push(crate::providers::ChatMessage {
-                                                    role: "assistant".into(),
-                                                    content: "".into(),
-                                                    parts: vec![],
-                                                    agent_name: Some(agent.name.clone().into()),
-                                                    thought_duration_secs: None,
                                                 });
-                                                msg_idx = history.len() - 1;
-                                            }
-                                            this.rebuild_chat_display(&session_id_for_ai);
-                                            let display_len = this
-                                                .chat_display_rows
-                                                .get(&session_id_for_ai)
-                                                .map(|v| v.len())
-                                                .unwrap_or(0);
-                                            this.chat_list_state = gpui::ListState::new(display_len, gpui::ListAlignment::Bottom, px(200.));
-                                            cx.notify();
-                                        });
-                                    });
+                                            })
+                                            .ok();
+                                    }
+                                })
+                                .detach();
 
-                                        let (stream_tx, mut stream_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-                                        let view_stream = view.clone();
-                                        let db_stream = db_clone.clone();
-                                        let office_msg_id_stream = office_msg_id.clone();
-                                        let session_id_stream = session_id_for_ai.clone();
-                                        let msg_idx_stream = msg_idx;
-                                        cx.spawn(async move |cx| {
-                                            while let Some(partial) = stream_rx.recv().await {
-                                                let _ = db_stream.update_team_message_content(&office_msg_id_stream, &partial);
-                                                let _ = cx
-                                                    .update(|cx| {
-                                                        view_stream.update(cx, |this: &mut Self, cx| {
-                                                            this.update_chat_message_content(
-                                                                &session_id_stream,
-                                                                msg_idx_stream,
-                                                                partial.clone(),
-                                                                None,
-                                                                cx,
-                                                            );
-                                                        });
-                                                    })
-                                                    .ok();
-                                            }
-                                        })
-                                        .detach();
-                                        
-                                        let mcp_registry = std::sync::Arc::new(crate::infrastructure::mcp::registry::McpToolRegistry::new(db.clone()));
-                                        let cancel_for_stream = cancel_flag_for_ai.clone();
-                                        let executor = crate::application::orchestration::executor::AgentExecutor::new(
-                                            std::sync::Arc::new(adapter) as std::sync::Arc<dyn crate::providers::BaseProviderAdapter>,
-                                            mcp_registry,
-                                            db.clone(),
-                                            team_bus_clone.clone(),
-                                            instance_id.clone(),
-                                            agent.id.clone(),
-                                            Some(session_id_for_ai.clone()),
+                                let mcp_registry = std::sync::Arc::new(
+                                    crate::infrastructure::mcp::registry::McpToolRegistry::new(
+                                        db.clone(),
+                                    ),
+                                );
+                                let cancel_for_stream = cancel_flag_for_ai.clone();
+                                let executor =
+                                    crate::application::orchestration::executor::AgentExecutor::new(
+                                        adapter,
+                                        mcp_registry,
+                                        db.clone(),
+                                        team_bus_clone.clone(),
+                                        instance_id_for_ai.clone(),
+                                        agent.id.clone(),
+                                        Some(session_id_for_ai.clone()),
                                         Some(run_id_for_ai.clone()),
                                         Some(cancel_flag_for_ai.clone()),
-                                            Some(std::sync::Arc::new(move |partial| {
-                                                if !cancel_for_stream.load(Ordering::SeqCst) {
-                                                    let _ = stream_tx.send(partial);
-                                                }
-                                            })),
-                                        );
-                                        
-                                        let response_started_at = Instant::now();
-                                        match executor.execute_task(full_history).await {
-                                            Ok(full_text) => {
-                                                let thought_duration_secs = response_started_at.elapsed().as_secs_f64();
-                                                let _ = db_clone.update_team_message_content(&office_msg_id, &full_text);
-                                            if cancel_flag_for_ai.load(Ordering::SeqCst) {
-                                                let _ = db_clone.update_team_message_delivery_status(&office_msg_id, "cancelled");
-                                            } else {
-                                                let _ = db_clone.update_team_message_delivery_status(&office_msg_id, "delivered");
+                                        Some(std::sync::Arc::new(move |partial| {
+                                            if !cancel_for_stream.load(Ordering::SeqCst) {
+                                                let _ = stream_tx.send(partial);
                                             }
-                                                
-                                                let chat_service = crate::application::services::chat_service::ChatService::new(db_clone.clone(), team_bus_clone.clone());
-                                            let (files_written, clean_text) = chat_service.parse_generated_response(&full_text, workspace_dir_for_ai.as_ref());
-                                                if !files_written.is_empty() {
-                                                    let _ = db_clone.update_team_message_content(&office_msg_id, &clean_text);
-                                                }
-                                                let chosen = if files_written.is_empty() { full_text } else { clean_text };
-                                                round_result = Some(chosen.clone());
-                                                let _ = db_clone.ensure_session(&session_id_for_ai, &agent.id, Some(&instance_id_for_ai));
-                                                let final_metadata = chat_message_metadata(&agent_name_str, Some(thought_duration_secs));
-                                                let _ = db_clone.append_conversation_turn(&session_id_for_ai, "assistant", round_result.as_ref().unwrap(), Some(&final_metadata));
-                                                let _ = db_clone.touch_session(&session_id_for_ai);
-                                                
-                                                // Sync AI reply to Office view
-                                                let agent_name_for_office = agent.name.clone();
-                                                let agent_id_for_office = agent.id.clone();
-                                                let chosen_for_office = chosen;
-                                                let _ = cx.update(|cx| view.update(cx, |this: &mut Self, cx| {
+                                        })),
+                                    );
+
+                                let response_started_at = Instant::now();
+                                match executor.execute_task(full_history).await {
+                                    Ok(full_text) => {
+                                        let thought_duration_secs =
+                                            response_started_at.elapsed().as_secs_f64();
+                                        let _ = db_clone
+                                            .update_team_message_content(&office_msg_id, &full_text);
+                                        if cancel_flag_for_ai.load(Ordering::SeqCst) {
+                                            let _ = db_clone.update_team_message_delivery_status(
+                                                &office_msg_id,
+                                                "cancelled",
+                                            );
+                                        } else {
+                                            let _ = db_clone.update_team_message_delivery_status(
+                                                &office_msg_id,
+                                                "delivered",
+                                            );
+                                        }
+
+                                        let chat_service =
+                                            crate::application::services::chat_service::ChatService::new(
+                                                db_clone.clone(),
+                                                team_bus_clone.clone(),
+                                            );
+                                        let (files_written, clean_text) = chat_service
+                                            .parse_generated_response(
+                                                &full_text,
+                                                workspace_dir_for_ai.as_ref(),
+                                            );
+                                        if !files_written.is_empty() {
+                                            let _ = db_clone.update_team_message_content(
+                                                &office_msg_id,
+                                                &clean_text,
+                                            );
+                                        }
+                                        let chosen = if files_written.is_empty() {
+                                            full_text
+                                        } else {
+                                            clean_text
+                                        };
+                                        round_result = Some(chosen.clone());
+                                        let _ = db_clone.ensure_session(
+                                            &session_id_for_ai,
+                                            &agent.id,
+                                            Some(&instance_id_for_ai),
+                                        );
+                                        let final_metadata = chat_message_metadata(
+                                            &agent_name_str,
+                                            Some(thought_duration_secs),
+                                        );
+                                        let _ = db_clone.append_conversation_turn(
+                                            &session_id_for_ai,
+                                            "assistant",
+                                            round_result.as_ref().unwrap(),
+                                            Some(&final_metadata),
+                                        );
+                                        let _ = db_clone.touch_session(&session_id_for_ai);
+
+                                        let agent_name_for_office = agent.name.clone();
+                                        let agent_id_for_office = agent.id.clone();
+                                        let chosen_for_office = chosen;
+                                        let _ = cx
+                                            .update(|cx| {
+                                                view.update(cx, |this: &mut Self, cx| {
                                                     this.update_chat_message_content(
                                                         &session_id_for_ai,
                                                         msg_idx,
@@ -3169,14 +3036,28 @@ impl TeamWorkspacePanel {
                                                         Some(thought_duration_secs),
                                                         cx,
                                                     );
-                                                    this.push_office_chat_message(&agent_id_for_office, &chosen_for_office, false, &agent_name_for_office, cx);
-                                                })).ok();
-                                            }
-                                            Err(e) => {
-                                                let error_text = format!("Error: {}", e);
-                                                let _ = db_clone.update_team_message_content(&office_msg_id, &error_text);
-                                                let _ = db_clone.update_team_message_delivery_status(&office_msg_id, "failed");
-                                                let _ = cx.update(|cx| view.update(cx, |this: &mut Self, cx| {
+                                                    this.push_office_chat_message(
+                                                        &agent_id_for_office,
+                                                        &chosen_for_office,
+                                                        false,
+                                                        &agent_name_for_office,
+                                                        cx,
+                                                    );
+                                                })
+                                            })
+                                            .ok();
+                                    }
+                                    Err(e) => {
+                                        let error_text = format!("Error: {}", e);
+                                        let _ = db_clone
+                                            .update_team_message_content(&office_msg_id, &error_text);
+                                        let _ = db_clone.update_team_message_delivery_status(
+                                            &office_msg_id,
+                                            "failed",
+                                        );
+                                        let _ = cx
+                                            .update(|cx| {
+                                                view.update(cx, |this: &mut Self, cx| {
                                                     this.update_chat_message_content(
                                                         &session_id_for_ai,
                                                         msg_idx,
@@ -3184,438 +3065,12 @@ impl TeamWorkspacePanel {
                                                         None,
                                                         cx,
                                                     );
-                                                })).ok();
-                                            }
-                                        }
-
+                                                })
+                                            })
+                                            .ok();
                                     }
                                 }
-                                "gemini" => {
-                                    let mut adapter = crate::providers::gemini::GeminiAdapter::new();
-                                    if adapter.initialize(&provider_config).is_ok() {
-                                        let agent_name_str = agent.name.clone();
-                                        let metadata = chat_message_metadata(&agent_name_str, None);
-                                        let mut office_msg = crate::teambus::routing::TeamMessage::new_broadcast(
-                                            instance_id_for_ai.clone(),
-                                            "assistant".to_string(),
-                                            format!("[{}]: ", agent.name),
-                                        );
-                                        office_msg.metadata = Some(metadata.clone());
-                                        office_msg.delivery_status = "typing".to_string();
-                                        let office_msg_id = office_msg.id.clone();
-                                        let _ = db_clone.insert_team_message(&office_msg);
-
-                                        let mut msg_idx = 0;
-                                        let _ = cx.update(|cx| {
-                                            view.update(cx, |this: &mut Self, cx| {
-                                                {
-                                                    let history = this.chat_histories.entry(session_id_for_ai.clone()).or_default();
-                                                    history.push(crate::providers::ChatMessage {
-                                                        role: "assistant".into(),
-                                                        content: "".into(),
-                                                        parts: vec![],
-                                                        agent_name: Some(agent.name.clone().into()),
-                                                        thought_duration_secs: None,
-                                                    });
-                                                    msg_idx = history.len() - 1;
-                                                }
-                                                this.rebuild_chat_display(&session_id_for_ai);
-                                                let display_len = this
-                                                    .chat_display_rows
-                                                    .get(&session_id_for_ai)
-                                                    .map(|v| v.len())
-                                                    .unwrap_or(0);
-                                                this.chat_list_state = gpui::ListState::new(display_len, gpui::ListAlignment::Bottom, px(200.));
-                                                cx.notify();
-                                            });
-                                        });
-
-                                        let (stream_tx, mut stream_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-                                        let view_stream = view.clone();
-                                        let db_stream = db_clone.clone();
-                                        let office_msg_id_stream = office_msg_id.clone();
-                                        let session_id_stream = session_id_for_ai.clone();
-                                        let msg_idx_stream = msg_idx;
-                                        cx.spawn(async move |cx| {
-                                            while let Some(partial) = stream_rx.recv().await {
-                                                let _ = db_stream.update_team_message_content(&office_msg_id_stream, &partial);
-                                                let _ = cx
-                                                    .update(|cx| {
-                                                        view_stream.update(cx, |this: &mut Self, cx| {
-                                                            this.update_chat_message_content(
-                                                                &session_id_stream,
-                                                                msg_idx_stream,
-                                                                partial.clone(),
-                                                                None,
-                                                                cx,
-                                                            );
-                                                        });
-                                                    })
-                                                    .ok();
-                                            }
-                                        })
-                                        .detach();
-                                        
-                                        let mcp_registry = std::sync::Arc::new(crate::infrastructure::mcp::registry::McpToolRegistry::new(db.clone()));
-                                        let cancel_for_stream = cancel_flag_for_ai.clone();
-                                        let executor = crate::application::orchestration::executor::AgentExecutor::new(
-                                            std::sync::Arc::new(adapter) as std::sync::Arc<dyn crate::providers::BaseProviderAdapter>,
-                                            mcp_registry,
-                                            db.clone(),
-                                            team_bus_clone.clone(),
-                                            instance_id.clone(),
-                                            agent.id.clone(),
-                                            Some(session_id_for_ai.clone()),
-                                        Some(run_id_for_ai.clone()),
-                                        Some(cancel_flag_for_ai.clone()),
-                                            Some(std::sync::Arc::new(move |partial| {
-                                                if !cancel_for_stream.load(Ordering::SeqCst) {
-                                                    let _ = stream_tx.send(partial);
-                                                }
-                                            })),
-                                        );
-                                        
-                                        let response_started_at = Instant::now();
-                                        match executor.execute_task(full_history).await {
-                                            Ok(full_text) => {
-                                                let thought_duration_secs = response_started_at.elapsed().as_secs_f64();
-                                                let _ = db_clone.update_team_message_content(&office_msg_id, &full_text);
-                                            if cancel_flag_for_ai.load(Ordering::SeqCst) {
-                                                let _ = db_clone.update_team_message_delivery_status(&office_msg_id, "cancelled");
-                                            } else {
-                                                let _ = db_clone.update_team_message_delivery_status(&office_msg_id, "delivered");
-                                            }
-                                                
-                                                let chat_service = crate::application::services::chat_service::ChatService::new(db_clone.clone(), team_bus_clone.clone());
-                                            let (files_written, clean_text) = chat_service.parse_generated_response(&full_text, workspace_dir_for_ai.as_ref());
-                                                if !files_written.is_empty() {
-                                                    let _ = db_clone.update_team_message_content(&office_msg_id, &clean_text);
-                                                }
-                                                let chosen = if files_written.is_empty() { full_text } else { clean_text };
-                                                round_result = Some(chosen.clone());
-                                                let _ = db_clone.ensure_session(&session_id_for_ai, &agent.id, Some(&instance_id_for_ai));
-                                                let final_metadata = chat_message_metadata(&agent_name_str, Some(thought_duration_secs));
-                                                let _ = db_clone.append_conversation_turn(&session_id_for_ai, "assistant", round_result.as_ref().unwrap(), Some(&final_metadata));
-                                                let _ = db_clone.touch_session(&session_id_for_ai);
-                                                
-                                                // Sync AI reply to Office view
-                                                let agent_name_for_office = agent.name.clone();
-                                                let agent_id_for_office = agent.id.clone();
-                                                let chosen_for_office = chosen;
-                                                let _ = cx.update(|cx| view.update(cx, |this: &mut Self, cx| {
-                                                    this.update_chat_message_content(
-                                                        &session_id_for_ai,
-                                                        msg_idx,
-                                                        chosen_for_office.clone(),
-                                                        Some(thought_duration_secs),
-                                                        cx,
-                                                    );
-                                                    this.push_office_chat_message(&agent_id_for_office, &chosen_for_office, false, &agent_name_for_office, cx);
-                                                })).ok();
-                                            }
-                                            Err(e) => {
-                                                let error_text = format!("Error: {}", e);
-                                                let _ = db_clone.update_team_message_content(&office_msg_id, &error_text);
-                                                let _ = db_clone.update_team_message_delivery_status(&office_msg_id, "failed");
-                                                let _ = cx.update(|cx| view.update(cx, |this: &mut Self, cx| {
-                                                    this.update_chat_message_content(
-                                                        &session_id_for_ai,
-                                                        msg_idx,
-                                                        error_text.clone(),
-                                                        None,
-                                                        cx,
-                                                    );
-                                                })).ok();
-                                            }
-                                        }
-
-                                    }
-                                }
-                                "codex" => {
-                                    let mut adapter = crate::providers::codex::CodexAdapter::new();
-                                    if adapter.initialize(&provider_config).is_ok() {
-                                        let agent_name_str = agent.name.clone();
-                                        let metadata = chat_message_metadata(&agent_name_str, None);
-                                        let mut office_msg = crate::teambus::routing::TeamMessage::new_broadcast(
-                                            instance_id_for_ai.clone(),
-                                            "assistant".to_string(),
-                                            format!("[{}]: ", agent.name),
-                                        );
-                                        office_msg.metadata = Some(metadata.clone());
-                                        office_msg.delivery_status = "typing".to_string();
-                                        let office_msg_id = office_msg.id.clone();
-                                        let _ = db_clone.insert_team_message(&office_msg);
-
-                                        let mut msg_idx = 0;
-                                        let _ = cx.update(|cx| {
-                                            view.update(cx, |this: &mut Self, cx| {
-                                                {
-                                                    let history = this.chat_histories.entry(session_id_for_ai.clone()).or_default();
-                                                    history.push(crate::providers::ChatMessage {
-                                                        role: "assistant".into(),
-                                                        content: "".into(),
-                                                        parts: vec![],
-                                                        agent_name: Some(agent.name.clone().into()),
-                                                        thought_duration_secs: None,
-                                                    });
-                                                    msg_idx = history.len() - 1;
-                                                }
-                                                this.rebuild_chat_display(&session_id_for_ai);
-                                                let display_len = this
-                                                    .chat_display_rows
-                                                    .get(&session_id_for_ai)
-                                                    .map(|v| v.len())
-                                                    .unwrap_or(0);
-                                                this.chat_list_state = gpui::ListState::new(display_len, gpui::ListAlignment::Bottom, px(200.));
-                                                cx.notify();
-                                            });
-                                        });
-
-                                        let (stream_tx, mut stream_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-                                        let view_stream = view.clone();
-                                        let db_stream = db_clone.clone();
-                                        let office_msg_id_stream = office_msg_id.clone();
-                                        let session_id_stream = session_id_for_ai.clone();
-                                        let msg_idx_stream = msg_idx;
-                                        cx.spawn(async move |cx| {
-                                            while let Some(partial) = stream_rx.recv().await {
-                                                let _ = db_stream.update_team_message_content(&office_msg_id_stream, &partial);
-                                                let _ = cx
-                                                    .update(|cx| {
-                                                        view_stream.update(cx, |this: &mut Self, cx| {
-                                                            this.update_chat_message_content(
-                                                                &session_id_stream,
-                                                                msg_idx_stream,
-                                                                partial.clone(),
-                                                                None,
-                                                                cx,
-                                                            );
-                                                        });
-                                                    })
-                                                    .ok();
-                                            }
-                                        })
-                                        .detach();
-                                        
-                                        
-                                        let mcp_registry = std::sync::Arc::new(crate::infrastructure::mcp::registry::McpToolRegistry::new(db.clone()));
-                                        let cancel_for_stream = cancel_flag_for_ai.clone();
-                                        let executor = crate::application::orchestration::executor::AgentExecutor::new(
-                                            std::sync::Arc::new(adapter) as std::sync::Arc<dyn crate::providers::BaseProviderAdapter>,
-                                            mcp_registry,
-                                            db.clone(),
-                                            team_bus_clone.clone(),
-                                            instance_id.clone(),
-                                            agent.id.clone(),
-                                            Some(session_id_for_ai.clone()),
-                                        Some(run_id_for_ai.clone()),
-                                        Some(cancel_flag_for_ai.clone()),
-                                            Some(std::sync::Arc::new(move |partial| {
-                                                if !cancel_for_stream.load(Ordering::SeqCst) {
-                                                    let _ = stream_tx.send(partial);
-                                                }
-                                            })),
-                                        );
-                                        let response_started_at = Instant::now();
-                                        match executor.execute_task(full_history).await {
-                                            Ok(full_text) => {
-                                                let thought_duration_secs = response_started_at.elapsed().as_secs_f64();
-                                                let _ = db_clone.update_team_message_content(&office_msg_id, &full_text);
-                                            if cancel_flag_for_ai.load(Ordering::SeqCst) {
-                                                let _ = db_clone.update_team_message_delivery_status(&office_msg_id, "cancelled");
-                                            } else {
-                                                let _ = db_clone.update_team_message_delivery_status(&office_msg_id, "delivered");
-                                            }
-                                                
-                                                let chat_service = crate::application::services::chat_service::ChatService::new(db_clone.clone(), team_bus_clone.clone());
-                                            let (files_written, clean_text) = chat_service.parse_generated_response(&full_text, workspace_dir_for_ai.as_ref());
-                                                if !files_written.is_empty() {
-                                                    let _ = db_clone.update_team_message_content(&office_msg_id, &clean_text);
-                                                }
-                                                let chosen = if files_written.is_empty() { full_text } else { clean_text };
-                                                round_result = Some(chosen.clone());
-                                                let _ = db_clone.ensure_session(&session_id_for_ai, &agent.id, Some(&instance_id_for_ai));
-                                                let final_metadata = chat_message_metadata(&agent_name_str, Some(thought_duration_secs));
-                                                let _ = db_clone.append_conversation_turn(&session_id_for_ai, "assistant", round_result.as_ref().unwrap(), Some(&final_metadata));
-                                                let _ = db_clone.touch_session(&session_id_for_ai);
-                                                
-                                                // Sync AI reply to Office view
-                                                let agent_name_for_office = agent.name.clone();
-                                                let agent_id_for_office = agent.id.clone();
-                                                let chosen_for_office = chosen;
-                                                let _ = cx.update(|cx| view.update(cx, |this: &mut Self, cx| {
-                                                    this.update_chat_message_content(
-                                                        &session_id_for_ai,
-                                                        msg_idx,
-                                                        chosen_for_office.clone(),
-                                                        Some(thought_duration_secs),
-                                                        cx,
-                                                    );
-                                                    this.push_office_chat_message(&agent_id_for_office, &chosen_for_office, false, &agent_name_for_office, cx);
-                                                })).ok();
-                                            }
-                                            Err(e) => {
-                                                let error_text = format!("Error: {}", e);
-                                                let _ = db_clone.update_team_message_content(&office_msg_id, &error_text);
-                                                let _ = db_clone.update_team_message_delivery_status(&office_msg_id, "failed");
-                                                let _ = cx.update(|cx| view.update(cx, |this: &mut Self, cx| {
-                                                    this.update_chat_message_content(
-                                                        &session_id_for_ai,
-                                                        msg_idx,
-                                                        error_text.clone(),
-                                                        None,
-                                                        cx,
-                                                    );
-                                                })).ok();
-                                            }
-                                        }
-
-                                    }
-                                }
-                                "opencode" => {
-                                    let mut adapter = crate::providers::opencode::OpenCodeAdapter::new();
-                                    if adapter.initialize(&provider_config).is_ok() {
-                                        let agent_name_str = agent.name.clone();
-                                        let metadata = chat_message_metadata(&agent_name_str, None);
-                                        let mut office_msg = crate::teambus::routing::TeamMessage::new_broadcast(
-                                            instance_id_for_ai.clone(),
-                                            "assistant".to_string(),
-                                            format!("[{}]: ", agent.name),
-                                        );
-                                        office_msg.metadata = Some(metadata.clone());
-                                        office_msg.delivery_status = "typing".to_string();
-                                        let office_msg_id = office_msg.id.clone();
-                                        let _ = db_clone.insert_team_message(&office_msg);
-
-                                        let mut msg_idx = 0;
-                                        let _ = cx.update(|cx| {
-                                            view.update(cx, |this: &mut Self, cx| {
-                                                {
-                                                    let history = this.chat_histories.entry(session_id_for_ai.clone()).or_default();
-                                                    history.push(crate::providers::ChatMessage {
-                                                        role: "assistant".into(),
-                                                        content: "".into(),
-                                                        parts: vec![],
-                                                        agent_name: Some(agent.name.clone().into()),
-                                                        thought_duration_secs: None,
-                                                    });
-                                                    msg_idx = history.len() - 1;
-                                                }
-                                                this.rebuild_chat_display(&session_id_for_ai);
-                                                let display_len = this
-                                                    .chat_display_rows
-                                                    .get(&session_id_for_ai)
-                                                    .map(|v| v.len())
-                                                    .unwrap_or(0);
-                                                this.chat_list_state = gpui::ListState::new(display_len, gpui::ListAlignment::Bottom, px(200.));
-                                                cx.notify();
-                                            });
-                                        });
-
-                                        let (stream_tx, mut stream_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-                                        let view_stream = view.clone();
-                                        let db_stream = db_clone.clone();
-                                        let office_msg_id_stream = office_msg_id.clone();
-                                        let session_id_stream = session_id_for_ai.clone();
-                                        let msg_idx_stream = msg_idx;
-                                        cx.spawn(async move |cx| {
-                                            while let Some(partial) = stream_rx.recv().await {
-                                                let _ = db_stream.update_team_message_content(&office_msg_id_stream, &partial);
-                                                let _ = cx
-                                                    .update(|cx| {
-                                                        view_stream.update(cx, |this: &mut Self, cx| {
-                                                            this.update_chat_message_content(
-                                                                &session_id_stream,
-                                                                msg_idx_stream,
-                                                                partial.clone(),
-                                                                None,
-                                                                cx,
-                                                            );
-                                                        });
-                                                    })
-                                                    .ok();
-                                            }
-                                        })
-                                        .detach();
-                                        
-                                        let mcp_registry = std::sync::Arc::new(crate::infrastructure::mcp::registry::McpToolRegistry::new(db.clone()));
-                                        let cancel_for_stream = cancel_flag_for_ai.clone();
-                                        let executor = crate::application::orchestration::executor::AgentExecutor::new(
-                                            std::sync::Arc::new(adapter) as std::sync::Arc<dyn crate::providers::BaseProviderAdapter>,
-                                            mcp_registry,
-                                            db.clone(),
-                                            team_bus_clone.clone(),
-                                            instance_id.clone(),
-                                            agent.id.clone(),
-                                            Some(session_id_for_ai.clone()),
-                                        Some(run_id_for_ai.clone()),
-                                        Some(cancel_flag_for_ai.clone()),
-                                            Some(std::sync::Arc::new(move |partial| {
-                                                if !cancel_for_stream.load(Ordering::SeqCst) {
-                                                    let _ = stream_tx.send(partial);
-                                                }
-                                            })),
-                                        );
-                                        
-                                        let response_started_at = Instant::now();
-                                        match executor.execute_task(full_history).await {
-                                            Ok(full_text) => {
-                                                let thought_duration_secs = response_started_at.elapsed().as_secs_f64();
-                                                let _ = db_clone.update_team_message_content(&office_msg_id, &full_text);
-                                            if cancel_flag_for_ai.load(Ordering::SeqCst) {
-                                                let _ = db_clone.update_team_message_delivery_status(&office_msg_id, "cancelled");
-                                            } else {
-                                                let _ = db_clone.update_team_message_delivery_status(&office_msg_id, "delivered");
-                                            }
-                                                
-                                                let chat_service = crate::application::services::chat_service::ChatService::new(db_clone.clone(), team_bus_clone.clone());
-                                            let (files_written, clean_text) = chat_service.parse_generated_response(&full_text, workspace_dir_for_ai.as_ref());
-                                                if !files_written.is_empty() {
-                                                    let _ = db_clone.update_team_message_content(&office_msg_id, &clean_text);
-                                                }
-                                                let chosen = if files_written.is_empty() { full_text } else { clean_text };
-                                                round_result = Some(chosen.clone());
-                                                let _ = db_clone.ensure_session(&session_id_for_ai, &agent.id, Some(&instance_id_for_ai));
-                                                let final_metadata = chat_message_metadata(&agent_name_str, Some(thought_duration_secs));
-                                                let _ = db_clone.append_conversation_turn(&session_id_for_ai, "assistant", round_result.as_ref().unwrap(), Some(&final_metadata));
-                                                let _ = db_clone.touch_session(&session_id_for_ai);
-                                                
-                                                // Sync AI reply to Office view
-                                                let agent_name_for_office = agent.name.clone();
-                                                let agent_id_for_office = agent.id.clone();
-                                                let chosen_for_office = chosen;
-                                                let _ = cx.update(|cx| view.update(cx, |this: &mut Self, cx| {
-                                                    this.update_chat_message_content(
-                                                        &session_id_for_ai,
-                                                        msg_idx,
-                                                        chosen_for_office.clone(),
-                                                        Some(thought_duration_secs),
-                                                        cx,
-                                                    );
-                                                    this.push_office_chat_message(&agent_id_for_office, &chosen_for_office, false, &agent_name_for_office, cx);
-                                                })).ok();
-                                            }
-                                            Err(e) => {
-                                                let error_text = format!("Error: {}", e);
-                                                let _ = db_clone.update_team_message_content(&office_msg_id, &error_text);
-                                                let _ = db_clone.update_team_message_delivery_status(&office_msg_id, "failed");
-                                                let _ = cx.update(|cx| view.update(cx, |this: &mut Self, cx| {
-                                                    this.update_chat_message_content(
-                                                        &session_id_for_ai,
-                                                        msg_idx,
-                                                        error_text.clone(),
-                                                        None,
-                                                        cx,
-                                                    );
-                                                })).ok();
-                                            }
-                                        }
-
-                                    }
-                                }
-                                _ => {}
                             }
-                            
                             if let Some(text) = round_result {
                                 produced_response = true;
                                 current_history.push(crate::providers::ChatMessage {

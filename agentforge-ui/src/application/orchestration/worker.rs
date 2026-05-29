@@ -1,30 +1,20 @@
+use crate::application::services::provider_factory::{provider_kind, ProviderAdapterCache};
 use crate::core::traits::database::DatabasePort;
 use crate::infrastructure::message_bus::routing::{MessageType, TeamBusRouter, TeamMessage};
-use crate::providers::BaseProviderAdapter;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::Mutex;
 use uuid::Uuid;
-
-fn provider_kind(p: &crate::db::Provider) -> &str {
-    match p.provider_name.as_str() {
-        "openrouter" | "claude" | "gemini" | "codex" | "opencode" => p.provider_name.as_str(),
-        _ => match p.adapter_type.as_str() {
-            "AnthropicAdapter" => "claude",
-            "OpenAIAdapter" => "codex",
-            "GeminiAdapter" => "gemini",
-            "OpenCodeAdapter" => "opencode",
-            _ => p.provider_name.as_str(),
-        },
-    }
-}
 
 pub struct AgentWorker {
     pub agent_id: String,
     pub team_instance_id: String,
+    pub team_id: String,
     db: Arc<dyn DatabasePort>,
     team_bus: Arc<TeamBusRouter>,
+    provider_cache: Arc<ProviderAdapterCache>,
     task_exec_lock: Mutex<()>,
 }
 
@@ -32,14 +22,18 @@ impl AgentWorker {
     pub fn new(
         agent_id: String,
         team_instance_id: String,
+        team_id: String,
         db: Arc<dyn DatabasePort>,
         team_bus: Arc<TeamBusRouter>,
+        provider_cache: Arc<ProviderAdapterCache>,
     ) -> Self {
         Self {
             agent_id,
             team_instance_id,
+            team_id,
             db,
             team_bus,
+            provider_cache,
             task_exec_lock: Mutex::new(()),
         }
     }
@@ -66,7 +60,8 @@ impl AgentWorker {
             .team_bus
             .subscribe_broadcast(&self.team_instance_id)
             .await;
-        let mut tick = tokio::time::interval(std::time::Duration::from_secs(2));
+        let (min_poll_delay, max_poll_delay) = self.worker_poll_bounds();
+        let mut idle_delay = Duration::from_millis(0);
 
         println!(
             "AgentWorker {} (Role: {}) started for instance {}",
@@ -75,19 +70,28 @@ impl AgentWorker {
 
         loop {
             tokio::select! {
-                _ = tick.tick() => {
+                _ = tokio::time::sleep(idle_delay) => {
                     if !self.is_agent_online().await {
                         break;
                     }
-                    self.try_execute_next_task().await;
+                    let executed = self.try_execute_next_task().await;
+                    idle_delay = if executed {
+                        min_poll_delay
+                    } else {
+                        idle_delay.saturating_mul(2).clamp(min_poll_delay, max_poll_delay)
+                    };
                 }
                 msg = rx.recv() => {
                     let Some(msg) = msg else { break; };
                     self.handle_message(msg).await;
+                    let executed = self.try_execute_next_task().await;
+                    idle_delay = if executed { min_poll_delay } else { Duration::from_millis(0) };
                 }
                 msg = bc_rx.recv() => {
                     let Ok(msg) = msg else { break; };
                     self.handle_message(msg).await;
+                    let executed = self.try_execute_next_task().await;
+                    idle_delay = if executed { min_poll_delay } else { Duration::from_millis(0) };
                 }
             }
         }
@@ -96,6 +100,26 @@ impl AgentWorker {
             .unregister_member(&self.team_instance_id, &self.agent_id, &agent_role)
             .await;
         println!("AgentWorker {} stopped", self.agent_id);
+    }
+
+    fn worker_poll_bounds(&self) -> (Duration, Duration) {
+        let min_ms = self
+            .db
+            .get_setting("worker_poll_min_ms")
+            .ok()
+            .flatten()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(500)
+            .clamp(100, 60_000);
+        let max_ms = self
+            .db
+            .get_setting("worker_poll_max_ms")
+            .ok()
+            .flatten()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(15_000)
+            .clamp(min_ms, 300_000);
+        (Duration::from_millis(min_ms), Duration::from_millis(max_ms))
     }
 
     async fn get_agent_role(&self) -> Option<String> {
@@ -185,7 +209,9 @@ impl AgentWorker {
             self.persist_cross_team_case_event(&handoff, &msg);
             let case_id = self.ensure_governed_case(&handoff);
             if handoff.handoff_type == "review_request" && !handoff.reply_to_team.is_empty() {
-                let handler = self.select_review_handler_agent_id(case_id.as_deref()).await;
+                let handler = self
+                    .select_review_handler_agent_id(case_id.as_deref())
+                    .await;
                 if handler.as_deref() == Some(self.agent_id.as_str()) {
                     self.execute_cross_team_review(&msg, handoff.clone()).await;
                 }
@@ -194,7 +220,9 @@ impl AgentWorker {
             if matches!(handoff.handoff_type.as_str(), "message" | "handoff")
                 && !handoff.reply_to_team.is_empty()
             {
-                let handler = self.select_message_handler_agent_id(case_id.as_deref()).await;
+                let handler = self
+                    .select_message_handler_agent_id(case_id.as_deref())
+                    .await;
                 if handler.as_deref() == Some(self.agent_id.as_str()) {
                     self.execute_cross_team_message(&msg, handoff).await;
                 }
@@ -283,35 +311,36 @@ impl AgentWorker {
         {
             return Some(case.id);
         }
-        let service =
-            crate::application::orchestration::collaboration::CollaborationService::new(
-                self.db.clone(),
-            );
+        let service = crate::application::orchestration::collaboration::CollaborationService::new(
+            self.db.clone(),
+        );
         service
-            .create_handoff(crate::application::orchestration::collaboration::HandoffInput {
-                run_id: None,
-                correlation_id: Some(&handoff.correlation_id),
-                from_instance_id: &handoff.from_team,
-                to_instance_id: &self.team_instance_id,
-                from_agent_id: None,
-                objective: &handoff.briefing_package,
-                acceptance_json: "[]",
-                constraints_json: "{}",
-                context_refs_json: "[]",
-                priority: "medium",
-                risk_level: "medium",
-            })
+            .create_handoff(
+                crate::application::orchestration::collaboration::HandoffInput {
+                    run_id: None,
+                    correlation_id: Some(&handoff.correlation_id),
+                    from_instance_id: &handoff.from_team,
+                    to_instance_id: &self.team_instance_id,
+                    from_agent_id: None,
+                    objective: &handoff.briefing_package,
+                    acceptance_json: "[]",
+                    constraints_json: "{}",
+                    context_refs_json: "[]",
+                    priority: "medium",
+                    risk_level: "medium",
+                },
+            )
             .ok()
             .map(|(case_id, _, _)| case_id)
     }
 
-    async fn try_execute_next_task(&self) {
+    async fn try_execute_next_task(&self) -> bool {
         let Ok(_guard) = self.task_exec_lock.try_lock() else {
-            return;
+            return false;
         };
 
         let Ok(Some(agent)) = self.db.get_agent(&self.agent_id) else {
-            return;
+            return false;
         };
         let provider_config = self
             .db
@@ -326,20 +355,8 @@ impl AgentWorker {
                 })
             });
         let Some(provider_config) = provider_config else {
-            return;
+            return false;
         };
-
-        let team_id = self
-            .db
-            .list_instances()
-            .ok()
-            .and_then(|instances| {
-                instances
-                    .into_iter()
-                    .find(|i| i.id == self.team_instance_id)
-                    .map(|i| i.team_id)
-            })
-            .unwrap_or_default();
 
         let tasks = self
             .db
@@ -358,7 +375,7 @@ impl AgentWorker {
         }
 
         let Some(task) = next_task else {
-            return;
+            return false;
         };
 
         let claimed = self
@@ -366,7 +383,7 @@ impl AgentWorker {
             .claim_task_for_instance(&task.id, &self.agent_id, &self.team_instance_id)
             .unwrap_or(false);
         if !claimed {
-            return;
+            return false;
         }
 
         let workspace_dir = self
@@ -380,12 +397,15 @@ impl AgentWorker {
             self.team_bus.clone(),
         );
         let sys_prompt = chat_service
-            .build_dynamic_system_prompt(&team_id, &self.team_instance_id, &self.agent_id)
+            .build_dynamic_system_prompt(&self.team_id, &self.team_instance_id, &self.agent_id)
             .unwrap_or_default();
 
         let task_text = task.payload.clone().unwrap_or_else(|| task.id.clone());
         let instructions = if let Some(ref ws) = workspace_dir {
-            format!("Execute the following task. You are working in the directory: {}. To create or change files, call the write_file or edit_file tool with a relative path; do not represent file operations as markdown. Sensitive tools may pause for governance approval. Task:\n", ws)
+            format!(
+                "Execute the following task. You are working in the directory: {}. To create or change files, call the write_file or edit_file tool with a relative path; do not represent file operations as markdown. Sensitive tools may pause for governance approval. Task:\n",
+                ws
+            )
         } else {
             "Execute the following task. File operations require a configured workspace and must be performed through write_file or edit_file tools; do not represent file operations as markdown. Sensitive tools may pause for governance approval. Task:\n".to_string()
         };
@@ -407,53 +427,11 @@ impl AgentWorker {
             },
         ];
 
-        let adapter: Option<Arc<dyn BaseProviderAdapter>> = match provider_kind(&provider_config) {
-            "openrouter" => {
-                let mut a = crate::providers::openrouter::OpenRouterAdapter::new();
-                if a.initialize(&provider_config).is_ok() {
-                    Some(Arc::new(a))
-                } else {
-                    None
-                }
-            }
-            "claude" => {
-                let mut a = crate::providers::claude::ClaudeAdapter::new();
-                if a.initialize(&provider_config).is_ok() {
-                    Some(Arc::new(a))
-                } else {
-                    None
-                }
-            }
-            "gemini" => {
-                let mut a = crate::providers::gemini::GeminiAdapter::new();
-                if a.initialize(&provider_config).is_ok() {
-                    Some(Arc::new(a))
-                } else {
-                    None
-                }
-            }
-            "codex" => {
-                let mut a = crate::providers::codex::CodexAdapter::new();
-                if a.initialize(&provider_config).is_ok() {
-                    Some(Arc::new(a))
-                } else {
-                    None
-                }
-            }
-            "opencode" => {
-                let mut a = crate::providers::opencode::OpenCodeAdapter::new();
-                if a.initialize(&provider_config).is_ok() {
-                    Some(Arc::new(a))
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        };
+        let adapter = self.provider_cache.get_or_create(&provider_config);
 
         let Some(adapter) = adapter else {
             let _ = self.db.mark_task_failed(&task.id);
-            return;
+            return true;
         };
 
         let session_id = task.run_id.as_deref().and_then(|run_id| {
@@ -534,6 +512,7 @@ impl AgentWorker {
             );
             let _ = self.db.touch_session(&session.id);
         }
+        true
     }
 
     fn parse_cross_team_handoff(msg: &TeamMessage) -> Option<CrossTeamHandoff> {
@@ -711,24 +690,12 @@ impl AgentWorker {
             return;
         };
 
-        let team_id = self
-            .db
-            .list_instances()
-            .ok()
-            .and_then(|instances| {
-                instances
-                    .into_iter()
-                    .find(|i| i.id == self.team_instance_id)
-                    .map(|i| i.team_id)
-            })
-            .unwrap_or_default();
-
         let chat_service = crate::application::services::chat_service::ChatService::new(
             self.db.clone(),
             self.team_bus.clone(),
         );
         let mut sys = chat_service
-            .build_dynamic_system_prompt(&team_id, &self.team_instance_id, &self.agent_id)
+            .build_dynamic_system_prompt(&self.team_id, &self.team_instance_id, &self.agent_id)
             .unwrap_or_default();
 
         sys.push_str("\n\nROLE: CRITIC\nYou are performing a cross-team review.\nYou MUST output a structured critique (numbered issues + concrete fixes).\nAfter writing the critique, you MUST respond to the requester by calling the tool handoff_to_team with handoff_type='review_response', correlation_id preserved, target_team=reply_to_team.\n");
@@ -756,12 +723,15 @@ impl AgentWorker {
                 "[]",
                 None,
             );
-            if service.grant_readback_only(
-                &case_id,
-                &run_id,
-                crate::application::orchestration::tool_gateway::LOCAL_DESKTOP_ACTOR_ID,
-                &self.agent_id,
-            ).is_err() {
+            if service
+                .grant_readback_only(
+                    &case_id,
+                    &run_id,
+                    crate::application::orchestration::tool_gateway::LOCAL_DESKTOP_ACTOR_ID,
+                    &self.agent_id,
+                )
+                .is_err()
+            {
                 self.finish_cross_team_run(
                     &run_id,
                     "Delegated review denied: readback scope could not be persisted.",
@@ -777,10 +747,13 @@ impl AgentWorker {
             handoff.from_team,
             original_msg.content,
             handoff.briefing_package,
-            handoff.context
+            handoff
+                .context
                 .as_ref()
-                .map(|c| format!("\n\nAdditional Context:\n{}",
-                    serde_json::to_string_pretty(c).unwrap_or_default()))
+                .map(|c| format!(
+                    "\n\nAdditional Context:\n{}",
+                    serde_json::to_string_pretty(c).unwrap_or_default()
+                ))
                 .unwrap_or_default()
         );
 
@@ -801,50 +774,7 @@ impl AgentWorker {
             },
         ];
 
-        let adapter: Option<Arc<dyn crate::providers::BaseProviderAdapter>> =
-            match provider_kind(&provider_config) {
-                "openrouter" => {
-                    let mut a = crate::providers::openrouter::OpenRouterAdapter::new();
-                    if a.initialize(&provider_config).is_ok() {
-                        Some(Arc::new(a))
-                    } else {
-                        None
-                    }
-                }
-                "claude" => {
-                    let mut a = crate::providers::claude::ClaudeAdapter::new();
-                    if a.initialize(&provider_config).is_ok() {
-                        Some(Arc::new(a))
-                    } else {
-                        None
-                    }
-                }
-                "gemini" => {
-                    let mut a = crate::providers::gemini::GeminiAdapter::new();
-                    if a.initialize(&provider_config).is_ok() {
-                        Some(Arc::new(a))
-                    } else {
-                        None
-                    }
-                }
-                "codex" => {
-                    let mut a = crate::providers::codex::CodexAdapter::new();
-                    if a.initialize(&provider_config).is_ok() {
-                        Some(Arc::new(a))
-                    } else {
-                        None
-                    }
-                }
-                "opencode" => {
-                    let mut a = crate::providers::opencode::OpenCodeAdapter::new();
-                    if a.initialize(&provider_config).is_ok() {
-                        Some(Arc::new(a))
-                    } else {
-                        None
-                    }
-                }
-                _ => None,
-            };
+        let adapter = self.provider_cache.get_or_create(&provider_config);
 
         let Some(adapter) = adapter else {
             return;
@@ -923,12 +853,15 @@ impl AgentWorker {
                 "[]",
                 None,
             );
-            if service.grant_readback_only(
-                &case_id,
-                &run_id,
-                crate::application::orchestration::tool_gateway::LOCAL_DESKTOP_ACTOR_ID,
-                &self.agent_id,
-            ).is_err() {
+            if service
+                .grant_readback_only(
+                    &case_id,
+                    &run_id,
+                    crate::application::orchestration::tool_gateway::LOCAL_DESKTOP_ACTOR_ID,
+                    &self.agent_id,
+                )
+                .is_err()
+            {
                 self.finish_cross_team_run(
                     &run_id,
                     "Delegated execution denied: readback scope could not be persisted.",
@@ -973,24 +906,12 @@ impl AgentWorker {
             return;
         };
 
-        let team_id = self
-            .db
-            .list_instances()
-            .ok()
-            .and_then(|instances| {
-                instances
-                    .into_iter()
-                    .find(|i| i.id == self.team_instance_id)
-                    .map(|i| i.team_id)
-            })
-            .unwrap_or_default();
-
         let chat_service = crate::application::services::chat_service::ChatService::new(
             self.db.clone(),
             self.team_bus.clone(),
         );
         let mut sys = chat_service
-            .build_dynamic_system_prompt(&team_id, &self.team_instance_id, &self.agent_id)
+            .build_dynamic_system_prompt(&self.team_id, &self.team_instance_id, &self.agent_id)
             .unwrap_or_default();
 
         sys.push_str("\n\nCROSS-TEAM HANDOFF\nYou received a governed cross-team handoff. A readback has been submitted for human or policy acceptance. You MUST NOT delegate, modify artifacts, or send a completion handoff until the case context reports an accepted readback. If acceptance is absent, report that work is awaiting readback acceptance.\n");
@@ -1009,11 +930,17 @@ impl AgentWorker {
 
         let user_text = format!(
             "Cross-team message\ncorrelation_id: {}\nfrom_instance: {}\noriginal_message: {}\n\nMessage:\n{}{}",
-            correlation_id, handoff.from_team, original_msg.content, handoff.briefing_package,
-            handoff.context
+            correlation_id,
+            handoff.from_team,
+            original_msg.content,
+            handoff.briefing_package,
+            handoff
+                .context
                 .as_ref()
-                .map(|c| format!("\n\nAdditional Context (deadline, constraints, related_files, etc.):\n{}",
-                    serde_json::to_string_pretty(c).unwrap_or_default()))
+                .map(|c| format!(
+                    "\n\nAdditional Context (deadline, constraints, related_files, etc.):\n{}",
+                    serde_json::to_string_pretty(c).unwrap_or_default()
+                ))
                 .unwrap_or_default()
         );
 
@@ -1034,50 +961,7 @@ impl AgentWorker {
             },
         ];
 
-        let adapter: Option<Arc<dyn crate::providers::BaseProviderAdapter>> =
-            match provider_kind(&provider_config) {
-                "openrouter" => {
-                    let mut a = crate::providers::openrouter::OpenRouterAdapter::new();
-                    if a.initialize(&provider_config).is_ok() {
-                        Some(Arc::new(a))
-                    } else {
-                        None
-                    }
-                }
-                "claude" => {
-                    let mut a = crate::providers::claude::ClaudeAdapter::new();
-                    if a.initialize(&provider_config).is_ok() {
-                        Some(Arc::new(a))
-                    } else {
-                        None
-                    }
-                }
-                "gemini" => {
-                    let mut a = crate::providers::gemini::GeminiAdapter::new();
-                    if a.initialize(&provider_config).is_ok() {
-                        Some(Arc::new(a))
-                    } else {
-                        None
-                    }
-                }
-                "codex" => {
-                    let mut a = crate::providers::codex::CodexAdapter::new();
-                    if a.initialize(&provider_config).is_ok() {
-                        Some(Arc::new(a))
-                    } else {
-                        None
-                    }
-                }
-                "opencode" => {
-                    let mut a = crate::providers::opencode::OpenCodeAdapter::new();
-                    if a.initialize(&provider_config).is_ok() {
-                        Some(Arc::new(a))
-                    } else {
-                        None
-                    }
-                }
-                _ => None,
-            };
+        let adapter = self.provider_cache.get_or_create(&provider_config);
 
         let Some(adapter) = adapter else {
             return;
@@ -1208,40 +1092,7 @@ impl AgentWorker {
         let output_text = if run_id.is_none() {
             "iFlow task denied: workflow execution is not linked to a traceable run.".to_string()
         } else {
-            let adapter: Option<Arc<dyn crate::providers::BaseProviderAdapter>> =
-                match provider_kind(&provider_config) {
-                    "openrouter" => {
-                        let mut adapter = crate::providers::openrouter::OpenRouterAdapter::new();
-                        adapter.initialize(&provider_config).ok().map(|_| {
-                            Arc::new(adapter) as Arc<dyn crate::providers::BaseProviderAdapter>
-                        })
-                    }
-                    "claude" => {
-                        let mut adapter = crate::providers::claude::ClaudeAdapter::new();
-                        adapter.initialize(&provider_config).ok().map(|_| {
-                            Arc::new(adapter) as Arc<dyn crate::providers::BaseProviderAdapter>
-                        })
-                    }
-                    "gemini" => {
-                        let mut adapter = crate::providers::gemini::GeminiAdapter::new();
-                        adapter.initialize(&provider_config).ok().map(|_| {
-                            Arc::new(adapter) as Arc<dyn crate::providers::BaseProviderAdapter>
-                        })
-                    }
-                    "codex" => {
-                        let mut adapter = crate::providers::codex::CodexAdapter::new();
-                        adapter.initialize(&provider_config).ok().map(|_| {
-                            Arc::new(adapter) as Arc<dyn crate::providers::BaseProviderAdapter>
-                        })
-                    }
-                    "opencode" => {
-                        let mut adapter = crate::providers::opencode::OpenCodeAdapter::new();
-                        adapter.initialize(&provider_config).ok().map(|_| {
-                            Arc::new(adapter) as Arc<dyn crate::providers::BaseProviderAdapter>
-                        })
-                    }
-                    _ => None,
-                };
+            let adapter = self.provider_cache.get_or_create(&provider_config);
             if let Some(adapter) = adapter {
                 let db_for_stream = self.db.clone();
                 let message_id_for_stream = message_id.clone();
@@ -1285,29 +1136,34 @@ impl AgentWorker {
                 "node_id": node_id
             })
             .to_string();
-            let _ = self.db.ensure_session(session_id, &agent.id, Some(&self.team_instance_id));
             let _ = self
                 .db
-                .append_conversation_turn(session_id, "assistant", &output_text, Some(&metadata));
+                .ensure_session(session_id, &agent.id, Some(&self.team_instance_id));
+            let _ = self.db.append_conversation_turn(
+                session_id,
+                "assistant",
+                &output_text,
+                Some(&metadata),
+            );
             let _ = self.db.touch_session(session_id);
         }
         if output_text.starts_with("Approval required before executing") {
             if let Some(run_id) = run_id.as_deref() {
-                let _ = self.db.update_orchestration_run_status(
-                    run_id,
-                    "waiting_approval",
-                    None,
-                );
-                let _ = self.db.insert_run_event(&crate::core::models::RunEventRecord {
-                    id: Uuid::new_v4().to_string(),
-                    run_id: run_id.to_string(),
-                    event_type: "workflow_node_waiting_approval".to_string(),
-                    actor_type: "policy".to_string(),
-                    actor_id: None,
-                    task_id: None,
-                    payload: Some(format!("execution_id={} node_id={}", execution_id, node_id)),
-                    created_at: chrono::Utc::now().to_rfc3339(),
-                });
+                let _ = self
+                    .db
+                    .update_orchestration_run_status(run_id, "waiting_approval", None);
+                let _ = self
+                    .db
+                    .insert_run_event(&crate::core::models::RunEventRecord {
+                        id: Uuid::new_v4().to_string(),
+                        run_id: run_id.to_string(),
+                        event_type: "workflow_node_waiting_approval".to_string(),
+                        actor_type: "policy".to_string(),
+                        actor_id: None,
+                        task_id: None,
+                        payload: Some(format!("execution_id={} node_id={}", execution_id, node_id)),
+                        created_at: chrono::Utc::now().to_rfc3339(),
+                    });
             }
             return;
         }
@@ -1349,6 +1205,7 @@ struct CrossTeamHandoff {
 pub struct WorkerManager {
     pub db: Arc<dyn DatabasePort>,
     team_bus: Arc<TeamBusRouter>,
+    provider_cache: Arc<ProviderAdapterCache>,
     workers: Arc<Mutex<HashMap<String, tokio::task::JoinHandle<()>>>>,
 }
 
@@ -1357,11 +1214,12 @@ impl WorkerManager {
         Self {
             db,
             team_bus,
+            provider_cache: Arc::new(ProviderAdapterCache::new()),
             workers: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
-    pub async fn start_workers_for_instance(&self, instance_id: &str) {
+    pub async fn start_workers_for_instance(&self, instance_id: &str, team_id: &str) {
         if let Ok(agent_ids) = self.db.get_instance_agents(instance_id) {
             let mut workers = self.workers.lock().await;
             workers.retain(|_, handle| !handle.is_finished());
@@ -1382,8 +1240,10 @@ impl WorkerManager {
                     let worker = Arc::new(AgentWorker::new(
                         agent_id.clone(),
                         instance_id.to_string(),
+                        team_id.to_string(),
                         self.db.clone(),
                         self.team_bus.clone(),
+                        self.provider_cache.clone(),
                     ));
 
                     let handle = tokio::spawn(async move {

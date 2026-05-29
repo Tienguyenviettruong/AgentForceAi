@@ -2,11 +2,11 @@ use gpui::{div, prelude::*, App, IntoElement};
 use gpui_component::ActiveTheme as _;
 
 use super::charts::{BarChart, ChartData};
+use crate::core::traits::database::DatabasePort;
 use crate::infrastructure::monitoring::{
     activity::{ActivityFeed, ActivityItem, ActivityType},
     metrics::{MetricCard, MetricValue},
 };
-use crate::core::traits::database::DatabasePort;
 use std::sync::Arc;
 
 pub struct MonitoringDashboard;
@@ -34,12 +34,14 @@ impl MonitoringDashboard {
             .sum();
         let active_count = runs
             .iter()
-            .filter(|run| matches!(run.status.as_str(), "running" | "dispatched" | "waiting_approval"))
+            .filter(|run| {
+                matches!(
+                    run.status.as_str(),
+                    "running" | "dispatched" | "waiting_approval"
+                )
+            })
             .count();
-        let completed_count = runs
-            .iter()
-            .filter(|run| run.status == "completed")
-            .count();
+        let completed_count = runs.iter().filter(|run| run.status == "completed").count();
         let metrics = vec![
             MetricValue {
                 label: "Persisted Runs".to_string(),
@@ -74,7 +76,11 @@ impl MonitoringDashboard {
         let activities = events
             .into_iter()
             .map(|event| ActivityItem {
-                message: format!("{} - {}", event.event_type, event.payload.unwrap_or_default()),
+                message: format!(
+                    "{} - {}",
+                    event.event_type,
+                    event.payload.unwrap_or_default()
+                ),
                 timestamp: event.created_at,
                 activity_type: if event.event_type.contains("failed")
                     || event.event_type.contains("denied")
@@ -125,9 +131,9 @@ impl MonitoringDashboard {
                     .gap_6()
                     .w_full()
                     .child(
-                        div().flex_1().child(
-                            BarChart::new("Recent Persisted Runs", chart_data).render(cx),
-                        ),
+                        div()
+                            .flex_1()
+                            .child(BarChart::new("Recent Persisted Runs", chart_data).render(cx)),
                     )
                     .child(
                         div()

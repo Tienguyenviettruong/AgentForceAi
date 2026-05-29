@@ -196,12 +196,8 @@ pub fn seal_sensitive_payload(plaintext: &str, associated_data: &str) -> Result<
         .map_err(|_| anyhow!("Unable to generate invocation payload nonce."))?;
     let nonce = Nonce::assume_unique_for_key(nonce_bytes);
     let mut encrypted = plaintext.as_bytes().to_vec();
-    key.seal_in_place_append_tag(
-        nonce,
-        Aad::from(associated_data.as_bytes()),
-        &mut encrypted,
-    )
-    .map_err(|_| anyhow!("Unable to seal invocation payload."))?;
+    key.seal_in_place_append_tag(nonce, Aad::from(associated_data.as_bytes()), &mut encrypted)
+        .map_err(|_| anyhow!("Unable to seal invocation payload."))?;
     let mut output = nonce_bytes.to_vec();
     output.extend(encrypted);
     Ok(format!("v1:{}", BASE64.encode(output)))

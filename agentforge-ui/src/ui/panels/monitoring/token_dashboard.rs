@@ -1,6 +1,5 @@
 use gpui::{
-    div, App, Context, InteractiveElement, IntoElement, ParentElement, Render, Styled,
-    Window,
+    div, App, Context, InteractiveElement, IntoElement, ParentElement, Render, Styled, Window,
 };
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::ActiveTheme;

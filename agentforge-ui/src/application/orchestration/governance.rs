@@ -1,10 +1,10 @@
-use uuid::Uuid;
-use tokio::sync::{RwLock, Mutex};
-use std::sync::Arc;
-use std::collections::HashMap;
-use chrono::{DateTime, Utc};
-use serde::{Serialize, Deserialize};
 use anyhow::Result;
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::{Mutex, RwLock};
+use uuid::Uuid;
 
 // 3.29: Governance Policy Engine
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -145,7 +145,12 @@ impl GovernanceManager {
         id
     }
 
-    pub async fn resolve_approval(&self, id: Uuid, approved: bool, reason: Option<String>) -> Result<()> {
+    pub async fn resolve_approval(
+        &self,
+        id: Uuid,
+        approved: bool,
+        reason: Option<String>,
+    ) -> Result<()> {
         let mut requests = self.approval_requests.write().await;
         if let Some(req) = requests.get_mut(&id) {
             req.status = if approved {
@@ -153,13 +158,22 @@ impl GovernanceManager {
             } else {
                 ApprovalStatus::Rejected(reason.unwrap_or_default())
             };
-            
+
             // 3.32 Log audit event
             self.log_audit_event(
-                if approved { "APPROVAL_GRANTED".to_string() } else { "APPROVAL_REJECTED".to_string() },
-                format!("Approval {} for operation {}", if approved { "granted" } else { "rejected" }, req.operation)
-            ).await;
-            
+                if approved {
+                    "APPROVAL_GRANTED".to_string()
+                } else {
+                    "APPROVAL_REJECTED".to_string()
+                },
+                format!(
+                    "Approval {} for operation {}",
+                    if approved { "granted" } else { "rejected" },
+                    req.operation
+                ),
+            )
+            .await;
+
             Ok(())
         } else {
             Err(anyhow::anyhow!("Approval request not found"))
@@ -199,11 +213,14 @@ impl GovernanceManager {
         if tokens > policy.max_tokens_per_run {
             return Err(anyhow::anyhow!("Requested tokens exceed policy limit"));
         }
-        
-        self.budgets.write().await.insert(run_id, TokenBudget {
-            total_allocated: tokens,
-            consumed: 0,
-        });
+
+        self.budgets.write().await.insert(
+            run_id,
+            TokenBudget {
+                total_allocated: tokens,
+                consumed: 0,
+            },
+        );
         Ok(())
     }
 
@@ -214,11 +231,11 @@ impl GovernanceManager {
                 return Err(anyhow::anyhow!("Token budget exceeded"));
             }
             budget.consumed += tokens;
-            
+
             // 3.37 Update metrics
             let mut metrics = self.metrics.write().await;
             metrics.total_tokens_consumed += tokens;
-            
+
             Ok(())
         } else {
             Err(anyhow::anyhow!("Budget not found for run"))
@@ -228,17 +245,17 @@ impl GovernanceManager {
     // 3.34 Orchestration replay and debugging
     pub async fn get_replay_data(&self, run_id: Uuid) -> Result<Vec<AuditEvent>> {
         let trail = self.audit_trail.read().await;
-        Ok(trail.iter().filter(|e| e.description.contains(&run_id.to_string())).cloned().collect())
+        Ok(trail
+            .iter()
+            .filter(|e| e.description.contains(&run_id.to_string()))
+            .cloned()
+            .collect())
     }
 
     // 3.35 Orchestration template system
     pub async fn register_template(&self, name: String, steps: Vec<String>) -> Uuid {
         let id = Uuid::new_v4();
-        let template = OrchestrationTemplate {
-            id,
-            name,
-            steps,
-        };
+        let template = OrchestrationTemplate { id, name, steps };
         self.templates.write().await.insert(id, template);
         id
     }
@@ -250,15 +267,18 @@ impl GovernanceManager {
     // 3.36 Concurrent orchestration execution
     pub async fn start_orchestration(&self, run_id: Uuid) -> Result<()> {
         self.check_can_start_agent().await?;
-        
+
         let mut active = self.active_orchestrations.lock().await;
         *active += 1;
-        
-        self.orchestration_states.write().await.insert(run_id, OrchestrationState::Running);
-        
+
+        self.orchestration_states
+            .write()
+            .await
+            .insert(run_id, OrchestrationState::Running);
+
         let mut metrics = self.metrics.write().await;
         metrics.total_runs += 1;
-        
+
         Ok(())
     }
 
@@ -267,19 +287,23 @@ impl GovernanceManager {
         if *active > 0 {
             *active -= 1;
         }
-        
+
         let mut states = self.orchestration_states.write().await;
         if let Some(state) = states.get_mut(&run_id) {
-            *state = if success { OrchestrationState::Completed } else { OrchestrationState::Failed };
+            *state = if success {
+                OrchestrationState::Completed
+            } else {
+                OrchestrationState::Failed
+            };
         }
-        
+
         let mut metrics = self.metrics.write().await;
         if success {
             metrics.successful_runs += 1;
         } else {
             metrics.failed_runs += 1;
         }
-        
+
         Ok(())
     }
 
@@ -288,13 +312,55 @@ impl GovernanceManager {
         self.metrics.read().await.clone()
     }
 
+    pub fn enforce_run_budget_for_db(
+        db: &dyn crate::core::traits::database::DatabasePort,
+        run_id: Option<&str>,
+    ) -> Result<(), String> {
+        let Some(run_id) = run_id else {
+            return Ok(());
+        };
+        let limit = db
+            .get_setting("governance_max_tokens_per_run")
+            .ok()
+            .flatten()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(100_000);
+        let used = db.get_total_tokens_for_run(run_id).unwrap_or(0);
+        if used >= limit {
+            let reason = format!("Token budget exhausted: {} / {} tokens.", used, limit);
+            let _ = db.insert_run_event(&crate::core::models::RunEventRecord {
+                id: Uuid::new_v4().to_string(),
+                run_id: run_id.to_string(),
+                event_type: "budget_blocked".to_string(),
+                actor_type: "policy".to_string(),
+                actor_id: None,
+                task_id: None,
+                payload: Some(reason.clone()),
+                created_at: Utc::now().to_rfc3339(),
+            });
+            let _ = db.insert_audit_log(&crate::infrastructure::security::audit::AuditEvent {
+                timestamp: Utc::now(),
+                action: "governance:budget_blocked".to_string(),
+                user_id: None,
+                resource: run_id.to_string(),
+                details: reason.clone(),
+            });
+            return Err(reason);
+        }
+        Ok(())
+    }
+
     // 3.39 Orchestration pause/resume
     pub async fn pause_orchestration(&self, run_id: Uuid) -> Result<()> {
         let mut states = self.orchestration_states.write().await;
         if let Some(state) = states.get_mut(&run_id) {
             if *state == OrchestrationState::Running {
                 *state = OrchestrationState::Paused;
-                self.log_audit_event("ORCHESTRATION_PAUSED".to_string(), format!("Run {} paused", run_id)).await;
+                self.log_audit_event(
+                    "ORCHESTRATION_PAUSED".to_string(),
+                    format!("Run {} paused", run_id),
+                )
+                .await;
                 Ok(())
             } else {
                 Err(anyhow::anyhow!("Orchestration is not running"))
@@ -309,7 +375,11 @@ impl GovernanceManager {
         if let Some(state) = states.get_mut(&run_id) {
             if *state == OrchestrationState::Paused {
                 *state = OrchestrationState::Running;
-                self.log_audit_event("ORCHESTRATION_RESUMED".to_string(), format!("Run {} resumed", run_id)).await;
+                self.log_audit_event(
+                    "ORCHESTRATION_RESUMED".to_string(),
+                    format!("Run {} resumed", run_id),
+                )
+                .await;
                 Ok(())
             } else {
                 Err(anyhow::anyhow!("Orchestration is not paused"))

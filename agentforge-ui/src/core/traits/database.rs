@@ -222,8 +222,7 @@ pub trait DatabasePort: Send + Sync {
         &self,
         limit: u32,
     ) -> anyhow::Result<Vec<crate::core::models::CollaborationCaseRecord>>;
-    fn update_collaboration_case_state(&self, case_id: &str, state: &str)
-        -> anyhow::Result<()>;
+    fn update_collaboration_case_state(&self, case_id: &str, state: &str) -> anyhow::Result<()>;
     fn insert_handoff_package(
         &self,
         handoff: &crate::core::models::HandoffPackageRecord,
@@ -324,11 +323,7 @@ pub trait DatabasePort: Send + Sync {
         &self,
         case_id: &str,
     ) -> anyhow::Result<Vec<crate::core::models::DelegatedGrantRecord>>;
-    fn update_delegated_grant_status(
-        &self,
-        grant_id: &str,
-        status: &str,
-    ) -> anyhow::Result<()>;
+    fn update_delegated_grant_status(&self, grant_id: &str, status: &str) -> anyhow::Result<()>;
     fn upsert_agent_competency(
         &self,
         competency: &crate::core::models::AgentCompetencyRecord,
@@ -613,11 +608,8 @@ pub trait DatabasePort: Send + Sync {
     fn list_active_skill_versions(
         &self,
     ) -> anyhow::Result<Vec<crate::core::models::SkillVersionRecord>>;
-    fn update_skill_version_activation(
-        &self,
-        version_id: &str,
-        status: &str,
-    ) -> anyhow::Result<()>;
+    fn update_skill_version_activation(&self, version_id: &str, status: &str)
+        -> anyhow::Result<()>;
     fn insert_benchmark_run(
         &self,
         benchmark: &crate::core::models::BenchmarkRunRecord,
@@ -626,6 +618,54 @@ pub trait DatabasePort: Send + Sync {
         &self,
         candidate_id: &str,
     ) -> anyhow::Result<Vec<crate::core::models::BenchmarkRunRecord>>;
+    fn upsert_benchmark_suite(
+        &self,
+        suite: &crate::core::models::BenchmarkSuiteRecord,
+    ) -> anyhow::Result<()>;
+    fn get_benchmark_suite(
+        &self,
+        suite_id: &str,
+    ) -> anyhow::Result<Option<crate::core::models::BenchmarkSuiteRecord>>;
+    fn list_active_benchmark_suites(
+        &self,
+    ) -> anyhow::Result<Vec<crate::core::models::BenchmarkSuiteRecord>>;
+    fn insert_benchmark_case(
+        &self,
+        case: &crate::core::models::BenchmarkCaseRecord,
+    ) -> anyhow::Result<()>;
+    fn list_benchmark_cases_for_suite(
+        &self,
+        suite_id: &str,
+    ) -> anyhow::Result<Vec<crate::core::models::BenchmarkCaseRecord>>;
+    fn insert_benchmark_result(
+        &self,
+        result: &crate::core::models::BenchmarkResultRecord,
+    ) -> anyhow::Result<()>;
+    fn list_benchmark_results_for_run(
+        &self,
+        benchmark_run_id: &str,
+    ) -> anyhow::Result<Vec<crate::core::models::BenchmarkResultRecord>>;
+    fn insert_benchmark_runner_job(
+        &self,
+        job: &crate::core::models::BenchmarkRunnerJobRecord,
+    ) -> anyhow::Result<()>;
+    fn update_benchmark_runner_job(
+        &self,
+        job_id: &str,
+        status: &str,
+        benchmark_run_id: Option<&str>,
+        error: Option<&str>,
+        completed_at: Option<&str>,
+    ) -> anyhow::Result<()>;
+    fn list_benchmark_runner_jobs_for_candidate(
+        &self,
+        candidate_id: &str,
+    ) -> anyhow::Result<Vec<crate::core::models::BenchmarkRunnerJobRecord>>;
+    fn list_benchmark_runner_jobs_by_status(
+        &self,
+        status: &str,
+        limit: u32,
+    ) -> anyhow::Result<Vec<crate::core::models::BenchmarkRunnerJobRecord>>;
     fn insert_canary_deployment(
         &self,
         deployment: &crate::core::models::CanaryDeploymentRecord,
@@ -639,6 +679,14 @@ pub trait DatabasePort: Send + Sync {
         deployment_id: &str,
         status: &str,
     ) -> anyhow::Result<()>;
+    fn insert_canary_observation(
+        &self,
+        observation: &crate::core::models::CanaryObservationRecord,
+    ) -> anyhow::Result<()>;
+    fn list_canary_observations_for_deployment(
+        &self,
+        deployment_id: &str,
+    ) -> anyhow::Result<Vec<crate::core::models::CanaryObservationRecord>>;
     fn insert_promotion_decision(
         &self,
         decision: &crate::core::models::PromotionDecisionRecord,

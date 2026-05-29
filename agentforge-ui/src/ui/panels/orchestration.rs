@@ -1,8 +1,8 @@
 use crate::application::orchestration::modes::OperatingMode;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    div, px, App, AppContext, Context, EventEmitter, Focusable, IntoElement, ParentElement,
-    Render, Styled, Window,
+    div, px, App, AppContext, Context, EventEmitter, Focusable, IntoElement, ParentElement, Render,
+    Styled, Window,
 };
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::dock::{Panel, PanelEvent, TitleStyle};
@@ -10,7 +10,10 @@ use gpui_component::input::{Input, InputState};
 use gpui_component::notification::NotificationType;
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::theme::ActiveTheme;
-use gpui_component::{form::{field, v_form}, h_flex, v_flex, Sizable, WindowExt};
+use gpui_component::{
+    form::{field, v_form},
+    h_flex, v_flex, Sizable, WindowExt,
+};
 
 pub struct OrchestrationPanel {
     focus_handle: gpui::FocusHandle,
@@ -765,16 +768,21 @@ impl OrchestrationPanel {
                             ),
                     )
                     .child(
-                        div().text_sm().text_color(theme.muted_foreground).child(format!(
-                            "Case {} | Risk {} | Readback {} | {} -> {}",
-                            case_record.id.chars().take(8).collect::<String>(),
-                            case_record.risk_level,
-                            readback_label,
-                            case_record.owner_instance_id,
-                            case_record.target_instance_id
-                        )),
+                        div()
+                            .text_sm()
+                            .text_color(theme.muted_foreground)
+                            .child(format!(
+                                "Case {} | Risk {} | Readback {} | {} -> {}",
+                                case_record.id.chars().take(8).collect::<String>(),
+                                case_record.risk_level,
+                                readback_label,
+                                case_record.owner_instance_id,
+                                case_record.target_instance_id
+                            )),
                     );
-                if let Some(readback) = latest_readback.filter(|readback| readback.status == "submitted") {
+                if let Some(readback) =
+                    latest_readback.filter(|readback| readback.status == "submitted")
+                {
                     let case_id = case_record.id.clone();
                     let readback_id = readback.id.clone();
                     block = block.child(
@@ -946,10 +954,10 @@ impl OrchestrationPanel {
                             .child("Collaboration Cases"),
                     )
                     .child(
-                        div().text_sm().text_color(theme.muted_foreground).child(format!(
-                            "{} open escalations",
-                            escalation_count
-                        )),
+                        div()
+                            .text_sm()
+                            .text_color(theme.muted_foreground)
+                            .child(format!("{} open escalations", escalation_count)),
                     ),
             )
             .child(list)
@@ -971,9 +979,8 @@ impl OrchestrationPanel {
         cx: &mut Context<Self>,
     ) {
         let view = cx.entity().clone();
-        let instruction = cx.new(|cx| {
-            InputState::new(window, cx).placeholder("Validated operating instruction")
-        });
+        let instruction =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Validated operating instruction"));
         let scope_kind = cx.new(|cx| {
             let mut input = InputState::new(window, cx).placeholder("global or instance");
             input.replace("global".to_string(), window, cx);
@@ -1170,8 +1177,7 @@ impl OrchestrationPanel {
         let view = cx.entity().clone();
         let suite = cx.new(|cx| InputState::new(window, cx).placeholder("Benchmark suite ID"));
         let score = cx.new(|cx| InputState::new(window, cx).placeholder("Score: 0.0 to 1.0"));
-        let regressions =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Regression count"));
+        let regressions = cx.new(|cx| InputState::new(window, cx).placeholder("Regression count"));
         let evidence = cx.new(|cx| {
             let mut input = InputState::new(window, cx).placeholder("Evidence JSON");
             input.replace(
@@ -1402,17 +1408,14 @@ impl OrchestrationPanel {
                         .child(
                             v_flex()
                                 .flex_1()
+                                .child(div().text_sm().child(format!(
+                                    "{}: {}",
+                                    feedback.subject_kind, feedback.subject_id
+                                )))
                                 .child(
-                                    div().text_sm().child(format!(
-                                        "{}: {}",
-                                        feedback.subject_kind, feedback.subject_id
-                                    )),
-                                )
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .text_color(theme.muted_foreground)
-                                        .child(feedback.content.chars().take(180).collect::<String>()),
+                                    div().text_sm().text_color(theme.muted_foreground).child(
+                                        feedback.content.chars().take(180).collect::<String>(),
+                                    ),
                                 ),
                         )
                         .child(
@@ -1422,13 +1425,15 @@ impl OrchestrationPanel {
                             )))
                             .small()
                             .label("Validate Lesson")
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.open_lesson_validation_dialog(
-                                    feedback_id.clone(),
-                                    window,
-                                    cx,
-                                );
-                            })),
+                            .on_click(cx.listener(
+                                move |this, _, window, cx| {
+                                    this.open_lesson_validation_dialog(
+                                        feedback_id.clone(),
+                                        window,
+                                        cx,
+                                    );
+                                },
+                            )),
                         ),
                 );
             }
@@ -1462,12 +1467,10 @@ impl OrchestrationPanel {
                 lesson_list = lesson_list.child(
                     v_flex()
                         .gap_1()
-                        .child(
-                            div().text_sm().child(format!(
-                                "{} / {}: {}",
-                                lesson.scope_kind, lesson.scope_id, lesson.instruction
-                            )),
-                        )
+                        .child(div().text_sm().child(format!(
+                            "{} / {}: {}",
+                            lesson.scope_kind, lesson.scope_id, lesson.instruction
+                        )))
                         .child(
                             h_flex()
                                 .gap_2()
@@ -1532,6 +1535,10 @@ impl OrchestrationPanel {
                     .list_benchmark_runs_for_candidate(&candidate.id)
                     .unwrap_or_default()
                     .len();
+                let benchmark_jobs = db
+                    .list_benchmark_runner_jobs_for_candidate(&candidate.id)
+                    .unwrap_or_default()
+                    .len();
                 let canaries = db
                     .list_canary_deployments_for_candidate(&candidate.id)
                     .unwrap_or_default();
@@ -1541,47 +1548,90 @@ impl OrchestrationPanel {
                     .find(|deployment| deployment.status == "running")
                     .map(|deployment| deployment.id.clone());
                 let mut candidate_block = v_flex()
-                        .gap_1()
-                        .p_3()
-                        .rounded_md()
-                        .border_1()
-                        .border_color(theme.border)
-                        .child(
-                            h_flex()
-                                .justify_between()
-                                .child(
-                                    div()
-                                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                                        .child(format!(
-                                            "{}: {}",
-                                            candidate.candidate_kind, candidate.target_id
-                                        )),
-                                )
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .text_color(theme.primary)
-                                        .child(candidate_status.clone()),
-                                ),
-                        )
-                        .child(
-                            div().text_sm().text_color(theme.muted_foreground).child(format!(
-                                "Risk {} | Benchmarks {} | Canaries {} | Lesson {}",
-                                candidate.risk_level, benchmarks, canary_count, candidate.source_lesson_id
+                    .gap_1()
+                    .p_3()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(theme.border)
+                    .child(
+                        h_flex()
+                            .justify_between()
+                            .child(div().font_weight(gpui::FontWeight::SEMIBOLD).child(format!(
+                                "{}: {}",
+                                candidate.candidate_kind, candidate.target_id
+                            )))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(theme.primary)
+                                    .child(candidate_status.clone()),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(theme.muted_foreground)
+                            .child(format!(
+                                "Risk {} | Benchmarks {} | Auto jobs {} | Canaries {} | Lesson {}",
+                                candidate.risk_level,
+                                benchmarks,
+                                benchmark_jobs,
+                                canary_count,
+                                candidate.source_lesson_id
                             )),
-                        );
+                    );
                 if matches!(candidate_status.as_str(), "draft" | "benchmark_failed") {
                     let benchmark_id = candidate_id.clone();
+                    let auto_benchmark_id = candidate_id.clone();
                     candidate_block = candidate_block.child(
-                        Button::new(gpui::SharedString::from(format!(
-                            "benchmark-candidate-{}",
-                            benchmark_id
-                        )))
-                        .small()
-                        .label("Record Benchmark")
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.open_benchmark_dialog(benchmark_id.clone(), window, cx);
-                        })),
+                        h_flex()
+                            .gap_2()
+                            .child(
+                                Button::new(gpui::SharedString::from(format!(
+                                    "auto-benchmark-candidate-{}",
+                                    auto_benchmark_id
+                                )))
+                                .small()
+                                .primary()
+                                .label("Run Auto Benchmark")
+                                .on_click(cx.listener(move |_this, _, window, cx| {
+                                    let state = crate::AppState::global(cx);
+                                    let runner = crate::application::orchestration::benchmark_runner::BenchmarkRunner::new(state.db.clone());
+                                    let actor_id = state.current_actor_id.clone();
+                                    let candidate_id = auto_benchmark_id.clone();
+                                    let view = cx.entity().clone();
+                                    window.push_notification(
+                                        (
+                                            NotificationType::Success,
+                                            "Automatic benchmark started.",
+                                        ),
+                                        cx,
+                                    );
+                                    cx.spawn(async move |_, cx| {
+                                        let outcome = runner
+                                            .run_candidate(&candidate_id, None, &actor_id)
+                                            .await;
+                                        let _ = cx.update(|cx| {
+                                            let _ = view.update(cx, |_, cx| {
+                                                cx.notify();
+                                            });
+                                        });
+                                        outcome.ok();
+                                    })
+                                    .detach();
+                                })),
+                            )
+                            .child(
+                                Button::new(gpui::SharedString::from(format!(
+                                    "benchmark-candidate-{}",
+                                    benchmark_id
+                                )))
+                                .small()
+                                .label("Record Benchmark")
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.open_benchmark_dialog(benchmark_id.clone(), window, cx);
+                                })),
+                            ),
                     );
                 }
                 if candidate_status == "benchmark_passed" {
@@ -1593,9 +1643,11 @@ impl OrchestrationPanel {
                         )))
                         .small()
                         .label("Start Canary")
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.open_canary_dialog(canary_id.clone(), window, cx);
-                        })),
+                        .on_click(cx.listener(
+                            move |this, _, window, cx| {
+                                this.open_canary_dialog(canary_id.clone(), window, cx);
+                            },
+                        )),
                     );
                 }
                 if candidate_status == "canary_running" {
@@ -1666,22 +1718,33 @@ impl OrchestrationPanel {
                         .small()
                         .primary()
                         .label("Promote")
-                        .on_click(cx.listener(move |_this, _, window, cx| {
-                            let state = crate::AppState::global(cx);
-                            let service =
+                        .on_click(cx.listener(
+                            move |_this, _, window, cx| {
+                                let state = crate::AppState::global(cx);
+                                let service =
                                 crate::application::orchestration::learning::LearningService::new(
                                     state.db.clone(),
                                 );
-                            match service.promote(
-                                &promote_id,
-                                &state.current_actor_id,
-                                "Promoted by authorized operator after persisted canary pass.",
-                            ) {
-                                Ok(_) => window.push_notification((NotificationType::Success, "Candidate promoted."), cx),
-                                Err(error) => window.push_notification((NotificationType::Error, gpui::SharedString::from(error.to_string())), cx),
-                            }
-                            cx.notify();
-                        })),
+                                match service.promote(
+                                    &promote_id,
+                                    &state.current_actor_id,
+                                    "Promoted by authorized operator after persisted canary pass.",
+                                ) {
+                                    Ok(_) => window.push_notification(
+                                        (NotificationType::Success, "Candidate promoted."),
+                                        cx,
+                                    ),
+                                    Err(error) => window.push_notification(
+                                        (
+                                            NotificationType::Error,
+                                            gpui::SharedString::from(error.to_string()),
+                                        ),
+                                        cx,
+                                    ),
+                                }
+                                cx.notify();
+                            },
+                        )),
                     );
                 }
                 if matches!(
@@ -1696,23 +1759,34 @@ impl OrchestrationPanel {
                         )))
                         .small()
                         .label("Rollback")
-                        .on_click(cx.listener(move |_this, _, window, cx| {
-                            let state = crate::AppState::global(cx);
-                            let service =
+                        .on_click(cx.listener(
+                            move |_this, _, window, cx| {
+                                let state = crate::AppState::global(cx);
+                                let service =
                                 crate::application::orchestration::learning::LearningService::new(
                                     state.db.clone(),
                                 );
-                            match service.rollback(
-                                &rollback_id,
-                                None,
-                                &state.current_actor_id,
-                                "Rollback initiated by authorized operator.",
-                            ) {
-                                Ok(_) => window.push_notification((NotificationType::Success, "Candidate rolled back."), cx),
-                                Err(error) => window.push_notification((NotificationType::Error, gpui::SharedString::from(error.to_string())), cx),
-                            }
-                            cx.notify();
-                        })),
+                                match service.rollback(
+                                    &rollback_id,
+                                    None,
+                                    &state.current_actor_id,
+                                    "Rollback initiated by authorized operator.",
+                                ) {
+                                    Ok(_) => window.push_notification(
+                                        (NotificationType::Success, "Candidate rolled back."),
+                                        cx,
+                                    ),
+                                    Err(error) => window.push_notification(
+                                        (
+                                            NotificationType::Error,
+                                            gpui::SharedString::from(error.to_string()),
+                                        ),
+                                        cx,
+                                    ),
+                                }
+                                cx.notify();
+                            },
+                        )),
                     );
                 }
                 list = list.child(candidate_block);
@@ -1731,12 +1805,15 @@ impl OrchestrationPanel {
                             .child("Governed Learning"),
                     )
                     .child(
-                        div().text_sm().text_color(theme.muted_foreground).child(format!(
-                            "{} active lessons | {} evaluations | {} rollbacks",
-                            lessons.len(),
-                            evaluations.len(),
-                            rollbacks.len()
-                        )),
+                        div()
+                            .text_sm()
+                            .text_color(theme.muted_foreground)
+                            .child(format!(
+                                "{} active lessons | {} evaluations | {} rollbacks",
+                                lessons.len(),
+                                evaluations.len(),
+                                rollbacks.len()
+                            )),
                     ),
             )
             .child(

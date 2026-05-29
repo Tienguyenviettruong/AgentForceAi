@@ -13,6 +13,57 @@ const MCP_PROTOCOL_VERSION: &str = "2025-03-26";
 pub struct McpServer;
 
 impl McpServer {
+    fn stdio_sandbox_wrapper() -> Option<String> {
+        std::env::var("AGENTFORGE_MCP_SANDBOX_WRAPPER")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    }
+
+    fn stdio_command_allowed(command: &str) -> bool {
+        let executable = std::path::Path::new(command)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(command)
+            .to_ascii_lowercase();
+        let configured = std::env::var("AGENTFORGE_MCP_STDIO_ALLOWLIST")
+            .ok()
+            .map(|value| {
+                value
+                    .split(',')
+                    .map(|item| item.trim().to_ascii_lowercase())
+                    .filter(|item| !item.is_empty())
+                    .collect::<Vec<_>>()
+            })
+            .filter(|items| !items.is_empty())
+            .unwrap_or_else(|| {
+                vec![
+                    "npx".to_string(),
+                    "npx.cmd".to_string(),
+                    "uvx".to_string(),
+                    "node".to_string(),
+                    "node.exe".to_string(),
+                    "python".to_string(),
+                    "python.exe".to_string(),
+                ]
+            });
+        configured.iter().any(|allowed| allowed == &executable)
+    }
+
+    pub fn stdio_runtime_status() -> &'static str {
+        if Self::stdio_sandbox_wrapper().is_some() {
+            "sandbox_ready"
+        } else if std::env::var("AGENTFORGE_ALLOW_UNSANDBOXED_MCP_STDIO")
+            .ok()
+            .as_deref()
+            == Some("true")
+        {
+            "unsandboxed_override"
+        } else {
+            "blocked_until_isolated"
+        }
+    }
+
     pub async fn discover_tools(server: &McpServerRecord) -> Result<Vec<McpTool>> {
         let result = Self::rpc_call(server, "tools/list", json!({})).await?;
         let tools = result
@@ -86,13 +137,14 @@ impl McpServer {
         }
         match server.transport.as_str() {
             "stdio" => {
-                if std::env::var("AGENTFORGE_ALLOW_UNSANDBOXED_MCP_STDIO")
+                let has_sandbox = Self::stdio_sandbox_wrapper().is_some();
+                let has_override = std::env::var("AGENTFORGE_ALLOW_UNSANDBOXED_MCP_STDIO")
                     .ok()
                     .as_deref()
-                    != Some("true")
-                {
+                    == Some("true");
+                if !has_sandbox && !has_override {
                     return Err(anyhow!(
-                        "External MCP stdio is disabled by default because no OS sandbox is configured. Set AGENTFORGE_ALLOW_UNSANDBOXED_MCP_STDIO=true only in a separately isolated runtime."
+                        "External MCP stdio is disabled because no OS sandbox wrapper is configured. Set AGENTFORGE_MCP_SANDBOX_WRAPPER to an isolated launcher, or use remote HTTPS MCP."
                     ));
                 }
                 Self::stdio_call(server, method, params).await
@@ -154,9 +206,23 @@ impl McpServer {
             .as_deref()
             .filter(|command| !command.trim().is_empty())
             .ok_or_else(|| anyhow!("Stdio MCP server has no command."))?;
+        if !Self::stdio_command_allowed(command) {
+            return Err(anyhow!(
+                "Stdio MCP command '{}' is not in AGENTFORGE_MCP_STDIO_ALLOWLIST.",
+                command
+            ));
+        }
         let environment = Self::resolved_environment(server).await?;
-        let mut child = Command::new(command)
-            .args(&server.args)
+        let mut command_builder = if let Some(wrapper) = Self::stdio_sandbox_wrapper() {
+            let mut builder = Command::new(wrapper);
+            builder.arg("--").arg(command).args(&server.args);
+            builder
+        } else {
+            let mut builder = Command::new(command);
+            builder.args(&server.args);
+            builder
+        };
+        let mut child = command_builder
             .env_clear()
             .envs(environment)
             .stdin(Stdio::piped())
@@ -242,11 +308,16 @@ impl McpServer {
         if endpoint_url.scheme() != "https" {
             return Err(anyhow!("Remote MCP endpoint must use HTTPS."));
         }
-        let host = endpoint_url.host_str().unwrap_or_default().to_ascii_lowercase();
+        let host = endpoint_url
+            .host_str()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
         if matches!(host.as_str(), "localhost" | "127.0.0.1" | "::1")
             || host.ends_with(".localhost")
         {
-            return Err(anyhow!("Remote MCP endpoint cannot target a loopback host."));
+            return Err(anyhow!(
+                "Remote MCP endpoint cannot target a loopback host."
+            ));
         }
         let headers = Self::resolved_headers(server).await?;
         let client = reqwest::Client::builder()

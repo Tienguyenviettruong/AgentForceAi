@@ -37,8 +37,8 @@ impl<'a> SharedTaskList<'a> {
     pub fn claim_task(&self, task_id: &str, agent_id: &str) -> Result<bool> {
         let now = Utc::now().to_rfc3339();
         let rows_affected = self.conn.execute(
-            "UPDATE tasks 
-             SET assignee_id = ?1, status = 'in_progress', claimed_at = ?2, updated_at = ?3 
+            "UPDATE tasks
+             SET assignee_id = ?1, status = 'in_progress', claimed_at = ?2, updated_at = ?3
              WHERE id = ?4 AND status = 'pending'",
             params![agent_id, now, now, task_id],
         )?;

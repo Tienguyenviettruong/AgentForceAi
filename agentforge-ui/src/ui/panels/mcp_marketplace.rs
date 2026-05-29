@@ -23,12 +23,88 @@ pub struct McpMarketplacePanel {
     config_status: Option<String>,
 }
 
+#[derive(Clone)]
+struct McpCatalogEntry {
+    id: &'static str,
+    name: &'static str,
+    description: &'static str,
+    command: &'static str,
+    args: &'static [&'static str],
+    env_refs: &'static [(&'static str, &'static str)],
+}
+
 impl McpMarketplacePanel {
     pub fn new(_window: &mut Window, cx: &mut App) -> Self {
         Self {
             focus_handle: cx.focus_handle(),
             config_status: None,
         }
+    }
+
+    fn catalog_entries() -> Vec<McpCatalogEntry> {
+        vec![
+            McpCatalogEntry {
+                id: "github",
+                name: "GitHub",
+                description: "Repository issues, pull requests, files, and project automation.",
+                command: "npx",
+                args: &["-y", "@modelcontextprotocol/server-github"],
+                env_refs: &[("GITHUB_PERSONAL_ACCESS_TOKEN", "secret://github-token")],
+            },
+            McpCatalogEntry {
+                id: "sequential-thinking",
+                name: "Sequential Thinking",
+                description: "Structured planning tool for decomposing multi-step work.",
+                command: "npx",
+                args: &["-y", "@modelcontextprotocol/server-sequential-thinking"],
+                env_refs: &[],
+            },
+            McpCatalogEntry {
+                id: "memory",
+                name: "Memory",
+                description: "MCP memory server for durable facts and relationship lookup.",
+                command: "npx",
+                args: &["-y", "@modelcontextprotocol/server-memory"],
+                env_refs: &[],
+            },
+        ]
+    }
+
+    fn catalog_record(entry: &McpCatalogEntry) -> Result<McpServerRecord, String> {
+        let args = entry
+            .args
+            .iter()
+            .map(|argument| argument.to_string())
+            .collect::<Vec<_>>();
+        Self::validate_args(&args)?;
+        let stdio_status = crate::infrastructure::mcp::server::McpServer::stdio_runtime_status();
+        let now = chrono::Utc::now().to_rfc3339();
+        let env_secret_refs = entry
+            .env_refs
+            .iter()
+            .map(|(name, reference)| {
+                (
+                    name.to_string(),
+                    serde_json::Value::String(reference.to_string()),
+                )
+            })
+            .collect::<serde_json::Map<_, _>>();
+        Ok(McpServerRecord {
+            id: format!("mcp-server-{}", entry.id),
+            name: entry.name.to_string(),
+            transport: "stdio".to_string(),
+            command: Some(entry.command.to_string()),
+            args,
+            endpoint: None,
+            env_secret_refs: serde_json::Value::Object(env_secret_refs).to_string(),
+            header_secret_refs: "{}".to_string(),
+            source_kind: "catalog".to_string(),
+            is_enabled: stdio_status != "blocked_until_isolated",
+            health_status: stdio_status.to_string(),
+            last_error: None,
+            created_at: now.clone(),
+            updated_at: now,
+        })
     }
 
     fn is_sensitive_name(value: &str) -> bool {
@@ -165,6 +241,8 @@ impl McpMarketplacePanel {
                 }
                 Ok(serde_json::Value::Object(values.clone()).to_string())
             };
+            let stdio_status =
+                crate::infrastructure::mcp::server::McpServer::stdio_runtime_status();
             let now = chrono::Utc::now().to_rfc3339();
             records.push(McpServerRecord {
                 id: format!("mcp-server-{}", name),
@@ -176,9 +254,9 @@ impl McpMarketplacePanel {
                 env_secret_refs: protected_config("env")?,
                 header_secret_refs: protected_config("headers")?,
                 source_kind: "manual_config".to_string(),
-                is_enabled: transport != "stdio",
+                is_enabled: transport != "stdio" || stdio_status != "blocked_until_isolated",
                 health_status: if transport == "stdio" {
-                    "blocked_until_isolated".to_string()
+                    stdio_status.to_string()
                 } else {
                     "configured".to_string()
                 },
@@ -396,6 +474,76 @@ impl Render for McpMarketplacePanel {
                         ),
                 );
             }
+        }
+
+        let mut catalog = v_flex()
+            .w_full()
+            .border_1()
+            .border_color(theme.border)
+            .rounded_md();
+        for entry in Self::catalog_entries() {
+            let entry_for_add = entry.clone();
+            catalog = catalog.child(
+                h_flex()
+                    .w_full()
+                    .justify_between()
+                    .items_center()
+                    .p_3()
+                    .border_b_1()
+                    .border_color(theme.border)
+                    .child(
+                        v_flex()
+                            .child(
+                                div()
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .child(entry.name),
+                            )
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(theme.muted_foreground)
+                                    .child(entry.description),
+                            )
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(theme.muted_foreground)
+                                    .child(format!(
+                                        "{} {}",
+                                        entry.command,
+                                        entry.args.join(" ")
+                                    )),
+                            ),
+                    )
+                    .child(
+                        Button::new(gpui::SharedString::from(format!(
+                            "add-mcp-catalog-{}",
+                            entry.id
+                        )))
+                        .small()
+                        .label("Add")
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            let outcome = match Self::catalog_record(&entry_for_add) {
+                                Ok(server) => {
+                                    let status = server.health_status.clone();
+                                    match crate::AppState::global(cx).db.upsert_mcp_server(&server)
+                                    {
+                                        Ok(()) => format!(
+                                            "Added '{}' from catalog with status '{}'. Store required secrets, then refresh tools.",
+                                            server.name, status
+                                        ),
+                                        Err(error) => {
+                                            format!("Unable to add catalog server: {}", error)
+                                        }
+                                    }
+                                }
+                                Err(error) => error,
+                            };
+                            this.config_status = Some(outcome);
+                            cx.notify();
+                        })),
+                    ),
+            );
         }
 
         let mut tool_table = v_flex()
@@ -635,7 +783,7 @@ impl Render for McpMarketplacePanel {
                                                     div()
                                                         .text_sm()
                                                         .text_color(config_muted_foreground)
-                                                        .child("Use command/args for local stdio or serverUrl for remote. Credentials are accepted only through secret:// environment or header entries."),
+                                                        .child("Use command/args for local stdio or serverUrl for remote. Credentials are accepted only through secret:// environment or header entries. Local stdio requires AGENTFORGE_MCP_SANDBOX_WRAPPER or remains blocked."),
                                                 )),
                                         )
                                         .footer(move |_, _, _, _| {
@@ -683,6 +831,13 @@ impl Render for McpMarketplacePanel {
                     ),
             )
             .child(installed)
+            .child(
+                div()
+                    .text_lg()
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .child("MCP Catalog"),
+            )
+            .child(catalog)
             .when_some(config_status, |view, status| {
                 view.child(
                     div()

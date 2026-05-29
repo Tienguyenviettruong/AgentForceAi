@@ -116,10 +116,10 @@ impl RollbackManager {
     pub fn rollback_to(&mut self, checkpoint_id: &str) -> Result<String, String> {
         let index = self.actions.iter().position(|a| a.id == checkpoint_id).ok_or("Checkpoint not found")?;
         let state = self.actions[index].state_snapshot.clone();
-        
+
         // Remove subsequent checkpoints
         self.actions.truncate(index + 1);
-        
+
         Ok(state)
     }
 
@@ -195,7 +195,7 @@ impl ErrorEscalation {
         // Here we could trigger a UI notification or log to a central monitoring system
         // For now, it's a stub to represent the escalation action.
     }
-    
+
     pub fn get_unresolved_errors(&self) -> Vec<ErrorEvent> {
         self.events.clone()
     }
@@ -219,7 +219,7 @@ impl ResilienceManager {
     pub fn register_circuit_breaker(&mut self, id: String, threshold: u32, timeout_secs: i64) {
         self.circuit_breakers.insert(id.clone(), CircuitBreaker::new(id, threshold, timeout_secs));
     }
-    
+
     pub fn get_circuit_breaker(&mut self, id: &str) -> Option<&mut CircuitBreaker> {
         self.circuit_breakers.get_mut(id)
     }
@@ -232,23 +232,23 @@ mod tests {
     #[test]
     fn test_circuit_breaker() {
         let mut cb = CircuitBreaker::new("cb1".to_string(), 3, 60);
-        
+
         assert!(cb.can_execute());
-        
+
         cb.record_failure();
         cb.record_failure();
         cb.record_failure();
-        
+
         assert_eq!(cb.state, CircuitState::Open);
         assert!(!cb.can_execute());
-        
+
         // Wait timeout logically or change state manually for test
         // By reducing reset_timeout_secs to 0 just for testing behavior or simulate time
         cb.reset_timeout_secs = -1; // so it's instantly half open
-        
+
         assert!(cb.can_execute());
         assert_eq!(cb.state, CircuitState::HalfOpen);
-        
+
         cb.record_success();
         assert_eq!(cb.state, CircuitState::Closed);
     }
@@ -258,13 +258,13 @@ mod tests {
         let mut rm = RollbackManager::new();
         let cp1 = rm.create_checkpoint("init".to_string(), "state1".to_string());
         let cp2 = rm.create_checkpoint("step1".to_string(), "state2".to_string());
-        
+
         assert_eq!(rm.actions.len(), 2);
-        
+
         let state = rm.rollback_to(&cp1).unwrap();
         assert_eq!(state, "state1");
         assert_eq!(rm.actions.len(), 1);
-        
+
         let state2 = rm.rollback_latest().unwrap();
         assert_eq!(state2, "state1");
         assert_eq!(rm.actions.len(), 0);
@@ -273,16 +273,16 @@ mod tests {
     #[test]
     fn test_error_escalation() {
         let mut ee = ErrorEscalation::new(2);
-        
+
         let e1 = ee.report_error("db".to_string(), "timeout".to_string(), ErrorSeverity::Medium);
         assert!(!e1.escalated);
-        
+
         let e2 = ee.report_error("db".to_string(), "timeout again".to_string(), ErrorSeverity::Medium);
         assert!(!e2.escalated);
-        
+
         let e3 = ee.report_error("db".to_string(), "timeout thrice".to_string(), ErrorSeverity::Medium);
         assert!(e3.escalated);
-        
+
         let e4 = ee.report_error("auth".to_string(), "breach".to_string(), ErrorSeverity::Critical);
         assert!(e4.escalated);
     }

@@ -73,7 +73,7 @@ impl Database {
                 name TEXT NOT NULL UNIQUE,
                 applied_at TEXT NOT NULL
             );
-            
+
             -- 1. Provider Configs
             CREATE TABLE IF NOT EXISTS provider_configs (
                 id TEXT PRIMARY KEY,
@@ -283,7 +283,7 @@ impl Database {
                 content,
                 tags
             );
-            
+
             -- Knowledge Chunks for Vector Embeddings
             CREATE TABLE IF NOT EXISTS knowledge_chunks (
                 id TEXT PRIMARY KEY,
@@ -337,9 +337,9 @@ impl Database {
                 name TEXT NOT NULL UNIQUE,
                 description TEXT NOT NULL,
                 version TEXT NOT NULL,
-                command TEXT NOT NULL, 
-                args TEXT NOT NULL, 
-                input_schema TEXT NOT NULL, 
+                command TEXT NOT NULL,
+                args TEXT NOT NULL,
+                input_schema TEXT NOT NULL,
                 is_active BOOLEAN DEFAULT 1,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             );
@@ -427,12 +427,12 @@ impl Database {
                 run_id TEXT REFERENCES orchestration_runs(id) ON DELETE SET NULL,
                 title TEXT NOT NULL,
                 content TEXT NOT NULL,
-                tags TEXT, 
+                tags TEXT,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY(agent_id) REFERENCES agents(id)
             );
 
-            CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_entries_fts 
+            CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_entries_fts
             USING fts5(id UNINDEXED, title, content, tags);
 
             CREATE TABLE IF NOT EXISTS knowledge_migration_audit (
@@ -734,6 +734,19 @@ impl Database {
                 created_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS benchmark_runner_jobs (
+                id TEXT PRIMARY KEY,
+                candidate_id TEXT NOT NULL REFERENCES learning_candidates(id) ON DELETE CASCADE,
+                suite_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                requested_by TEXT NOT NULL,
+                benchmark_run_id TEXT REFERENCES benchmark_runs(id) ON DELETE SET NULL,
+                error TEXT,
+                created_at TEXT NOT NULL,
+                started_at TEXT,
+                completed_at TEXT
+            );
+
             CREATE TABLE IF NOT EXISTS canary_deployments (
                 id TEXT PRIMARY KEY,
                 candidate_id TEXT NOT NULL REFERENCES learning_candidates(id) ON DELETE CASCADE,
@@ -899,9 +912,13 @@ impl Database {
                 ON lessons(status, scope_kind, scope_id);
             CREATE INDEX IF NOT EXISTS idx_learning_candidates_status_time
                 ON learning_candidates(status, updated_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_benchmark_cases_suite
+                ON benchmark_cases(suite_id, created_at ASC);
+            CREATE INDEX IF NOT EXISTS idx_benchmark_runner_jobs_candidate
+                ON benchmark_runner_jobs(candidate_id, created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_canary_candidate_time
                 ON canary_deployments(candidate_id, started_at DESC);
-            
+
             ",
         )?;
 
@@ -1463,7 +1480,7 @@ impl crate::core::traits::database::DatabasePort for Database {
         let now = Utc::now().to_rfc3339();
         let cap_json = p.capabilities.as_ref().map(|c| c.to_json());
         conn.execute(
-            "INSERT OR REPLACE INTO provider_configs (id, provider_name, model, adapter_type, command, api_key_ref, status, capabilities, is_builtin, created_at, updated_at) 
+            "INSERT OR REPLACE INTO provider_configs (id, provider_name, model, adapter_type, command, api_key_ref, status, capabilities, is_builtin, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, ?9, ?10)",
             params![p.id, p.provider_name, p.model, p.adapter_type, p.command, p.api_key_ref, p.status, cap_json, now, now],
         )?;
@@ -1716,7 +1733,7 @@ impl crate::core::traits::database::DatabasePort for Database {
         // Priority to Coordinator
         let mut stmt = conn.prepare(
             "
-            SELECT m.agent_id 
+            SELECT m.agent_id
             FROM members m
             LEFT JOIN roles r ON m.role_id = r.id
             WHERE m.instance_id = ?1
@@ -1739,7 +1756,7 @@ impl crate::core::traits::database::DatabasePort for Database {
 
         let mut stmt = conn.prepare(
             "
-            SELECT m.agent_id 
+            SELECT m.agent_id
             FROM members m
             LEFT JOIN roles r ON m.role_id = r.id
             WHERE m.team_id = ?1
@@ -1762,9 +1779,9 @@ impl crate::core::traits::database::DatabasePort for Database {
         let mut map = std::collections::HashMap::new();
 
         let mut stmt = conn.prepare(
-            "SELECT a.name, a.config, a.status, m.agent_id 
-             FROM members m 
-             JOIN agents a ON m.agent_id = a.id 
+            "SELECT a.name, a.config, a.status, m.agent_id
+             FROM members m
+             JOIN agents a ON m.agent_id = a.id
              WHERE m.instance_id = ?1",
         )?;
 
@@ -1808,9 +1825,9 @@ impl crate::core::traits::database::DatabasePort for Database {
 
         if let Ok(team_id) = team_id_result {
             let mut stmt = conn.prepare(
-                "SELECT a.name, a.config, a.status, m.agent_id 
-                 FROM members m 
-                 JOIN agents a ON m.agent_id = a.id 
+                "SELECT a.name, a.config, a.status, m.agent_id
+                 FROM members m
+                 JOIN agents a ON m.agent_id = a.id
                  WHERE m.team_id = ?1",
             )?;
 
@@ -2320,10 +2337,26 @@ impl crate::core::traits::database::DatabasePort for Database {
         )?;
 
         let agents = [
-            ("Coordinator", "sdg-coord-123", "You are the Coordinator/Leader of the SDG team. You are responsible for breaking down goals, assigning tasks to other agents, and orchestrating the workflow."),
-            ("PM", "sdg-pm-123", "You are the PM of the SDG team. Please provide short, direct responses about product management."),
-            ("DEV", "sdg-dev-123", "You are the DEV of the SDG team. You write code and solve technical issues."),
-            ("BA", "sdg-ba-123", "You are the BA of the SDG team. You analyze business requirements and metrics.")
+            (
+                "Coordinator",
+                "sdg-coord-123",
+                "You are the Coordinator/Leader of the SDG team. You are responsible for breaking down goals, assigning tasks to other agents, and orchestrating the workflow.",
+            ),
+            (
+                "PM",
+                "sdg-pm-123",
+                "You are the PM of the SDG team. Please provide short, direct responses about product management.",
+            ),
+            (
+                "DEV",
+                "sdg-dev-123",
+                "You are the DEV of the SDG team. You write code and solve technical issues.",
+            ),
+            (
+                "BA",
+                "sdg-ba-123",
+                "You are the BA of the SDG team. You analyze business requirements and metrics.",
+            ),
         ];
         for (name, agent_id, prompt) in agents {
             conn.execute(
@@ -2854,7 +2887,7 @@ impl crate::core::traits::database::DatabasePort for Database {
         let mut stmt = conn.prepare(
             "SELECT id, title, content, tags, created_at, updated_at, vault_path,
                     source_kind, source_uri_normalized, content_hash, origin_run_id, origin_session_id
-             FROM knowledge 
+             FROM knowledge
              WHERE content LIKE ?1 OR title LIKE ?1
              LIMIT 5",
         )?;
@@ -2985,8 +3018,8 @@ impl crate::core::traits::database::DatabasePort for Database {
     ) -> Result<Vec<(String, String, f32)>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT k.title, c.content, c.embedding 
-             FROM knowledge_chunks c 
+            "SELECT k.title, c.content, c.embedding
+             FROM knowledge_chunks c
              JOIN knowledge k ON c.document_id = k.id",
         )?;
 
@@ -4885,7 +4918,10 @@ impl crate::core::traits::database::DatabasePort for Database {
         .map_err(Into::into)
     }
 
-    fn insert_case_readback(&self, readback: &crate::core::models::CaseReadbackRecord) -> Result<()> {
+    fn insert_case_readback(
+        &self,
+        readback: &crate::core::models::CaseReadbackRecord,
+    ) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT INTO case_readbacks
@@ -4959,7 +4995,10 @@ impl crate::core::traits::database::DatabasePort for Database {
         Ok(())
     }
 
-    fn insert_case_decision(&self, decision: &crate::core::models::CaseDecisionRecord) -> Result<()> {
+    fn insert_case_decision(
+        &self,
+        decision: &crate::core::models::CaseDecisionRecord,
+    ) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT INTO case_decisions
@@ -4981,7 +5020,10 @@ impl crate::core::traits::database::DatabasePort for Database {
         Ok(())
     }
 
-    fn list_case_decisions(&self, case_id: &str) -> Result<Vec<crate::core::models::CaseDecisionRecord>> {
+    fn list_case_decisions(
+        &self,
+        case_id: &str,
+    ) -> Result<Vec<crate::core::models::CaseDecisionRecord>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT id, case_id, run_id, author_agent_id, decision, rationale,
@@ -5089,7 +5131,10 @@ impl crate::core::traits::database::DatabasePort for Database {
         Ok(())
     }
 
-    fn list_case_reviews(&self, case_id: &str) -> Result<Vec<crate::core::models::CaseReviewRecord>> {
+    fn list_case_reviews(
+        &self,
+        case_id: &str,
+    ) -> Result<Vec<crate::core::models::CaseReviewRecord>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT id, case_id, deliverable_id, reviewer_agent_id, verdict, findings_json,
@@ -5112,7 +5157,10 @@ impl crate::core::traits::database::DatabasePort for Database {
             .map_err(Into::into)
     }
 
-    fn insert_case_consensus(&self, consensus: &crate::core::models::CaseConsensusRecord) -> Result<()> {
+    fn insert_case_consensus(
+        &self,
+        consensus: &crate::core::models::CaseConsensusRecord,
+    ) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT INTO case_consensus_records
@@ -5201,13 +5249,23 @@ impl crate::core::traits::database::DatabasePort for Database {
             .map_err(Into::into)
     }
 
-    fn resolve_case_consensus(&self, consensus_id: &str, status: &str, resolution: &str) -> Result<()> {
+    fn resolve_case_consensus(
+        &self,
+        consensus_id: &str,
+        status: &str,
+        resolution: &str,
+    ) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         let updated = conn.execute(
             "UPDATE case_consensus_records
              SET status = ?1, resolution = ?2, resolved_at = ?3
              WHERE id = ?4 AND status = 'proposed'",
-            params![status, resolution, chrono::Utc::now().to_rfc3339(), consensus_id],
+            params![
+                status,
+                resolution,
+                chrono::Utc::now().to_rfc3339(),
+                consensus_id
+            ],
         )?;
         if updated != 1 {
             return Err(anyhow::anyhow!("Consensus proposal is no longer pending."));
@@ -5215,7 +5273,10 @@ impl crate::core::traits::database::DatabasePort for Database {
         Ok(())
     }
 
-    fn insert_case_escalation(&self, escalation: &crate::core::models::CaseEscalationRecord) -> Result<()> {
+    fn insert_case_escalation(
+        &self,
+        escalation: &crate::core::models::CaseEscalationRecord,
+    ) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT INTO case_escalations
@@ -5290,7 +5351,10 @@ impl crate::core::traits::database::DatabasePort for Database {
         Ok(())
     }
 
-    fn insert_delegated_grant(&self, grant: &crate::core::models::DelegatedGrantRecord) -> Result<()> {
+    fn insert_delegated_grant(
+        &self,
+        grant: &crate::core::models::DelegatedGrantRecord,
+    ) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT INTO delegated_grants
@@ -5397,7 +5461,10 @@ impl crate::core::traits::database::DatabasePort for Database {
         Ok(())
     }
 
-    fn upsert_agent_competency(&self, competency: &crate::core::models::AgentCompetencyRecord) -> Result<()> {
+    fn upsert_agent_competency(
+        &self,
+        competency: &crate::core::models::AgentCompetencyRecord,
+    ) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT INTO agent_competencies
@@ -5456,7 +5523,10 @@ impl crate::core::traits::database::DatabasePort for Database {
         Ok(records)
     }
 
-    fn insert_routing_decision(&self, routing: &crate::core::models::RoutingDecisionRecord) -> Result<()> {
+    fn insert_routing_decision(
+        &self,
+        routing: &crate::core::models::RoutingDecisionRecord,
+    ) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT INTO routing_decisions
@@ -5523,7 +5593,10 @@ impl crate::core::traits::database::DatabasePort for Database {
         Ok(())
     }
 
-    fn insert_run_evaluation(&self, evaluation: &crate::core::models::RunEvaluationRecord) -> Result<()> {
+    fn insert_run_evaluation(
+        &self,
+        evaluation: &crate::core::models::RunEvaluationRecord,
+    ) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT INTO run_evaluations
@@ -5786,20 +5859,21 @@ impl crate::core::traits::database::DatabasePort for Database {
                    AND (?2 = '' OR scope_id = ?2 OR scope_id = '')
                  ORDER BY updated_at DESC LIMIT ?3",
             )?;
-            let rows = stmt.query_map(params![scope_kind, scope_id.unwrap_or(""), limit], |row| {
-                Ok(crate::core::models::LessonRecord {
-                    id: row.get(0)?,
-                    source_evaluation_id: row.get(1)?,
-                    source_feedback_id: row.get(2)?,
-                    scope_kind: row.get(3)?,
-                    scope_id: row.get(4)?,
-                    instruction: row.get(5)?,
-                    status: row.get(6)?,
-                    validated_by: row.get(7)?,
-                    created_at: row.get(8)?,
-                    updated_at: row.get(9)?,
-                })
-            })?;
+            let rows =
+                stmt.query_map(params![scope_kind, scope_id.unwrap_or(""), limit], |row| {
+                    Ok(crate::core::models::LessonRecord {
+                        id: row.get(0)?,
+                        source_evaluation_id: row.get(1)?,
+                        source_feedback_id: row.get(2)?,
+                        scope_kind: row.get(3)?,
+                        scope_id: row.get(4)?,
+                        instruction: row.get(5)?,
+                        status: row.get(6)?,
+                        validated_by: row.get(7)?,
+                        created_at: row.get(8)?,
+                        updated_at: row.get(9)?,
+                    })
+                })?;
             for row in rows {
                 lessons.push(row?);
             }
@@ -5925,7 +5999,10 @@ impl crate::core::traits::database::DatabasePort for Database {
             .map_err(Into::into)
     }
 
-    fn insert_skill_version(&self, version: &crate::core::models::SkillVersionRecord) -> Result<()> {
+    fn insert_skill_version(
+        &self,
+        version: &crate::core::models::SkillVersionRecord,
+    ) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT INTO skill_versions
@@ -6018,7 +6095,10 @@ impl crate::core::traits::database::DatabasePort for Database {
         Ok(())
     }
 
-    fn insert_benchmark_run(&self, benchmark: &crate::core::models::BenchmarkRunRecord) -> Result<()> {
+    fn insert_benchmark_run(
+        &self,
+        benchmark: &crate::core::models::BenchmarkRunRecord,
+    ) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT INTO benchmark_runs
@@ -6061,6 +6141,262 @@ impl crate::core::traits::database::DatabasePort for Database {
                 result_json: row.get(6)?,
                 created_at: row.get(7)?,
                 completed_at: row.get(8)?,
+            })
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    fn upsert_benchmark_suite(
+        &self,
+        suite: &crate::core::models::BenchmarkSuiteRecord,
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO benchmark_suites (id, name, version, status, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(id) DO UPDATE SET
+                name = excluded.name,
+                version = excluded.version,
+                status = excluded.status",
+            params![
+                suite.id,
+                suite.name,
+                suite.version,
+                suite.status,
+                suite.created_at
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn get_benchmark_suite(
+        &self,
+        suite_id: &str,
+    ) -> Result<Option<crate::core::models::BenchmarkSuiteRecord>> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT id, name, version, status, created_at
+             FROM benchmark_suites WHERE id = ?1",
+            params![suite_id],
+            |row| {
+                Ok(crate::core::models::BenchmarkSuiteRecord {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    version: row.get(2)?,
+                    status: row.get(3)?,
+                    created_at: row.get(4)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
+    fn list_active_benchmark_suites(
+        &self,
+    ) -> Result<Vec<crate::core::models::BenchmarkSuiteRecord>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, name, version, status, created_at
+             FROM benchmark_suites WHERE status = 'active'
+             ORDER BY name ASC, version DESC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(crate::core::models::BenchmarkSuiteRecord {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                version: row.get(2)?,
+                status: row.get(3)?,
+                created_at: row.get(4)?,
+            })
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    fn insert_benchmark_case(&self, case: &crate::core::models::BenchmarkCaseRecord) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO benchmark_cases
+                (id, suite_id, input_json, expectation_json, risk_level, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                case.id,
+                case.suite_id,
+                case.input_json,
+                case.expectation_json,
+                case.risk_level,
+                case.created_at
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn list_benchmark_cases_for_suite(
+        &self,
+        suite_id: &str,
+    ) -> Result<Vec<crate::core::models::BenchmarkCaseRecord>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, suite_id, input_json, expectation_json, risk_level, created_at
+             FROM benchmark_cases WHERE suite_id = ?1 ORDER BY created_at ASC",
+        )?;
+        let rows = stmt.query_map(params![suite_id], |row| {
+            Ok(crate::core::models::BenchmarkCaseRecord {
+                id: row.get(0)?,
+                suite_id: row.get(1)?,
+                input_json: row.get(2)?,
+                expectation_json: row.get(3)?,
+                risk_level: row.get(4)?,
+                created_at: row.get(5)?,
+            })
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    fn insert_benchmark_result(
+        &self,
+        result: &crate::core::models::BenchmarkResultRecord,
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO benchmark_results
+                (id, benchmark_run_id, benchmark_case_id, score, verdict, evidence_json, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                result.id,
+                result.benchmark_run_id,
+                result.benchmark_case_id,
+                result.score,
+                result.verdict,
+                result.evidence_json,
+                result.created_at
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn list_benchmark_results_for_run(
+        &self,
+        benchmark_run_id: &str,
+    ) -> Result<Vec<crate::core::models::BenchmarkResultRecord>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, benchmark_run_id, benchmark_case_id, score, verdict, evidence_json, created_at
+             FROM benchmark_results WHERE benchmark_run_id = ?1 ORDER BY created_at ASC",
+        )?;
+        let rows = stmt.query_map(params![benchmark_run_id], |row| {
+            Ok(crate::core::models::BenchmarkResultRecord {
+                id: row.get(0)?,
+                benchmark_run_id: row.get(1)?,
+                benchmark_case_id: row.get(2)?,
+                score: row.get(3)?,
+                verdict: row.get(4)?,
+                evidence_json: row.get(5)?,
+                created_at: row.get(6)?,
+            })
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    fn insert_benchmark_runner_job(
+        &self,
+        job: &crate::core::models::BenchmarkRunnerJobRecord,
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO benchmark_runner_jobs
+                (id, candidate_id, suite_id, status, requested_by, benchmark_run_id,
+                 error, created_at, started_at, completed_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                job.id,
+                job.candidate_id,
+                job.suite_id,
+                job.status,
+                job.requested_by,
+                job.benchmark_run_id,
+                job.error,
+                job.created_at,
+                job.started_at,
+                job.completed_at
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn update_benchmark_runner_job(
+        &self,
+        job_id: &str,
+        status: &str,
+        benchmark_run_id: Option<&str>,
+        error: Option<&str>,
+        completed_at: Option<&str>,
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE benchmark_runner_jobs
+             SET status = ?2, benchmark_run_id = ?3, error = ?4, completed_at = ?5
+             WHERE id = ?1",
+            params![job_id, status, benchmark_run_id, error, completed_at],
+        )?;
+        Ok(())
+    }
+
+    fn list_benchmark_runner_jobs_for_candidate(
+        &self,
+        candidate_id: &str,
+    ) -> Result<Vec<crate::core::models::BenchmarkRunnerJobRecord>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, candidate_id, suite_id, status, requested_by, benchmark_run_id,
+                    error, created_at, started_at, completed_at
+             FROM benchmark_runner_jobs WHERE candidate_id = ?1 ORDER BY created_at DESC",
+        )?;
+        let rows = stmt.query_map(params![candidate_id], |row| {
+            Ok(crate::core::models::BenchmarkRunnerJobRecord {
+                id: row.get(0)?,
+                candidate_id: row.get(1)?,
+                suite_id: row.get(2)?,
+                status: row.get(3)?,
+                requested_by: row.get(4)?,
+                benchmark_run_id: row.get(5)?,
+                error: row.get(6)?,
+                created_at: row.get(7)?,
+                started_at: row.get(8)?,
+                completed_at: row.get(9)?,
+            })
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    fn list_benchmark_runner_jobs_by_status(
+        &self,
+        status: &str,
+        limit: u32,
+    ) -> Result<Vec<crate::core::models::BenchmarkRunnerJobRecord>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, candidate_id, suite_id, status, requested_by, benchmark_run_id,
+                    error, created_at, started_at, completed_at
+             FROM benchmark_runner_jobs WHERE status = ?1 ORDER BY created_at ASC LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![status, limit], |row| {
+            Ok(crate::core::models::BenchmarkRunnerJobRecord {
+                id: row.get(0)?,
+                candidate_id: row.get(1)?,
+                suite_id: row.get(2)?,
+                status: row.get(3)?,
+                requested_by: row.get(4)?,
+                benchmark_run_id: row.get(5)?,
+                error: row.get(6)?,
+                created_at: row.get(7)?,
+                started_at: row.get(8)?,
+                completed_at: row.get(9)?,
             })
         })?;
         rows.collect::<std::result::Result<Vec<_>, _>>()
@@ -6120,6 +6456,50 @@ impl crate::core::traits::database::DatabasePort for Database {
             params![deployment_id, status, chrono::Utc::now().to_rfc3339()],
         )?;
         Ok(())
+    }
+
+    fn insert_canary_observation(
+        &self,
+        observation: &crate::core::models::CanaryObservationRecord,
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO canary_observations
+                (id, deployment_id, run_id, metric_json, verdict, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                observation.id,
+                observation.deployment_id,
+                observation.run_id,
+                observation.metric_json,
+                observation.verdict,
+                observation.created_at
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn list_canary_observations_for_deployment(
+        &self,
+        deployment_id: &str,
+    ) -> Result<Vec<crate::core::models::CanaryObservationRecord>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, deployment_id, run_id, metric_json, verdict, created_at
+             FROM canary_observations WHERE deployment_id = ?1 ORDER BY created_at DESC",
+        )?;
+        let rows = stmt.query_map(params![deployment_id], |row| {
+            Ok(crate::core::models::CanaryObservationRecord {
+                id: row.get(0)?,
+                deployment_id: row.get(1)?,
+                run_id: row.get(2)?,
+                metric_json: row.get(3)?,
+                verdict: row.get(4)?,
+                created_at: row.get(5)?,
+            })
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
     }
 
     fn insert_promotion_decision(

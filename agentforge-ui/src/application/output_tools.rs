@@ -179,7 +179,11 @@ impl OutputTools {
             .unwrap_or_default();
 
         let (normalized_format, extension, bytes) = match format.as_str() {
-            "html" | "htm" => ("html", "html", normalize_html_document(&content).into_bytes()),
+            "html" | "htm" => (
+                "html",
+                "html",
+                normalize_html_document(&content).into_bytes(),
+            ),
             "txt" | "text" => ("text", "txt", content.into_bytes()),
             "md" | "markdown" => ("markdown", "md", content.into_bytes()),
             "csv" => ("csv", "csv", content.into_bytes()),
@@ -210,7 +214,7 @@ impl OutputTools {
                 return Err(anyhow!(
                     "Unsupported document format '{}'. Supported: html, txt, md, csv, json, xml, docx, pdf, xlsx.",
                     other
-                ))
+                ));
             }
         };
 
