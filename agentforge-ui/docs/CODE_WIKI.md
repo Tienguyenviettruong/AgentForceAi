@@ -9,7 +9,8 @@
 5. [Infrastructure Layer](#5-infrastructure-layer)
 6. [UI Layer](#6-ui-layer)
 7. [Dependency Relationships](#7-dependency-relationships)
-8. [Running the Project](#8-running-the-project)
+8. [Module Integrations and Flows](#8-module-integrations-and-flows)
+9. [Running the Project](#9-running-the-project)
 
 ---
 
@@ -629,6 +630,273 @@ Text processing and rendering.
 ---
 
 ## 8. Running the Project
+
+### Prerequisites
+
+- Rust 1.70+ (Edition 2021)
+- Cargo
+- For Windows/macOS: WebView2 (Windows) or WebKit (macOS)
+
+### Build
+
+```bash
+cd agentforge-ui
+cargo build --release
+```
+
+### Run
+
+```bash
+cargo run --release
+```
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AGENTFORGE_DB_PATH` | `agentforge.db` | Database file path |
+| `AGENTFORGE_OBSIDIAN_VAULT` | - | Obsidian vault path |
+
+### Development
+
+```bash
+# Run tests
+cargo test
+
+# Run with debug logging
+RUST_LOG=debug cargo run
+
+# Check formatting
+cargo fmt --check
+
+# Lint
+cargo clippy
+```
+
+### Testing
+
+- **Unit Tests**: Inline in modules (`#[cfg(test)]` blocks)
+- **Integration Tests**: [tests/integration_tests.rs](file:///workspace/agentforge-ui/tests/integration_tests.rs)
+- **E2E Tests**: [tests/e2e_tests.rs](file:///workspace/agentforge-ui/tests/e2e_tests.rs)
+- **Performance Tests**: [tests/performance_tests.rs](file:///workspace/agentforge-ui/tests/performance_tests.rs)
+
+### Database Schema
+
+The SQLite database is created automatically on first run. Key tables:
+- `provider_configs` - LLM providers
+- `teams`, `agents`, `instances` - Agent system
+- `tasks`, `sessions`, `messages` - Execution state
+- `knowledge_items`, `knowledge_chunks` - Knowledge base
+- `collaboration_cases` - Collaboration tracking
+- `workflows`, `workflow_versions` - Workflow definitions
+- `orchestration_runs` - Execution history
+- `audit_logs` - Security audit trail
+
+---
+
+## 8. Module Integrations and Flows
+
+This section describes how modules interact with each other to form complete system workflows.
+
+### 8.1 Orchestration Execution Pipeline
+
+The orchestration pipeline is responsible for executing tasks with multiple agents, tools, and governance checks.
+
+#### Pipeline Stages
+
+1. **Run Creation**: A new [OrchestrationRunRecord](file:///workspace/agentforge-ui/src/core/models/orchestration.rs) is created and stored in the database.
+2. **Agent Execution Initialization**: An [AgentExecutor](file:///workspace/agentforge-ui/src/application/orchestration/executor.rs) instance is created with:
+   - The appropriate LLM provider adapter (from [AdapterRegistry](file:///workspace/agentforge-ui/src/infrastructure/llm_providers/registry.rs))
+   - [McpToolRegistry](file:///workspace/agentforge-ui/src/infrastructure/mcp/registry.rs) for tool selection
+   - Connection to [DatabasePort](file:///workspace/agentforge-ui/src/core/traits/database.rs)
+   - Connection to [TeamBusRouter](file:///workspace/agentforge-ui/src/infrastructure/message_bus/routing.rs)
+3. **Context Construction**:
+   - Dynamic system prompt is built by [ChatService](file:///workspace/agentforge-ui/src/application/services/chat_service.rs)
+   - Knowledge retrieval (RAG): Hybrid search using both full-text search (FTS) and vector similarity search
+4. **Tool Injection**:
+   - Built-in governance tools (collaboration, knowledge, etc.)
+   - Selected MCP tools from [McpToolRegistry](file:///workspace/agentforge-ui/src/infrastructure/mcp/registry.rs)
+5. **LLM Invocation**:
+   - Chat messages are sent through the provider adapter
+   - Streaming response handling
+6. **Tool Call Execution**:
+   - Tool requests are intercepted by [ToolExecutionGateway](file:///workspace/agentforge-ui/src/application/orchestration/tool_gateway.rs)
+   - Policy decision:
+     - Check operating mode (HumanInteraction, Supervision, Autonomous)
+     - Check tool risk level (ReadOnly, ControlledMutation, Sensitive)
+     - Check delegated grant permissions
+     - Check actor permissions
+     - Decision: Allowed, ApprovalRequired, Denied
+   - Sealed tool payload (encrypted) is stored in the database
+   - If approval required: ApprovalRequestRecord is created and waits for human approval
+7. **Execution Loop**:
+   - Agent can make multiple tool calls
+   - Each tool call goes through the same governance check
+   - Loop until task completion or max iterations (default 5)
+
+#### Tool Execution Gateway
+
+[ToolExecutionGateway](file:///workspace/agentforge-ui/src/application/orchestration/tool_gateway.rs) is the central authority for tool execution:
+
+- **Risk Assessment**: Classifies tools into:
+  - `ReadOnly`: No state changes allowed (read_file, analyze_file)
+  - `ControlledMutation`: Safe state changes (save_to_knowledge, record_decision)
+  - `Sensitive`: High-risk operations (write_file, edit_file, run_cli, etc.)
+- **Policy Enforcement**:
+  - In `HumanInteraction` mode: All non-ReadOnly operations require approval
+  - In `Supervision` mode: Only Sensitive operations require approval
+  - In `Autonomous` mode: Sensitive operations may be allowed if explicitly enabled in settings
+- **Sealing and Security**:
+  - Tool payloads are encrypted before storage
+  - Audit log entry is created for every decision
+  - Workspace path validation prevents directory traversal attacks
+
+### 8.2 Collaboration Case Flow
+
+The [CollaborationService](file:///workspace/agentforge-ui/src/application/orchestration/collaboration.rs) implements a human-like collaboration contract with clear handoff and review protocols.
+
+#### Case Lifecycle Stages
+
+1. **Handoff Creation**:
+   - `create_handoff()` creates a new `CollaborationCaseRecord` and `HandoffPackageRecord`
+   - Cross-team notification is sent via [TeamBusRouter](file:///workspace/agentforge-ui/src/infrastructure/message_bus/routing.rs)
+2. **Acknowledge and Readback**:
+   - `acknowledge_and_readback()`: Receiving agent records its understanding
+   - State becomes `readback_pending`
+   - If accepted immediately (human), state becomes `in_progress`
+3. **Human Acceptance (if needed)**:
+   - `accept_readback()`: Human actor approves the readback
+   - `DelegatedGrantRecord` is created with allowed tools, token limit, and scope
+4. **Work Execution**:
+   - Agent works on the case using delegated tools
+   - `record_decision()` logs auditable decisions
+   - `create_subtasks()` delegates work to other agents
+5. **Deliverable Submission**:
+   - `submit_deliverable()`: Agent submits work for review
+   - State becomes `review_pending`
+6. **Peer Review**:
+   - `review_deliverable()`: Another agent reviews and provides verdict
+   - Updates `AgentCompetencyRecord` for the deliverable author based on outcome
+7. **Consensus Building**:
+   - `record_consensus()`: Proposes a consensus resolution
+   - `cast_consensus_vote()`: Agents vote on the proposal
+   - If accepted (human resolution or 2 accept votes), case becomes `completed`
+8. **Escalation (if needed)**:
+   - `escalate()`: Stops automatic resolution and requests human intervention
+   - `resolve_escalation()`: Human resolves the escalation
+
+#### Competency-Based Routing
+
+`route_by_competency()` selects the best agent for a task using:
+- `AgentCompetencyRecord`: Tracks agent performance by competency key
+- Score weighted by number of evidence samples
+- Only considers eligible agents
+
+### 8.3 Message Bus Integration
+
+[TeamBusRouter](file:///workspace/agentforge-ui/src/infrastructure/message_bus/routing.rs) enables communication between agents, instances, and teams.
+
+#### Message Types
+
+| Type | Description | Use Case |
+|------|-------------|----------|
+| `Direct` | One-to-one message between members | Private agent communication |
+| `Broadcast` | One-to-all message in an instance | Team-wide announcements |
+| `RoleGroup` | One-to-many by role | Task delegation by role |
+| `System` | System message | System events |
+
+#### Member Registration Flow
+
+1. When a team instance starts, all agents are registered with `register_member()`
+2. Registration takes:
+   - `team_instance_id`
+   - `member_id` (agent id)
+   - `role` (agent's routing role)
+3. Returns an `mpsc::Receiver` for incoming messages
+4. Broadcast channel is created automatically for the instance
+5. Role mapping is stored for efficient role-group messaging
+
+#### Routing Flow
+
+`route_message()` handles delivery based on message type:
+- **Direct**: Finds recipient's channel and sends the message
+- **Broadcast**: Sends to all subscribers of the instance's broadcast channel
+- **RoleGroup**: Finds all members with the target role and sends to each
+- **System**: Broadcasts to the entire instance
+
+### 8.4 Knowledge Integration
+
+The knowledge system integrates with the orchestration pipeline to provide contextual information.
+
+#### Retrieval-Augmented Generation (RAG) Flow
+
+1. User query is received
+2. [AgentExecutor](file:///workspace/agentforge-ui/src/application/orchestration/executor.rs) extracts the query text
+3. Hybrid search is performed:
+   - **Full-text search (FTS)**: On `knowledge_items` and `knowledge_entries` tables
+   - **Vector similarity search**: On `knowledge_chunks` table using embedding similarity
+4. Top results are selected (capped by token limit)
+5. Results are injected into the LLM prompt as untrusted context
+6. Context sources are recorded in `LlmContextSourceRecord`
+7. A full context snapshot is saved as `LlmContextSnapshotRecord` for auditability
+
+#### Embedding Generation
+
+[EmbeddingProvider](file:///workspace/agentforge-ui/src/infrastructure/llm_providers/embeddings.rs) uses fastembed to generate local embeddings for semantic search.
+
+### 8.5 Capability-Based File Handling
+
+[CapabilityRouter](file:///workspace/agentforge-ui/src/application/capability_router.rs) decides how to handle file attachments based on model capabilities.
+
+#### Handling Strategies
+
+| File Type | Model Capability | Strategy |
+|-----------|------------------|----------|
+| Text (txt, md, code, etc.) | Any | Local text extraction using file intelligence |
+| HTML/XML | Any | Local extraction and parsing |
+| PDF | Has PDF support | Pass directly to model as native input |
+| PDF | No PDF support | Local text extraction; warning about missing visual content |
+| Image | Has vision support | Pass directly as image bytes |
+| Image | No vision support | Extract metadata only; warning about missing visual analysis |
+| Audio | Has audio support | Pass directly as audio bytes |
+| Audio | No audio support | Capability missing error |
+| Video | Has video support | Pass directly as video bytes |
+| Video | No video support | Capability missing error |
+
+### 8.6 Initialization Flow
+
+The system initialization sequence when the app starts:
+
+1. **main()**: Application entry point
+   - Creates combined asset source (local + gpui-component assets)
+   - Launches gpui App
+2. **AppContext::run()**:
+   - Calls `init()` from lib.rs
+   - Initializes `AppState` global state
+3. **AppState::init()**:
+   - Initializes SQLite database
+   - Creates Tokio multi-threaded runtime
+   - Initializes `TeamBusRouter`
+   - Initializes `ModeManager` with stored mode or default `HumanInteraction`
+   - Initializes `GovernanceManager`
+   - Creates `ChatService`, `TeamService`, `KnowledgeService`
+   - Seeds the SDG team if needed
+   - Starts Obsidian watcher if vault path configured
+   - Starts iFlow automation
+   - Starts worker manager (polls for instances)
+   - Starts benchmark runner scheduler
+4. **Panel Registration**:
+   - All dock panels are registered (session, agents, iflow builder, etc.)
+5. **Key Bindings**:
+   - Keyboard shortcuts are registered
+6. **Main Window**:
+   - `MainWindow` component is created
+   - Initial panel layout is set
+   - Activity bar navigation is wired up
+
+---
+
+## 9. Running the Project
 
 ### Prerequisites
 
