@@ -68,20 +68,24 @@ impl Render for OrchestrationPanel {
                     .child(self.render_tab("Artifacts", cx))
                     .child(self.render_tab("Mode Transition", cx)),
             )
-            .child(v_flex().flex_1().w_full().overflow_hidden().child(
-                match self.active_tab.as_str() {
-                    "Dashboard" => self.render_dashboard(cx).into_any_element(),
-                    "Tracking" => self.render_tracking(cx).into_any_element(),
-                    "Logs" => self.render_logs(cx).into_any_element(),
-                    "Governance" => self.render_governance(cx).into_any_element(),
-                    "Collaboration" => self.render_collaboration(cx).into_any_element(),
-                    "Learning" => self.render_learning(cx).into_any_element(),
-                    "Context" => self.render_context_inspector(cx).into_any_element(),
-                    "Artifacts" => self.render_artifacts(cx).into_any_element(),
-                    "Mode Transition" => self.render_mode_transition(cx).into_any_element(),
-                    _ => div().child("Unknown Tab").into_any_element(),
-                },
-            ))
+            .child(
+                v_flex().flex_1().w_full().overflow_hidden().child(
+                    div().size_full().overflow_y_scrollbar().child(
+                        match self.active_tab.as_str() {
+                            "Dashboard" => self.render_dashboard(cx).into_any_element(),
+                            "Tracking" => self.render_tracking(cx).into_any_element(),
+                            "Logs" => self.render_logs(cx).into_any_element(),
+                            "Governance" => self.render_governance(cx).into_any_element(),
+                            "Collaboration" => self.render_collaboration(cx).into_any_element(),
+                            "Learning" => self.render_learning(cx).into_any_element(),
+                            "Context" => self.render_context_inspector(cx).into_any_element(),
+                            "Artifacts" => self.render_artifacts(cx).into_any_element(),
+                            "Mode Transition" => self.render_mode_transition(cx).into_any_element(),
+                            _ => div().child("Unknown Tab").into_any_element(),
+                        },
+                    ),
+                ),
+            )
     }
 }
 
@@ -100,12 +104,100 @@ impl OrchestrationPanel {
             }))
     }
 
+    fn count_labels(values: impl IntoIterator<Item = String>) -> Vec<(String, usize)> {
+        let mut counts = std::collections::BTreeMap::<String, usize>::new();
+        for value in values {
+            *counts.entry(value).or_default() += 1;
+        }
+        counts.into_iter().collect()
+    }
+
+    fn render_bar_chart(
+        &self,
+        title: &str,
+        data: Vec<(String, usize)>,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        let theme = cx.theme().clone();
+        let max_value = data.iter().map(|(_, value)| *value).max().unwrap_or(0) as f32;
+        let mut bars = h_flex().items_end().gap_2().h(px(150.)).w_full();
+
+        if data.is_empty() {
+            bars = bars.child(
+                div()
+                    .size_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_color(theme.muted_foreground)
+                    .child("No data"),
+            );
+        } else {
+            for (label, value) in data {
+                let height = if max_value > 0.0 {
+                    ((value as f32 / max_value) * 128.0).max(6.0)
+                } else {
+                    6.0
+                };
+                bars = bars.child(
+                    v_flex()
+                        .h_full()
+                        .flex_1()
+                        .items_center()
+                        .justify_end()
+                        .gap_1()
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(theme.muted_foreground)
+                                .child(value.to_string()),
+                        )
+                        .child(
+                            div()
+                                .w_full()
+                                .max_w(px(42.))
+                                .h(px(height))
+                                .rounded_sm()
+                                .bg(theme.primary),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(theme.muted_foreground)
+                                .child(label.chars().take(12).collect::<String>()),
+                        ),
+                );
+            }
+        }
+
+        v_flex()
+            .p_4()
+            .gap_3()
+            .rounded_md()
+            .border_1()
+            .border_color(theme.border)
+            .bg(theme.secondary.opacity(0.35))
+            .child(
+                div()
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .child(title.to_string()),
+            )
+            .child(bars)
+    }
+
     fn render_dashboard(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let db = crate::AppState::global(cx).db.clone();
         let total_tasks = db.get_total_tasks_count().unwrap_or(0);
         let active_agents = db.get_active_agents_count().unwrap_or(0);
         let runs = db.list_recent_orchestration_runs(100).unwrap_or_default();
+        let task_status_chart = Self::count_labels(
+            db.list_recent_tasks(100)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|task| task.status),
+        );
+        let run_status_chart = Self::count_labels(runs.iter().map(|run| run.status.clone()));
         let active_runs = runs
             .iter()
             .filter(|run| matches!(run.status.as_str(), "running" | "pending" | "dispatched"))
@@ -215,6 +307,20 @@ impl OrchestrationPanel {
                     ),
             )
             .child(
+                h_flex()
+                    .gap_4()
+                    .child(div().flex_1().child(self.render_bar_chart(
+                        "Run Status",
+                        run_status_chart,
+                        cx,
+                    )))
+                    .child(div().flex_1().child(self.render_bar_chart(
+                        "Task Status",
+                        task_status_chart,
+                        cx,
+                    ))),
+            )
+            .child(
                 div()
                     .text_lg()
                     .font_weight(gpui::FontWeight::SEMIBOLD)
@@ -317,6 +423,11 @@ impl OrchestrationPanel {
             .db
             .list_recent_tasks(100)
             .unwrap_or_default();
+        let agents = crate::AppState::global(cx)
+            .db
+            .list_agents()
+            .unwrap_or_default();
+        let task_status_chart = Self::count_labels(tasks.iter().map(|task| task.status.clone()));
 
         let mut task_list = v_flex()
             .flex_1()
@@ -381,9 +492,10 @@ impl OrchestrationPanel {
                     ),
                     None => Self::task_display_name(&task),
                 };
+                let assignee_name = Self::task_assignee_display(&task, &agents);
                 task_list = task_list.child(self.render_gantt_row(
                     &task_name,
-                    task.assignee_id.as_deref().unwrap_or("Unassigned"),
+                    &assignee_name,
                     &task.status,
                     0.0,
                     width_pct,
@@ -393,24 +505,104 @@ impl OrchestrationPanel {
             }
         }
 
-        v_flex().size_full().gap_4().child(task_list)
+        v_flex()
+            .size_full()
+            .gap_4()
+            .child(self.render_bar_chart("Task Status Distribution", task_status_chart, cx))
+            .child(task_list)
     }
 
     fn task_display_name(task: &crate::core::models::Task) -> String {
-        task.payload
+        let Some(payload) = task.payload.as_ref() else {
+            return task.id.clone();
+        };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(payload) else {
+            return task.id.clone();
+        };
+        let title = value
+            .get("title")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        if let Some(title) = title {
+            return title.to_string();
+        }
+        let name = value
+            .get("name")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("");
+        let description = value
+            .get("description")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("");
+        if !name.is_empty()
+            && !matches!(
+                name.to_ascii_lowercase().as_str(),
+                "coordinator" | "pm" | "ba" | "dev" | "developer" | "engineer"
+            )
+        {
+            return name.to_string();
+        }
+        if !description.is_empty() {
+            return description
+                .lines()
+                .map(str::trim)
+                .find(|line| !line.is_empty())
+                .unwrap_or(description)
+                .trim_start_matches(|ch: char| {
+                    ch.is_ascii_digit() || ch == '.' || ch == ')' || ch == '-'
+                })
+                .trim()
+                .chars()
+                .take(96)
+                .collect();
+        }
+        task.id.clone()
+    }
+
+    fn task_assignee_display(
+        task: &crate::core::models::Task,
+        agents: &[crate::core::models::Agent],
+    ) -> String {
+        if let Some(agent_id) = task.assignee_id.as_ref() {
+            return agents
+                .iter()
+                .find(|agent| &agent.id == agent_id)
+                .map(|agent| agent.name.clone())
+                .unwrap_or_else(|| agent_id.clone());
+        }
+
+        let route = task
+            .payload
             .as_ref()
-            .and_then(|payload| {
-                serde_json::from_str::<crate::application::orchestration::core::DagTask>(payload)
-                    .ok()
+            .and_then(|payload| serde_json::from_str::<serde_json::Value>(payload).ok())
+            .and_then(|value| {
+                value
+                    .get("role")
+                    .and_then(|role| role.as_str())
+                    .or_else(|| value.get("name").and_then(|name| name.as_str()))
+                    .map(ToOwned::to_owned)
             })
-            .map(|dag| {
-                if dag.description.trim().is_empty() {
-                    dag.name
-                } else {
-                    dag.description
-                }
-            })
-            .unwrap_or_else(|| task.id.clone())
+            .unwrap_or_default();
+        let route_key = Self::normalize_label(&route);
+        agents
+            .iter()
+            .find(|agent| Self::normalize_label(&agent.routing_role()) == route_key)
+            .map(|agent| format!("{} (inferred)", agent.name))
+            .unwrap_or_else(|| "Unassigned".to_string())
+    }
+
+    fn normalize_label(value: &str) -> String {
+        value
+            .trim()
+            .to_lowercase()
+            .chars()
+            .filter(|ch| ch.is_ascii_alphanumeric())
+            .collect()
     }
 
     fn render_gantt_row(
@@ -457,6 +649,18 @@ impl OrchestrationPanel {
             .db
             .list_recent_run_events(None, 100)
             .unwrap_or_default();
+        let event_type_chart = Self::count_labels(events.iter().map(|event| {
+            if event.event_type.contains("failed") {
+                "failed".to_string()
+            } else if event.event_type.contains("approval") || event.event_type.contains("waiting")
+            {
+                "approval".to_string()
+            } else if event.event_type.contains("completed") {
+                "completed".to_string()
+            } else {
+                "other".to_string()
+            }
+        }));
         let mut event_list = v_flex()
             .flex_1()
             .p_4()
@@ -486,7 +690,11 @@ impl OrchestrationPanel {
             }
         }
 
-        v_flex().size_full().gap_4().child(event_list)
+        v_flex()
+            .size_full()
+            .gap_4()
+            .child(self.render_bar_chart("Event Categories", event_type_chart, cx))
+            .child(event_list)
     }
 
     fn render_governance(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -701,6 +909,14 @@ impl OrchestrationPanel {
                         cx,
                     )),
             )
+            .child(self.render_bar_chart(
+                "Governance Workload",
+                vec![
+                    ("transitions".to_string(), transitions),
+                    ("approvals".to_string(), pending_count),
+                ],
+                cx,
+            ))
             .child(
                 div()
                     .text_lg()
@@ -1380,6 +1596,120 @@ impl OrchestrationPanel {
             .collect();
         let evaluations = db.list_recent_run_evaluations(50).unwrap_or_default();
         let rollbacks = db.list_recent_rollback_records(50).unwrap_or_default();
+        let mut benchmark_jobs_queued = 0usize;
+        let mut benchmark_jobs_running = 0usize;
+        let mut benchmark_jobs_failed = 0usize;
+        let mut benchmark_runs_passed = 0usize;
+        let mut benchmark_runs_failed = 0usize;
+        let mut canaries_running = 0usize;
+        let mut canary_observations_passed = 0usize;
+        let mut canary_observations_failed = 0usize;
+        for candidate in &candidates {
+            for job in db
+                .list_benchmark_runner_jobs_for_candidate(&candidate.id)
+                .unwrap_or_default()
+            {
+                match job.status.as_str() {
+                    "queued" => benchmark_jobs_queued += 1,
+                    "running" => benchmark_jobs_running += 1,
+                    "failed" => benchmark_jobs_failed += 1,
+                    _ => {}
+                }
+            }
+            for run in db
+                .list_benchmark_runs_for_candidate(&candidate.id)
+                .unwrap_or_default()
+            {
+                match run.status.as_str() {
+                    "passed" => benchmark_runs_passed += 1,
+                    "failed" => benchmark_runs_failed += 1,
+                    _ => {}
+                }
+            }
+            for deployment in db
+                .list_canary_deployments_for_candidate(&candidate.id)
+                .unwrap_or_default()
+            {
+                if deployment.status == "running" {
+                    canaries_running += 1;
+                }
+                for observation in db
+                    .list_canary_observations_for_deployment(&deployment.id)
+                    .unwrap_or_default()
+                {
+                    match observation.verdict.as_str() {
+                        "pass" => canary_observations_passed += 1,
+                        "fail" => canary_observations_failed += 1,
+                        _ => {}
+                    }
+                }
+            }
+        }
+        let telemetry = h_flex()
+            .gap_3()
+            .child(
+                v_flex()
+                    .gap_1()
+                    .p_3()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(theme.border)
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child("Benchmark Runner"),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(theme.muted_foreground)
+                            .child(format!(
+                                "{} queued | {} running | {} failed jobs",
+                                benchmark_jobs_queued,
+                                benchmark_jobs_running,
+                                benchmark_jobs_failed
+                            )),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(theme.muted_foreground)
+                            .child(format!(
+                                "{} passed | {} failed runs",
+                                benchmark_runs_passed, benchmark_runs_failed
+                            )),
+                    ),
+            )
+            .child(
+                v_flex()
+                    .gap_1()
+                    .p_3()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(theme.border)
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child("Canary Telemetry"),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(theme.muted_foreground)
+                            .child(format!("{} running deployments", canaries_running)),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(theme.muted_foreground)
+                            .child(format!(
+                                "{} pass | {} fail observations",
+                                canary_observations_passed, canary_observations_failed
+                            )),
+                    ),
+            );
         let mut evidence_list = v_flex()
             .gap_2()
             .p_4()
@@ -1821,6 +2151,7 @@ impl OrchestrationPanel {
                     .flex_1()
                     .gap_4()
                     .overflow_y_scrollbar()
+                    .child(telemetry)
                     .child(evidence_list)
                     .child(lesson_list)
                     .child(list),

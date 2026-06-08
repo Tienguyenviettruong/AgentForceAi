@@ -1,3 +1,4 @@
+use crate::application::orchestration::role_policy;
 use crate::application::services::provider_factory::{provider_kind, ProviderAdapterCache};
 use crate::core::traits::database::DatabasePort;
 use crate::infrastructure::message_bus::routing::{MessageType, TeamBusRouter, TeamMessage};
@@ -134,6 +135,128 @@ impl AgentWorker {
             .flatten()
             .map(|agent| agent.status.to_lowercase() != "offline")
             .unwrap_or(false)
+    }
+
+    fn normalize_route_key(value: &str) -> String {
+        value
+            .trim()
+            .to_lowercase()
+            .chars()
+            .filter(|ch| ch.is_ascii_alphanumeric())
+            .collect()
+    }
+
+    fn pending_task_matches_agent(
+        task: &crate::tasks::shared_task_list::Task,
+        agent: &crate::db::Agent,
+    ) -> bool {
+        if task.assignee_id.as_deref() == Some(&agent.id) {
+            return true;
+        }
+        if task.assignee_id.is_some() {
+            return false;
+        }
+
+        let Some(payload) = task.payload.as_deref() else {
+            return false;
+        };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(payload) else {
+            return false;
+        };
+        let payload_role = value
+            .get("role")
+            .and_then(|role| role.as_str())
+            .or_else(|| value.get("name").and_then(|name| name.as_str()))
+            .unwrap_or("");
+        !payload_role.trim().is_empty()
+            && Self::normalize_route_key(payload_role)
+                == Self::normalize_route_key(&agent.routing_role())
+    }
+
+    fn task_payload_field(value: &serde_json::Value, key: &str) -> String {
+        value
+            .get(key)
+            .and_then(|field| field.as_str())
+            .map(str::trim)
+            .filter(|field| !field.is_empty())
+            .unwrap_or("")
+            .to_string()
+    }
+
+    fn task_capability_violation(
+        task: &crate::tasks::shared_task_list::Task,
+        agent: &crate::db::Agent,
+    ) -> Option<String> {
+        let payload = task.payload.as_deref()?;
+        let value = serde_json::from_str::<serde_json::Value>(payload).ok()?;
+        let title = Self::task_payload_field(&value, "title");
+        let title = if title.is_empty() {
+            Self::task_payload_field(&value, "name")
+        } else {
+            title
+        };
+        let description = Self::task_payload_field(&value, "description");
+        let task_type = Self::task_payload_field(&value, "task_type");
+        role_policy::validate_agent_task_assignment(agent, &task_type, &title, &description).err()
+    }
+
+    fn task_instruction_text(task: &crate::tasks::shared_task_list::Task) -> String {
+        let Some(payload) = task.payload.as_deref() else {
+            return task.id.clone();
+        };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(payload) else {
+            return payload.to_string();
+        };
+
+        let description = Self::task_payload_field(&value, "description");
+        let mut title = Self::task_payload_field(&value, "title");
+        if title.is_empty() {
+            title = Self::task_payload_field(&value, "name");
+        }
+        let role = Self::task_payload_field(&value, "role");
+        let title_looks_like_role = !title.is_empty()
+            && (Self::normalize_route_key(&title) == Self::normalize_route_key(&role)
+                || matches!(
+                    Self::normalize_route_key(&title).as_str(),
+                    "coordinator" | "pm" | "ba" | "dev" | "developer" | "engineer"
+                ));
+        if title_looks_like_role {
+            if let Some(first_line) = description
+                .lines()
+                .map(str::trim)
+                .find(|line| !line.is_empty())
+            {
+                title = first_line
+                    .trim_start_matches(|ch: char| {
+                        ch.is_ascii_digit() || ch == '.' || ch == ')' || ch == '-'
+                    })
+                    .trim()
+                    .chars()
+                    .take(96)
+                    .collect();
+            }
+        }
+
+        let mut out = String::new();
+        if !title.is_empty() {
+            out.push_str("Title: ");
+            out.push_str(&title);
+            out.push('\n');
+        }
+        if !role.is_empty() {
+            out.push_str("Assigned role: ");
+            out.push_str(&role);
+            out.push('\n');
+        }
+        if !description.is_empty() {
+            out.push_str("Description:\n");
+            out.push_str(&description);
+        }
+        if out.trim().is_empty() {
+            payload.to_string()
+        } else {
+            out
+        }
     }
 
     async fn select_review_handler_agent_id(&self, case_id: Option<&str>) -> Option<String> {
@@ -340,8 +463,14 @@ impl AgentWorker {
         };
 
         let Ok(Some(agent)) = self.db.get_agent(&self.agent_id) else {
+            tracing::debug!(agent_id = %self.agent_id, "task worker agent was not found");
             return false;
         };
+        tracing::debug!(
+            agent_id = %self.agent_id,
+            provider = %agent.provider,
+            "task worker resolved agent provider"
+        );
         let provider_config = self
             .db
             .get_provider_by_name(&agent.provider)
@@ -355,8 +484,20 @@ impl AgentWorker {
                 })
             });
         let Some(provider_config) = provider_config else {
+            tracing::debug!(
+                agent_id = %self.agent_id,
+                provider = %agent.provider,
+                "task worker provider config was not found"
+            );
             return false;
         };
+        tracing::debug!(
+            provider = %provider_config.provider_name,
+            adapter = %provider_config.adapter_type,
+            has_base_url = provider_config.command.as_ref().is_some_and(|value| !value.trim().is_empty()),
+            has_credential_ref = provider_config.api_key_ref.as_ref().is_some_and(|value| !value.trim().is_empty()),
+            "task worker provider config resolved"
+        );
 
         let tasks = self
             .db
@@ -365,10 +506,24 @@ impl AgentWorker {
 
         let mut next_task: Option<crate::tasks::shared_task_list::Task> = None;
         for task in &tasks {
-            if task.status != "pending" || task.assignee_id.as_ref() != Some(&self.agent_id) {
+            if task.status != "pending" || !Self::pending_task_matches_agent(task, &agent) {
                 continue;
             }
             if self.db.is_task_unblocked(&task.id).unwrap_or(false) {
+                if let Some(reason) = Self::task_capability_violation(task, &agent) {
+                    let status_text = format!("[Task Routing Error] {}:\n{}", task.id, reason);
+                    let _ = self.db.mark_task_failed(&task.id);
+                    let metadata = serde_json::json!({"agent_name": agent.name}).to_string();
+                    let mut msg = TeamMessage::new_broadcast(
+                        self.team_instance_id.clone(),
+                        "assistant".to_string(),
+                        status_text,
+                    );
+                    msg.metadata = Some(metadata);
+                    let _ = self.db.insert_team_message(&msg);
+                    let _ = self.team_bus.route_message(msg).await;
+                    return true;
+                }
                 next_task = Some(task.clone());
                 break;
             }
@@ -400,14 +555,14 @@ impl AgentWorker {
             .build_dynamic_system_prompt(&self.team_id, &self.team_instance_id, &self.agent_id)
             .unwrap_or_default();
 
-        let task_text = task.payload.clone().unwrap_or_else(|| task.id.clone());
+        let task_text = Self::task_instruction_text(&task);
         let instructions = if let Some(ref ws) = workspace_dir {
             format!(
-                "Execute the following task. You are working in the directory: {}. To create or change files, call the write_file or edit_file tool with a relative path; do not represent file operations as markdown. Sensitive tools may pause for governance approval. Task:\n",
+                "Execute the following task. You are working in the directory: {}. To create or change files, call the write_file or edit_file tool with a relative path; do not represent file operations as markdown. Do not use run_cli to create directories/files when write_file can create parent directories automatically. Use run_cli only for actual build/test/diagnostic commands. Sensitive tools may pause for governance approval. Task:\n",
                 ws
             )
         } else {
-            "Execute the following task. File operations require a configured workspace and must be performed through write_file or edit_file tools; do not represent file operations as markdown. Sensitive tools may pause for governance approval. Task:\n".to_string()
+            "Execute the following task. File operations require a configured workspace and must be performed through write_file or edit_file tools; do not represent file operations as markdown. Do not use run_cli to create directories/files. Sensitive tools may pause for governance approval. Task:\n".to_string()
         };
 
         let history = vec![
@@ -430,9 +585,18 @@ impl AgentWorker {
         let adapter = self.provider_cache.get_or_create(&provider_config);
 
         let Some(adapter) = adapter else {
+            tracing::warn!(
+                provider = %provider_config.provider_name,
+                adapter = %provider_config.adapter_type,
+                "task worker provider adapter could not be initialized"
+            );
             let _ = self.db.mark_task_failed(&task.id);
             return true;
         };
+        tracing::debug!(
+            provider_id = adapter.provider_id(),
+            "task worker provider adapter ready"
+        );
 
         let session_id = task.run_id.as_deref().and_then(|run_id| {
             self.db
@@ -444,6 +608,50 @@ impl AgentWorker {
         let mcp_registry = Arc::new(crate::infrastructure::mcp::registry::McpToolRegistry::new(
             self.db.clone(),
         ));
+        let stream_metadata = serde_json::json!({
+            "agent_name": agent.name.clone(),
+            "task_id": task.id.clone(),
+            "stream_kind": "task_worker"
+        })
+        .to_string();
+        let mut stream_msg = TeamMessage::new_broadcast(
+            self.team_instance_id.clone(),
+            self.agent_id.clone(),
+            String::new(),
+        );
+        stream_msg.metadata = Some(stream_metadata.clone());
+        stream_msg.delivery_status = "typing".to_string();
+        let stream_message_id = stream_msg.id.clone();
+        let _ = self.db.insert_team_message(&stream_msg);
+        let _ = self.team_bus.route_message(stream_msg.clone()).await;
+
+        let db_for_stream = self.db.clone();
+        let team_bus_for_stream = self.team_bus.clone();
+        let stream_message_id_for_callback = stream_message_id.clone();
+        let team_instance_id_for_stream = self.team_instance_id.clone();
+        let sender_id_for_stream = self.agent_id.clone();
+        let stream_metadata_for_callback = stream_msg.metadata.clone();
+        let callback = Arc::new(move |text: String| {
+            let content = text;
+            let _ = db_for_stream
+                .update_team_message_content(&stream_message_id_for_callback, &content);
+            let team_bus = team_bus_for_stream.clone();
+            let update_msg = TeamMessage {
+                id: stream_message_id_for_callback.clone(),
+                team_instance_id: team_instance_id_for_stream.clone(),
+                sender_member_id: sender_id_for_stream.clone(),
+                recipient_member_id: None,
+                recipient_role: None,
+                message_type: MessageType::Broadcast,
+                content,
+                metadata: stream_metadata_for_callback.clone(),
+                delivery_status: "typing".to_string(),
+                created_at: chrono::Utc::now().to_rfc3339(),
+            };
+            tokio::spawn(async move {
+                let _ = team_bus.route_message(update_msg).await;
+            });
+        });
         let executor = crate::application::orchestration::executor::AgentExecutor::new(
             adapter,
             mcp_registry,
@@ -454,19 +662,22 @@ impl AgentWorker {
             session_id,
             task.run_id.clone(),
             None,
-            None,
+            Some(callback),
         );
+        tracing::debug!(task_id = %task.id, "task worker calling AgentExecutor");
+        let response_started_at = std::time::Instant::now();
         let result = executor.execute_task(history).await;
+        let thought_duration_secs = response_started_at.elapsed().as_secs_f64();
+        tracing::debug!(task_id = %task.id, success = result.is_ok(), "task worker AgentExecutor returned");
         let (status_text, status) = match result {
-            Ok(text) if text.starts_with("Approval required before executing") => (
-                format!("[Task Waiting Approval] {}:\n{}", task.id, text),
-                "waiting_approval",
-            ),
-            Ok(text) => (
-                format!("[Task Completed] {}:\n{}", task.id, text),
-                "completed",
-            ),
-            Err(e) => (format!("[Task Failed] {}:\n{}", task.id, e), "failed"),
+            Ok(text) if text.starts_with("Approval required before executing") => {
+                (text, "waiting_approval")
+            }
+            Ok(text) => (text, "completed"),
+            Err(e) => {
+                tracing::warn!(task_id = %task.id, error = %e, "task worker AgentExecutor failed");
+                (format!("Task failed: {}", e), "failed")
+            }
         };
 
         let _ = match status {
@@ -475,15 +686,30 @@ impl AgentWorker {
             _ => self.db.mark_task_failed(&task.id),
         };
 
-        let metadata = serde_json::json!({"agent_name": agent.name}).to_string();
-        let mut msg = TeamMessage::new_broadcast(
-            self.team_instance_id.clone(),
-            "assistant".to_string(),
-            status_text.clone(),
-        );
-        msg.metadata = Some(metadata.clone());
-        let _ = self.db.insert_team_message(&msg);
-        let _ = self.team_bus.route_message(msg).await;
+        let final_delivery_status = if status == "completed" {
+            "delivered"
+        } else {
+            status
+        };
+        let _ = self
+            .db
+            .update_team_message_content(&stream_message_id, &status_text);
+        let _ = self
+            .db
+            .update_team_message_delivery_status(&stream_message_id, final_delivery_status);
+        let mut final_msg = stream_msg.clone();
+        final_msg.content = status_text.clone();
+        final_msg.delivery_status = final_delivery_status.to_string();
+        final_msg.created_at = chrono::Utc::now().to_rfc3339();
+        let metadata = serde_json::json!({
+            "agent_name": agent.name.clone(),
+            "task_id": task.id.clone(),
+            "stream_kind": "task_worker",
+            "thought_duration_secs": thought_duration_secs
+        })
+        .to_string();
+        final_msg.metadata = Some(metadata.clone());
+        let _ = self.team_bus.route_message(final_msg).await;
 
         let mut session = self
             .db
@@ -783,6 +1009,51 @@ impl AgentWorker {
         let mcp_registry = Arc::new(crate::infrastructure::mcp::registry::McpToolRegistry::new(
             self.db.clone(),
         ));
+        let stream_metadata = serde_json::json!({
+            "agent_name": agent.name.clone(),
+            "run_id": run_id.clone(),
+            "correlation_id": correlation_id.clone(),
+            "stream_kind": "cross_team_review"
+        })
+        .to_string();
+        let mut stream_msg = TeamMessage::new_broadcast(
+            self.team_instance_id.clone(),
+            agent.id.clone(),
+            String::new(),
+        );
+        stream_msg.metadata = Some(stream_metadata.clone());
+        stream_msg.delivery_status = "typing".to_string();
+        let stream_message_id = stream_msg.id.clone();
+        let _ = self.db.insert_team_message(&stream_msg);
+        let _ = self.team_bus.route_message(stream_msg.clone()).await;
+
+        let db_for_stream = self.db.clone();
+        let team_bus_for_stream = self.team_bus.clone();
+        let stream_message_id_for_callback = stream_message_id.clone();
+        let team_instance_id_for_stream = self.team_instance_id.clone();
+        let sender_id_for_stream = agent.id.clone();
+        let stream_metadata_for_callback = stream_msg.metadata.clone();
+        let callback = Arc::new(move |text: String| {
+            let content = text;
+            let _ = db_for_stream
+                .update_team_message_content(&stream_message_id_for_callback, &content);
+            let team_bus = team_bus_for_stream.clone();
+            let update_msg = TeamMessage {
+                id: stream_message_id_for_callback.clone(),
+                team_instance_id: team_instance_id_for_stream.clone(),
+                sender_member_id: sender_id_for_stream.clone(),
+                recipient_member_id: None,
+                recipient_role: None,
+                message_type: MessageType::Broadcast,
+                content,
+                metadata: stream_metadata_for_callback.clone(),
+                delivery_status: "typing".to_string(),
+                created_at: chrono::Utc::now().to_rfc3339(),
+            };
+            tokio::spawn(async move {
+                let _ = team_bus.route_message(update_msg).await;
+            });
+        });
         let executor = crate::application::orchestration::executor::AgentExecutor::new(
             adapter,
             mcp_registry,
@@ -793,16 +1064,54 @@ impl AgentWorker {
             Some(session_id),
             Some(run_id.clone()),
             None,
-            None,
+            Some(callback),
         );
 
+        let response_started_at = std::time::Instant::now();
         let result = executor
             .execute_task(history)
             .await
             .ok()
             .unwrap_or_default();
+        let thought_duration_secs = response_started_at.elapsed().as_secs_f64();
         let handoff_succeeded = self.governed_handoff_succeeded(&run_id);
         self.finish_cross_team_run(&run_id, &result, handoff_succeeded);
+        let status = if result.starts_with("Approval required before executing") {
+            "waiting_approval"
+        } else if result.trim().is_empty() || !handoff_succeeded {
+            "failed"
+        } else {
+            "delivered"
+        };
+        let final_text = match status {
+            "waiting_approval" => result.clone(),
+            "failed" if result.trim().is_empty() => {
+                "Cross-team review failed before producing a response.".to_string()
+            }
+            "failed" => format!("Cross-team review failed: {}", result),
+            _ => result.clone(),
+        };
+        let _ = self
+            .db
+            .update_team_message_content(&stream_message_id, &final_text);
+        let _ = self
+            .db
+            .update_team_message_delivery_status(&stream_message_id, status);
+        let mut final_msg = stream_msg.clone();
+        final_msg.content = final_text;
+        final_msg.delivery_status = status.to_string();
+        final_msg.created_at = chrono::Utc::now().to_rfc3339();
+        final_msg.metadata = Some(
+            serde_json::json!({
+                "agent_name": agent.name.clone(),
+                "run_id": run_id.clone(),
+                "correlation_id": correlation_id.clone(),
+                "stream_kind": "cross_team_review",
+                "thought_duration_secs": thought_duration_secs
+            })
+            .to_string(),
+        );
+        let _ = self.team_bus.route_message(final_msg).await;
         if handoff.reply_to_team.is_empty() {
             return;
         }
@@ -923,7 +1232,7 @@ impl AgentWorker {
             let mut roles: Vec<String> = role_mapping.keys().cloned().collect();
             roles.sort();
             sys.push_str(&format!(
-                "\nAvailable roles in this instance: {}. When calling create_subtasks, each task.role MUST match one of these exactly.\n",
+                "\nAvailable roles in this instance: {}. When calling create_subtasks, each task.role MUST match one of these exactly and each task.task_type MUST describe the work. Coordinator may coordinate/read/review/delegate but must not receive file creation, edit, delete, or side-effectful CLI work. Assign work only to an agent whose configured or inferred competency matches the task type. If this instance lacks a matching competency, hand off to a peer instance with the right capability instead of forcing the task onto an unrelated role.\n",
                 roles.join(", ")
             ));
         }
@@ -970,6 +1279,51 @@ impl AgentWorker {
         let mcp_registry = Arc::new(crate::infrastructure::mcp::registry::McpToolRegistry::new(
             self.db.clone(),
         ));
+        let stream_metadata = serde_json::json!({
+            "agent_name": agent.name.clone(),
+            "run_id": run_id.clone(),
+            "correlation_id": correlation_id.clone(),
+            "stream_kind": "cross_team_message"
+        })
+        .to_string();
+        let mut stream_msg = TeamMessage::new_broadcast(
+            self.team_instance_id.clone(),
+            agent.id.clone(),
+            String::new(),
+        );
+        stream_msg.metadata = Some(stream_metadata.clone());
+        stream_msg.delivery_status = "typing".to_string();
+        let stream_message_id = stream_msg.id.clone();
+        let _ = self.db.insert_team_message(&stream_msg);
+        let _ = self.team_bus.route_message(stream_msg.clone()).await;
+
+        let db_for_stream = self.db.clone();
+        let team_bus_for_stream = self.team_bus.clone();
+        let stream_message_id_for_callback = stream_message_id.clone();
+        let team_instance_id_for_stream = self.team_instance_id.clone();
+        let sender_id_for_stream = agent.id.clone();
+        let stream_metadata_for_callback = stream_msg.metadata.clone();
+        let callback = Arc::new(move |text: String| {
+            let content = text;
+            let _ = db_for_stream
+                .update_team_message_content(&stream_message_id_for_callback, &content);
+            let team_bus = team_bus_for_stream.clone();
+            let update_msg = TeamMessage {
+                id: stream_message_id_for_callback.clone(),
+                team_instance_id: team_instance_id_for_stream.clone(),
+                sender_member_id: sender_id_for_stream.clone(),
+                recipient_member_id: None,
+                recipient_role: None,
+                message_type: MessageType::Broadcast,
+                content,
+                metadata: stream_metadata_for_callback.clone(),
+                delivery_status: "typing".to_string(),
+                created_at: chrono::Utc::now().to_rfc3339(),
+            };
+            tokio::spawn(async move {
+                let _ = team_bus.route_message(update_msg).await;
+            });
+        });
         let executor = crate::application::orchestration::executor::AgentExecutor::new(
             adapter,
             mcp_registry,
@@ -980,16 +1334,54 @@ impl AgentWorker {
             Some(session_id),
             Some(run_id.clone()),
             None,
-            None,
+            Some(callback),
         );
 
+        let response_started_at = std::time::Instant::now();
         let response_text = executor
             .execute_task(history)
             .await
             .ok()
             .unwrap_or_default();
+        let thought_duration_secs = response_started_at.elapsed().as_secs_f64();
         let handoff_succeeded = self.governed_handoff_succeeded(&run_id);
         self.finish_cross_team_run(&run_id, &response_text, handoff_succeeded);
+        let status = if response_text.starts_with("Approval required before executing") {
+            "waiting_approval"
+        } else if response_text.trim().is_empty() || !handoff_succeeded {
+            "failed"
+        } else {
+            "delivered"
+        };
+        let final_text = match status {
+            "waiting_approval" => response_text.clone(),
+            "failed" if response_text.trim().is_empty() => {
+                "Cross-team message failed before producing a response.".to_string()
+            }
+            "failed" => format!("Cross-team message failed: {}", response_text),
+            _ => response_text.clone(),
+        };
+        let _ = self
+            .db
+            .update_team_message_content(&stream_message_id, &final_text);
+        let _ = self
+            .db
+            .update_team_message_delivery_status(&stream_message_id, status);
+        let mut final_msg = stream_msg.clone();
+        final_msg.content = final_text;
+        final_msg.delivery_status = status.to_string();
+        final_msg.created_at = chrono::Utc::now().to_rfc3339();
+        final_msg.metadata = Some(
+            serde_json::json!({
+                "agent_name": agent.name.clone(),
+                "run_id": run_id.clone(),
+                "correlation_id": correlation_id.clone(),
+                "stream_kind": "cross_team_message",
+                "thought_duration_secs": thought_duration_secs
+            })
+            .to_string(),
+        );
+        let _ = self.team_bus.route_message(final_msg).await;
         if handoff.reply_to_team.is_empty() || response_text.is_empty() {
             return;
         }
@@ -1030,8 +1422,18 @@ impl AgentWorker {
 
         let agent = match self.db.get_agent(&self.agent_id) {
             Ok(Some(a)) => a,
-            _ => return,
+            _ => {
+                tracing::debug!(agent_id = %self.agent_id, "iFlow task agent was not found");
+                return;
+            }
         };
+        tracing::debug!(
+            agent_id = %self.agent_id,
+            provider = %agent.provider,
+            execution_id = %execution_id,
+            node_id = %node_id,
+            "iFlow task resolved agent provider"
+        );
 
         let provider_config = self
             .db
@@ -1046,8 +1448,20 @@ impl AgentWorker {
                 })
             });
         let Some(provider_config) = provider_config else {
+            tracing::debug!(
+                agent_id = %self.agent_id,
+                provider = %agent.provider,
+                "iFlow task provider config was not found"
+            );
             return;
         };
+        tracing::debug!(
+            provider = %provider_config.provider_name,
+            adapter = %provider_config.adapter_type,
+            has_base_url = provider_config.command.as_ref().is_some_and(|value| !value.trim().is_empty()),
+            has_credential_ref = provider_config.api_key_ref.as_ref().is_some_and(|value| !value.trim().is_empty()),
+            "iFlow task provider config resolved"
+        );
 
         let mut history = Vec::new();
         if let Some(system_prompt) = agent.system_prompt.clone() {
@@ -1069,7 +1483,6 @@ impl AgentWorker {
 
         // We will send a stream message back
         let message_id = uuid::Uuid::new_v4().to_string();
-        let content = format!("[{}]: ", agent.name);
 
         let stream_msg = TeamMessage {
             id: message_id.clone(),
@@ -1078,30 +1491,61 @@ impl AgentWorker {
             recipient_member_id: None,
             recipient_role: None,
             message_type: MessageType::Broadcast,
-            content: content.clone(),
-            metadata: Some(format!(
-                "{{\"workflow_execution_id\":\"{}\",\"node_id\":\"{}\"}}",
-                execution_id, node_id
-            )),
-            delivery_status: "delivered".to_string(),
+            content: String::new(),
+            metadata: Some(
+                serde_json::json!({
+                    "agent_name": agent.name.clone(),
+                    "workflow_execution_id": execution_id,
+                    "node_id": node_id
+                })
+                .to_string(),
+            ),
+            delivery_status: "typing".to_string(),
             created_at: chrono::Utc::now().to_rfc3339(),
         };
         let _ = self.db.insert_team_message(&stream_msg);
         let _ = self.team_bus.route_message(stream_msg.clone()).await;
 
+        let response_started_at = std::time::Instant::now();
         let output_text = if run_id.is_none() {
+            tracing::warn!(
+                execution_id = %execution_id,
+                "iFlow task denied because execution is not linked to a run"
+            );
             "iFlow task denied: workflow execution is not linked to a traceable run.".to_string()
         } else {
             let adapter = self.provider_cache.get_or_create(&provider_config);
             if let Some(adapter) = adapter {
+                tracing::debug!(
+                    provider_id = adapter.provider_id(),
+                    "iFlow task provider adapter ready"
+                );
                 let db_for_stream = self.db.clone();
+                let team_bus_for_stream = self.team_bus.clone();
                 let message_id_for_stream = message_id.clone();
-                let agent_name_for_stream = agent.name.clone();
+                let team_instance_id_for_stream = self.team_instance_id.clone();
+                let sender_id_for_stream = self.agent_id.clone();
+                let stream_metadata = stream_msg.metadata.clone();
                 let callback = Arc::new(move |text: String| {
-                    let _ = db_for_stream.update_team_message_content(
-                        &message_id_for_stream,
-                        &format!("[{}]: {}", agent_name_for_stream, text),
-                    );
+                    let content = text;
+                    let _ =
+                        db_for_stream.update_team_message_content(&message_id_for_stream, &content);
+                    let team_bus = team_bus_for_stream.clone();
+                    let update_msg = TeamMessage {
+                        id: message_id_for_stream.clone(),
+                        team_instance_id: team_instance_id_for_stream.clone(),
+                        sender_member_id: sender_id_for_stream.clone(),
+                        recipient_member_id: None,
+                        recipient_role: None,
+                        message_type: MessageType::Broadcast,
+                        content,
+                        metadata: stream_metadata.clone(),
+                        delivery_status: "typing".to_string(),
+                        created_at: chrono::Utc::now().to_rfc3339(),
+                    };
+                    tokio::spawn(async move {
+                        let _ = team_bus.route_message(update_msg).await;
+                    });
                 });
                 let executor = crate::application::orchestration::executor::AgentExecutor::new(
                     adapter,
@@ -1117,23 +1561,53 @@ impl AgentWorker {
                     None,
                     Some(callback),
                 );
+                tracing::debug!("iFlow task calling AgentExecutor");
                 match executor.execute_task(history).await {
-                    Ok(text) => text,
-                    Err(error) => format!("iFlow task failed: {}", error),
+                    Ok(text) => {
+                        tracing::debug!(
+                            output_len = text.len(),
+                            "iFlow task AgentExecutor returned"
+                        );
+                        text
+                    }
+                    Err(error) => {
+                        tracing::warn!(error = %error, "iFlow task AgentExecutor failed");
+                        format!("iFlow task failed: {}", error)
+                    }
                 }
             } else {
+                tracing::warn!(
+                    provider = %provider_config.provider_name,
+                    adapter = %provider_config.adapter_type,
+                    "iFlow task provider adapter could not be initialized"
+                );
                 "iFlow task failed: provider could not be initialized.".to_string()
             }
         };
-        let _ = self.db.update_team_message_content(
-            &message_id,
-            &format!("[{}]: {}", agent.name, output_text),
+        let thought_duration_secs = response_started_at.elapsed().as_secs_f64();
+        let _ = self
+            .db
+            .update_team_message_content(&message_id, &output_text);
+        let mut final_msg = stream_msg.clone();
+        final_msg.content = output_text.clone();
+        final_msg.delivery_status = "delivered".to_string();
+        final_msg.created_at = chrono::Utc::now().to_rfc3339();
+        final_msg.metadata = Some(
+            serde_json::json!({
+                "agent_name": agent.name.clone(),
+                "workflow_execution_id": execution_id,
+                "node_id": node_id,
+                "thought_duration_secs": thought_duration_secs
+            })
+            .to_string(),
         );
+        let _ = self.team_bus.route_message(final_msg).await;
         if let Some(session_id) = session_id.as_deref() {
             let metadata = serde_json::json!({
                 "agent_name": agent.name,
                 "workflow_execution_id": execution_id,
-                "node_id": node_id
+                "node_id": node_id,
+                "thought_duration_secs": thought_duration_secs
             })
             .to_string();
             let _ = self
@@ -1252,6 +1726,33 @@ impl WorkerManager {
 
                     workers.insert(worker_key, handle);
                 }
+            }
+        }
+    }
+
+    pub fn recover_stale_in_progress_tasks(&self) -> usize {
+        let max_age_seconds = self
+            .db
+            .get_setting("worker_task_recovery_stale_seconds")
+            .ok()
+            .flatten()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(900)
+            .clamp(60, 86_400);
+        match self.db.recover_stale_in_progress_tasks(max_age_seconds) {
+            Ok(recovered) => {
+                if recovered > 0 {
+                    tracing::warn!(
+                        recovered,
+                        max_age_seconds,
+                        "Recovered stale in-progress tasks after startup"
+                    );
+                }
+                recovered
+            }
+            Err(error) => {
+                tracing::warn!(error = %error, "Failed to recover stale in-progress tasks");
+                0
             }
         }
     }

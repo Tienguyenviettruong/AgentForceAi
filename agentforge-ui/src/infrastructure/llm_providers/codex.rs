@@ -167,9 +167,8 @@ impl BaseProviderAdapter for CodexAdapter {
             .join("\n");
         Box::pin(async move {
             let (tx, rx) = futures::channel::mpsc::unbounded();
-            let rt = get_runtime();
 
-            rt.spawn(async move {
+            tokio::spawn(async move {
                 let mut child = match tokio::process::Command::new(cmd)
                     .stdin(std::process::Stdio::piped())
                     .stdout(std::process::Stdio::piped())

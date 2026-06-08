@@ -24,6 +24,91 @@ fn normalize_permission_list(value: Option<&str>) -> Option<String> {
     })
 }
 
+fn normalize_route_key(value: &str) -> String {
+    value
+        .trim()
+        .to_lowercase()
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .collect()
+}
+
+fn routing_role_from_agent_row(name: &str, config: Option<&str>) -> String {
+    config
+        .and_then(|config| serde_json::from_str::<serde_json::Value>(config).ok())
+        .and_then(|value| {
+            value
+                .get("role")
+                .and_then(|role| role.as_str())
+                .map(str::trim)
+                .filter(|role| !role.is_empty())
+                .map(ToOwned::to_owned)
+        })
+        .unwrap_or_else(|| name.to_string())
+}
+
+fn agent_routing_role(conn: &Connection, agent_id: &str) -> Result<Option<String>> {
+    Ok(conn
+        .query_row(
+            "SELECT name, config FROM agents WHERE id = ?1",
+            params![agent_id],
+            |row| {
+                let name: String = row.get(0)?;
+                let config: Option<String> = row.get(1)?;
+                Ok(routing_role_from_agent_row(&name, config.as_deref()))
+            },
+        )
+        .optional()?)
+}
+
+fn sort_agent_ids_by_routing_role(conn: &Connection, agents: &mut Vec<String>) {
+    agents.sort_by_key(|agent_id| {
+        let role = agent_routing_role(conn, agent_id)
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        (
+            normalize_route_key(&role) != "coordinator",
+            normalize_route_key(&role),
+            agent_id.clone(),
+        )
+    });
+}
+
+fn has_coordinator_agent(conn: &Connection, agents: &[String]) -> bool {
+    agents.iter().any(|agent_id| {
+        agent_routing_role(conn, agent_id)
+            .ok()
+            .flatten()
+            .map(|role| normalize_route_key(&role) == "coordinator")
+            .unwrap_or(false)
+    })
+}
+
+fn find_team_coordinator_agent(conn: &Connection, team_id: &str) -> Result<Option<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT a.id, a.name, a.config
+         FROM members m
+         JOIN agents a ON a.id = m.agent_id
+         WHERE m.team_id = ?1
+         ORDER BY m.joined_at ASC",
+    )?;
+    let rows = stmt.query_map(params![team_id], |row| {
+        let id: String = row.get(0)?;
+        let name: String = row.get(1)?;
+        let config: Option<String> = row.get(2)?;
+        Ok((id, routing_role_from_agent_row(&name, config.as_deref())))
+    })?;
+
+    for row in rows {
+        let (id, role) = row?;
+        if normalize_route_key(&role) == "coordinator" {
+            return Ok(Some(id));
+        }
+    }
+    Ok(None)
+}
+
 fn record_task_run_event(
     conn: &Connection,
     task_id: &str,
@@ -87,8 +172,7 @@ impl Database {
                 status TEXT NOT NULL DEFAULT 'available',
                 is_builtin INTEGER DEFAULT 0,
                 created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                UNIQUE(provider_name, model)
+                updated_at TEXT NOT NULL
             );
 
             -- 2. Teams
@@ -1128,6 +1212,58 @@ impl Database {
             )?;
         }
 
+        let role_typo_migration_applied: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = ?1",
+            params![2026060301_i64],
+            |row| row.get(0),
+        )?;
+        if role_typo_migration_applied == 0 {
+            Self::migrate_agent_routing_role_typos(&mut conn)?;
+            conn.execute(
+                "INSERT OR IGNORE INTO schema_migrations (version, name, applied_at)
+                 VALUES (?1, ?2, ?3)",
+                params![
+                    2026060301_i64,
+                    "agent_routing_role_typo_normalization",
+                    chrono::Utc::now().to_rfc3339()
+                ],
+            )?;
+        }
+
+        let provider_identity_migration_applied: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = ?1",
+            params![2026060501_i64],
+            |row| row.get(0),
+        )?;
+        if provider_identity_migration_applied == 0 {
+            Self::migrate_provider_configs_to_id_identity(&mut conn)?;
+            conn.execute(
+                "INSERT OR IGNORE INTO schema_migrations (version, name, applied_at)
+                 VALUES (?1, ?2, ?3)",
+                params![
+                    2026060501_i64,
+                    "provider_configs_id_identity",
+                    chrono::Utc::now().to_rfc3339()
+                ],
+            )?;
+        }
+
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO app_settings (key, value, updated_at)
+             VALUES ('governance_max_tokens_per_run', '1000000', ?1)
+             ON CONFLICT(key) DO UPDATE SET
+                value = CASE
+                    WHEN CAST(app_settings.value AS INTEGER) < 1000000 THEN '1000000'
+                    ELSE app_settings.value
+                END,
+                updated_at = CASE
+                    WHEN CAST(app_settings.value AS INTEGER) < 1000000 THEN excluded.updated_at
+                    ELSE app_settings.updated_at
+                END",
+            params![now],
+        )?;
+
         Self::backfill_task_dependencies(&conn)?;
 
         let db = Self {
@@ -1136,6 +1272,42 @@ impl Database {
         db.seed_provider_templates().ok();
         db.ensure_knowledge_entries_fts().ok();
         Ok(db)
+    }
+
+    fn migrate_agent_routing_role_typos(conn: &mut Connection) -> Result<()> {
+        let records: Vec<(String, String)> = {
+            let mut stmt =
+                conn.prepare("SELECT id, config FROM agents WHERE config IS NOT NULL")?;
+            let rows = stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?;
+            rows.collect::<std::result::Result<Vec<_>, _>>()?
+        };
+
+        for (agent_id, config) in records {
+            let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&config) else {
+                continue;
+            };
+            let role = value
+                .get("role")
+                .and_then(|role| role.as_str())
+                .map(str::trim)
+                .unwrap_or("");
+            if normalize_route_key(role) != "achitecture" {
+                continue;
+            }
+            value["role"] = serde_json::Value::String("Architecture".to_string());
+            conn.execute(
+                "UPDATE agents SET config = ?1, updated_at = ?2 WHERE id = ?3",
+                params![
+                    serde_json::to_string(&value)?,
+                    chrono::Utc::now().to_rfc3339(),
+                    agent_id
+                ],
+            )?;
+        }
+
+        Ok(())
     }
 
     fn migrate_knowledge_provenance(conn: &mut Connection) -> Result<()> {
@@ -1267,6 +1439,41 @@ impl Database {
                     removed_settings, cleared_providers, cleared_mcp_env
                 )
             ],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    fn migrate_provider_configs_to_id_identity(conn: &mut Connection) -> Result<()> {
+        let tx = conn.transaction()?;
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS provider_configs_v2 (
+                id TEXT PRIMARY KEY,
+                provider_name TEXT NOT NULL,
+                model TEXT NOT NULL,
+                adapter_type TEXT NOT NULL,
+                command TEXT,
+                node_version TEXT,
+                config TEXT,
+                api_key_ref TEXT,
+                status TEXT NOT NULL DEFAULT 'available',
+                is_builtin INTEGER DEFAULT 0,
+                capabilities TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            INSERT OR REPLACE INTO provider_configs_v2 (
+                id, provider_name, model, adapter_type, command, node_version, config,
+                api_key_ref, status, is_builtin, capabilities, created_at, updated_at
+            )
+            SELECT
+                id, provider_name, model, adapter_type, command, node_version, config,
+                api_key_ref, status, COALESCE(is_builtin, 0), capabilities, created_at, updated_at
+            FROM provider_configs;
+
+            DROP TABLE provider_configs;
+            ALTER TABLE provider_configs_v2 RENAME TO provider_configs;",
         )?;
         tx.commit()?;
         Ok(())
@@ -1489,7 +1696,12 @@ impl crate::core::traits::database::DatabasePort for Database {
 
     fn list_providers(&self) -> Result<Vec<Provider>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT id, provider_name, model, adapter_type, command, api_key_ref, status, capabilities FROM provider_configs WHERE is_builtin = 0")?;
+        let mut stmt = conn.prepare(
+            "SELECT id, provider_name, model, adapter_type, command, api_key_ref, status, capabilities
+             FROM provider_configs
+             WHERE is_builtin = 0
+             ORDER BY datetime(updated_at) DESC, provider_name ASC",
+        )?;
         let iter = stmt.query_map([], |row: &rusqlite::Row| {
             let cap_json: Option<String> = row.get(7)?;
             let capabilities = cap_json
@@ -1516,13 +1728,47 @@ impl crate::core::traits::database::DatabasePort for Database {
 
     fn get_provider_by_name(&self, provider_name: &str) -> Result<Option<Provider>> {
         let conn = self.conn.lock().unwrap();
+        if let Some((name, model)) = provider_name.split_once(" / ") {
+            let mut stmt = conn.prepare(
+                "SELECT id, provider_name, model, adapter_type, command, api_key_ref, status, capabilities
+                 FROM provider_configs
+                 WHERE provider_name = ?1 AND model = ?2
+                 ORDER BY datetime(updated_at) DESC
+                 LIMIT 1",
+            )?;
+            let mut rows = stmt.query(rusqlite::params![name.trim(), model.trim()])?;
+
+            if let Some(row) = rows.next()? {
+                let cap_json: Option<String> = row.get(7)?;
+                let capabilities = cap_json
+                    .as_deref()
+                    .and_then(crate::core::models::ModelCapability::from_json);
+                return Ok(Some(Provider {
+                    id: row.get(0)?,
+                    provider_name: row.get(1)?,
+                    model: row.get(2)?,
+                    adapter_type: row.get(3)?,
+                    command: row.get(4)?,
+                    api_key_ref: row.get(5)?,
+                    status: row.get(6)?,
+                    capabilities,
+                }));
+            }
+        }
+
         let normalized = provider_name
             .split(" / ")
             .next()
             .unwrap_or(provider_name)
             .trim()
             .to_string();
-        let mut stmt = conn.prepare("SELECT id, provider_name, model, adapter_type, command, api_key_ref, status, capabilities FROM provider_configs WHERE provider_name = ?1 LIMIT 1")?;
+        let mut stmt = conn.prepare(
+            "SELECT id, provider_name, model, adapter_type, command, api_key_ref, status, capabilities
+             FROM provider_configs
+             WHERE provider_name = ?1
+             ORDER BY datetime(updated_at) DESC
+             LIMIT 1",
+        )?;
         let mut rows = stmt.query(rusqlite::params![normalized])?;
 
         if let Some(row) = rows.next()? {
@@ -1725,19 +1971,20 @@ impl crate::core::traits::database::DatabasePort for Database {
         for a in iter {
             agents.push(a?);
         }
+        agents.sort();
+        agents.dedup();
+        sort_agent_ids_by_routing_role(&conn, &mut agents);
         Ok(agents)
     }
 
     fn get_instance_agents(&self, instance_id: &str) -> Result<Vec<String>> {
         let conn = self.conn.lock().unwrap();
-        // Priority to Coordinator
         let mut stmt = conn.prepare(
             "
             SELECT m.agent_id
             FROM members m
-            LEFT JOIN roles r ON m.role_id = r.id
             WHERE m.instance_id = ?1
-            ORDER BY CASE WHEN LOWER(r.name) = 'coordinator' THEN 0 ELSE 1 END, m.joined_at ASC
+            ORDER BY m.joined_at ASC
         ",
         )?;
         let iter = stmt.query_map(params![instance_id], |row: &rusqlite::Row| row.get(0))?;
@@ -1745,29 +1992,35 @@ impl crate::core::traits::database::DatabasePort for Database {
         for a in iter {
             agents.push(a?);
         }
-        if !agents.is_empty() {
-            return Ok(agents);
-        }
 
         let mut stmt = conn.prepare("SELECT team_id FROM instances WHERE id = ?1")?;
         let team_id: String =
             stmt.query_row(params![instance_id], |row: &rusqlite::Row| row.get(0))?;
         drop(stmt);
 
-        let mut stmt = conn.prepare(
-            "
-            SELECT m.agent_id
-            FROM members m
-            LEFT JOIN roles r ON m.role_id = r.id
-            WHERE m.team_id = ?1
-            ORDER BY CASE WHEN LOWER(r.name) = 'coordinator' THEN 0 ELSE 1 END, m.joined_at ASC
-        ",
-        )?;
-        let iter = stmt.query_map(params![team_id], |row: &rusqlite::Row| row.get(0))?;
-        let mut agents = Vec::new();
-        for a in iter {
-            agents.push(a?);
+        if agents.is_empty() {
+            let mut stmt = conn.prepare(
+                "
+                SELECT m.agent_id
+                FROM members m
+                WHERE m.team_id = ?1
+                  AND (m.instance_id IS NULL OR m.instance_id = '')
+                ORDER BY m.joined_at ASC
+            ",
+            )?;
+            let iter = stmt.query_map(params![team_id], |row: &rusqlite::Row| row.get(0))?;
+            for a in iter {
+                agents.push(a?);
+            }
+        } else if !has_coordinator_agent(&conn, &agents) {
+            if let Some(coordinator_id) = find_team_coordinator_agent(&conn, &team_id)? {
+                agents.push(coordinator_id);
+            }
         }
+
+        agents.sort();
+        agents.dedup();
+        sort_agent_ids_by_routing_role(&conn, &mut agents);
         Ok(agents)
     }
 
@@ -1790,9 +2043,11 @@ impl crate::core::traits::database::DatabasePort for Database {
             let config: Option<String> = row.get(1)?;
             let status: String = row.get(2)?;
             let agent_id: String = row.get(3)?;
-            let role = config
+            let config_json = config
                 .as_deref()
-                .and_then(|config| serde_json::from_str::<serde_json::Value>(config).ok())
+                .and_then(|config| serde_json::from_str::<serde_json::Value>(config).ok());
+            let role = config_json
+                .as_ref()
                 .and_then(|value| {
                     value
                         .get("role")
@@ -1801,17 +2056,99 @@ impl crate::core::traits::database::DatabasePort for Database {
                         .filter(|role| !role.is_empty())
                         .map(ToOwned::to_owned)
                 })
-                .unwrap_or(agent_name);
-            Ok((role, agent_id, status))
+                .unwrap_or_else(|| agent_name.clone());
+            let position = config_json.as_ref().and_then(|value| {
+                value
+                    .get("position")
+                    .and_then(|position| position.as_str())
+                    .map(str::trim)
+                    .filter(|position| !position.is_empty())
+                    .map(ToOwned::to_owned)
+            });
+            Ok((agent_name, role, position, agent_id, status))
         })?;
 
-        for (role, agent_id, status) in iter.flatten() {
+        for (agent_name, role, position, agent_id, status) in iter.flatten() {
             if status.to_lowercase() != "offline" {
-                map.insert(role, agent_id);
+                for key in [Some(agent_name), Some(role), position] {
+                    if let Some(key) = key.filter(|key| !key.trim().is_empty()) {
+                        map.insert(key.clone(), agent_id.clone());
+                        let normalized = normalize_route_key(&key);
+                        if !normalized.is_empty() {
+                            map.insert(normalized, agent_id.clone());
+                        }
+                    }
+                }
             }
         }
 
         if !map.is_empty() {
+            if !map
+                .keys()
+                .any(|key| normalize_route_key(key) == "coordinator")
+            {
+                let team_id = conn
+                    .query_row(
+                        "SELECT team_id FROM instances WHERE id = ?1",
+                        rusqlite::params![instance_id],
+                        |row: &rusqlite::Row| row.get::<_, String>(0),
+                    )
+                    .optional()?;
+                if let Some(team_id) = team_id {
+                    if let Some(coordinator_id) = find_team_coordinator_agent(&conn, &team_id)? {
+                        if let Some((agent_name, role, position, agent_id, status)) = conn
+                            .query_row(
+                                "SELECT a.name, a.config, a.status, a.id
+                                 FROM agents a
+                                 WHERE a.id = ?1",
+                                rusqlite::params![coordinator_id],
+                                |row: &rusqlite::Row| {
+                                    let agent_name: String = row.get(0)?;
+                                    let config: Option<String> = row.get(1)?;
+                                    let status: String = row.get(2)?;
+                                    let agent_id: String = row.get(3)?;
+                                    let config_json = config.as_deref().and_then(|config| {
+                                        serde_json::from_str::<serde_json::Value>(config).ok()
+                                    });
+                                    let role = config_json
+                                        .as_ref()
+                                        .and_then(|value| {
+                                            value
+                                                .get("role")
+                                                .and_then(|role| role.as_str())
+                                                .map(str::trim)
+                                                .filter(|role| !role.is_empty())
+                                                .map(ToOwned::to_owned)
+                                        })
+                                        .unwrap_or_else(|| agent_name.clone());
+                                    let position = config_json.as_ref().and_then(|value| {
+                                        value
+                                            .get("position")
+                                            .and_then(|position| position.as_str())
+                                            .map(str::trim)
+                                            .filter(|position| !position.is_empty())
+                                            .map(ToOwned::to_owned)
+                                    });
+                                    Ok((agent_name, role, position, agent_id, status))
+                                },
+                            )
+                            .optional()?
+                        {
+                            if status.to_lowercase() != "offline" {
+                                for key in [Some(agent_name), Some(role), position] {
+                                    if let Some(key) = key.filter(|key| !key.trim().is_empty()) {
+                                        map.insert(key.clone(), agent_id.clone());
+                                        let normalized = normalize_route_key(&key);
+                                        if !normalized.is_empty() {
+                                            map.insert(normalized, agent_id.clone());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             return Ok(map);
         }
 
@@ -1836,9 +2173,11 @@ impl crate::core::traits::database::DatabasePort for Database {
                 let config: Option<String> = row.get(1)?;
                 let status: String = row.get(2)?;
                 let agent_id: String = row.get(3)?;
-                let role = config
+                let config_json = config
                     .as_deref()
-                    .and_then(|config| serde_json::from_str::<serde_json::Value>(config).ok())
+                    .and_then(|config| serde_json::from_str::<serde_json::Value>(config).ok());
+                let role = config_json
+                    .as_ref()
                     .and_then(|value| {
                         value
                             .get("role")
@@ -1847,13 +2186,29 @@ impl crate::core::traits::database::DatabasePort for Database {
                             .filter(|role| !role.is_empty())
                             .map(ToOwned::to_owned)
                     })
-                    .unwrap_or(agent_name);
-                Ok((role, agent_id, status))
+                    .unwrap_or_else(|| agent_name.clone());
+                let position = config_json.as_ref().and_then(|value| {
+                    value
+                        .get("position")
+                        .and_then(|position| position.as_str())
+                        .map(str::trim)
+                        .filter(|position| !position.is_empty())
+                        .map(ToOwned::to_owned)
+                });
+                Ok((agent_name, role, position, agent_id, status))
             })?;
 
-            for (role, agent_id, status) in iter.flatten() {
+            for (agent_name, role, position, agent_id, status) in iter.flatten() {
                 if status.to_lowercase() != "offline" {
-                    map.insert(role, agent_id);
+                    for key in [Some(agent_name), Some(role), position] {
+                        if let Some(key) = key.filter(|key| !key.trim().is_empty()) {
+                            map.insert(key.clone(), agent_id.clone());
+                            let normalized = normalize_route_key(&key);
+                            if !normalized.is_empty() {
+                                map.insert(normalized, agent_id.clone());
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -2234,6 +2589,44 @@ impl crate::core::traits::database::DatabasePort for Database {
         Ok(rows_affected > 0)
     }
 
+    fn recover_stale_in_progress_tasks(&self, max_age_seconds: u64) -> Result<usize> {
+        let conn = self.conn.lock().unwrap();
+        let max_age_seconds = max_age_seconds.clamp(60, 86_400) as i64;
+        let cutoff = (Utc::now() - chrono::Duration::seconds(max_age_seconds)).to_rfc3339();
+        let mut stmt = conn.prepare(
+            "SELECT id
+             FROM tasks
+             WHERE status = 'in_progress'
+               AND (updated_at IS NULL OR updated_at < ?1)",
+        )?;
+        let task_ids = stmt
+            .query_map(params![cutoff], |row| row.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        drop(stmt);
+        if task_ids.is_empty() {
+            return Ok(0);
+        }
+
+        let now = Utc::now().to_rfc3339();
+        let rows = conn.execute(
+            "UPDATE tasks
+             SET status = 'pending', claimed_at = NULL, updated_at = ?1
+             WHERE status = 'in_progress'
+               AND (updated_at IS NULL OR updated_at < ?2)",
+            params![now, cutoff],
+        )?;
+        for task_id in task_ids.iter().take(rows) {
+            record_task_run_event(
+                &conn,
+                task_id,
+                "task_recovered_after_restart",
+                None,
+                Some("Stale in-progress task was returned to pending after startup recovery."),
+            )?;
+        }
+        Ok(rows)
+    }
+
     fn mark_task_completed(&self, task_id: &str) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         let now = Utc::now().to_rfc3339();
@@ -2341,27 +2734,31 @@ impl crate::core::traits::database::DatabasePort for Database {
                 "Coordinator",
                 "sdg-coord-123",
                 "You are the Coordinator/Leader of the SDG team. You are responsible for breaking down goals, assigning tasks to other agents, and orchestrating the workflow.",
+                r#"{"role":"Coordinator","position":"Coordinator","responsibilities":["coordination","planning","delegation","review","handoff"],"competencies":["planning","review","handoff"],"allowed_task_types":["planning","review","handoff","research","analysis"],"disallowed_task_types":["implementation","testing","build","documentation","content","design","marketing","operations"]}"#,
             ),
             (
                 "PM",
                 "sdg-pm-123",
                 "You are the PM of the SDG team. Please provide short, direct responses about product management.",
+                r#"{"role":"PM","position":"Project Manager","responsibilities":["scope","roadmap","prioritization","acceptance criteria"],"competencies":["planning","product","review","documentation"],"allowed_task_types":["planning","product","documentation","review"],"disallowed_task_types":["implementation","testing","build"]}"#,
             ),
             (
                 "DEV",
                 "sdg-dev-123",
                 "You are the DEV of the SDG team. You write code and solve technical issues.",
+                r#"{"role":"DEV","position":"Software Engineer","responsibilities":["implementation","testing","build","technical troubleshooting"],"competencies":["implementation","testing","build","operations"],"allowed_task_types":["implementation","testing","build","operations","review"],"disallowed_task_types":[]}"#,
             ),
             (
                 "BA",
                 "sdg-ba-123",
                 "You are the BA of the SDG team. You analyze business requirements and metrics.",
+                r#"{"role":"BA","position":"Business Analyst","responsibilities":["requirements","business analysis","domain analysis","metrics"],"competencies":["analysis","documentation","research","review"],"allowed_task_types":["analysis","documentation","research","review"],"disallowed_task_types":["implementation","testing","build"]}"#,
             ),
         ];
-        for (name, agent_id, prompt) in agents {
+        for (name, agent_id, prompt, config) in agents {
             conn.execute(
                 "INSERT INTO agents (id, name, provider, system_prompt, config, status, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                rusqlite::params![agent_id, name, "openrouter", prompt, None::<String>, "online", now, now],
+                rusqlite::params![agent_id, name, "openrouter", prompt, Some(config), "online", now, now],
             )?;
             conn.execute(
                 "INSERT INTO members (id, team_id, agent_id, joined_at) VALUES (?1, ?2, ?3, ?4)",

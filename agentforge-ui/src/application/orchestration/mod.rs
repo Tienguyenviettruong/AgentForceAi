@@ -6,5 +6,6 @@ pub mod governance;
 pub mod learning;
 pub mod modes;
 pub mod primitives;
+pub mod role_policy;
 pub mod tool_gateway;
 pub mod worker;

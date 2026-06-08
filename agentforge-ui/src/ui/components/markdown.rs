@@ -313,22 +313,65 @@ fn render_inline(
     cx: &mut Window,
     config: MarkdownRenderConfig,
 ) -> gpui::Div {
-    let mut container = gpui::div().flex().flex_wrap().gap_x(px(4.)).w_full();
+    let mut container = gpui::div().flex().flex_col().w_full();
     for child in children {
         match child {
             MdNode::Text(text, style) => {
                 if text == "\n" {
-                    container = container.child(gpui::div().w_full().h(px(0.)));
+                    container = container.child(gpui::div().w_full().h(px(4.)));
                     continue;
                 }
 
                 for (line_ix, line) in text.split('\n').enumerate() {
                     if line_ix > 0 {
-                        container = container.child(gpui::div().w_full().h(px(0.)));
+                        container = container.child(gpui::div().w_full().h(px(4.)));
+                    }
+                    if line.trim().is_empty() {
+                        continue;
                     }
 
-                    for word in line.split_whitespace() {
-                        let mut el = gpui::div().child(word.to_string());
+                    // Obsidian tag path: render word-by-word only when tags present
+                    let has_obsidian_tag = config.enable_obsidian_tags
+                        && line
+                            .split_whitespace()
+                            .any(|w| w.starts_with('#') && w.len() > 1);
+
+                    if has_obsidian_tag {
+                        let mut row = gpui::div().flex().flex_wrap().gap_x(px(4.)).w_full();
+                        for word in line.split_whitespace() {
+                            let mut el = gpui::div().child(word.to_string());
+                            if style.bold {
+                                el = el.font_weight(FontWeight::BOLD);
+                            }
+                            if style.italic {
+                                el.text_style()
+                                    .get_or_insert_with(Default::default)
+                                    .font_style = Some(FontStyle::Italic);
+                            }
+                            if style.strikethrough {
+                                el.text_style()
+                                    .get_or_insert_with(Default::default)
+                                    .strikethrough = Some(gpui::StrikethroughStyle {
+                                    thickness: px(1.0),
+                                    color: Some(theme.foreground),
+                                });
+                            }
+                            if let Some(tag) = word.strip_prefix('#') {
+                                if !tag.is_empty() {
+                                    el = el
+                                        .px(px(6.))
+                                        .py(px(2.))
+                                        .rounded_md()
+                                        .bg(theme.secondary)
+                                        .text_color(theme.accent);
+                                }
+                            }
+                            row = row.child(el);
+                        }
+                        container = container.child(row);
+                    } else {
+                        // Fast path: entire line as a single div element
+                        let mut el = gpui::div().w_full().child(line.to_string());
                         if style.bold {
                             el = el.font_weight(FontWeight::BOLD);
                         }
@@ -345,20 +388,6 @@ fn render_inline(
                                 color: Some(theme.foreground),
                             });
                         }
-
-                        if config.enable_obsidian_tags {
-                            if let Some(tag) = word.strip_prefix('#') {
-                                if !tag.is_empty() {
-                                    el = el
-                                        .px(px(6.))
-                                        .py(px(2.))
-                                        .rounded_md()
-                                        .bg(theme.secondary)
-                                        .text_color(theme.accent);
-                                }
-                            }
-                        }
-
                         container = container.child(el);
                     }
                 }
@@ -390,7 +419,6 @@ fn render_inline(
                 container = container.child(el);
             }
             MdNode::Link(url, link_children) => {
-                let _url = url.clone();
                 let label = render_inline(link_children, theme, cx, config)
                     .text_color(theme.accent)
                     .cursor_pointer();

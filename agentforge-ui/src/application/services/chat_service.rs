@@ -1,3 +1,4 @@
+use crate::application::orchestration::role_policy;
 use crate::core::traits::database::DatabasePort;
 use crate::infrastructure::message_bus::routing::TeamBusRouter;
 use std::sync::Arc;
@@ -32,6 +33,7 @@ impl ChatService {
         }
 
         let mut members_str = String::new();
+        let mut peer_instances_str = String::new();
         let mut my_name = "Agent".to_string();
         let mut my_role = "Agent".to_string();
         let mut my_position = "Agent".to_string();
@@ -51,17 +53,44 @@ impl ChatService {
                             my_details = details;
                         }
                         members_str.push_str(&format!(
-                            "- {} | routing_role={} | position={} (THIS IS YOU)\n",
-                            a.name, member_role, member_position
+                            "- {} (THIS IS YOU)\n",
+                            role_policy::agent_profile_for_prompt(&a)
                         ));
                     } else {
                         members_str.push_str(&format!(
-                            "- {} | routing_role={} | position={}\n",
-                            a.name, member_role, member_position
+                            "- {}\n",
+                            role_policy::agent_profile_for_prompt(&a)
                         ));
                     }
                 }
             }
+        }
+
+        if let Ok(instances) = self.db.list_instances() {
+            for instance in instances
+                .into_iter()
+                .filter(|instance| instance.team_id == team_id && instance.id != instance_id)
+            {
+                let mut roster = Vec::new();
+                if let Ok(agent_ids) = conn.get_instance_agents(&instance.id) {
+                    for aid in agent_ids {
+                        if let Ok(Some(agent)) = conn.get_agent(&aid) {
+                            roster.push(role_policy::agent_profile_for_prompt(&agent));
+                        }
+                    }
+                }
+                if !roster.is_empty() {
+                    peer_instances_str.push_str(&format!(
+                        "- {} ({})\n  agents: {}\n",
+                        instance.name,
+                        instance.id,
+                        roster.join(" || ")
+                    ));
+                }
+            }
+        }
+        if peer_instances_str.trim().is_empty() {
+            peer_instances_str.push_str("No peer instances with visible agents.\n");
         }
 
         let agent = self.db.get_agent(agent_id).ok().flatten()?;
@@ -80,10 +109,14 @@ impl ChatService {
              Your Professional Position: {}\n\
              Your Profile Details: {}\n\
              Team Members Available:\n{}\n\
+             Peer Instances Available For Handoff:\n{}\n\
              IMPORTANT ROLE RULES:\n\
              - You are agent '{}' with routing role '{}'. This routing role is the exact TeamBus/task-assignment key for your work.\n\
-             - You MUST act only within your professional position and profile details. Do not claim to be another member.\n\
+             - You MUST act only within your professional position, responsibilities, competencies, allowed_task_types, disallowed_task_types, and profile details. Do not claim to be another member.\n\
              - When delegating with create_subtasks or sending role-targeted messages, use the exact routing_role values listed above.\n\
+             - Coordinator is mandatory for every instance and may coordinate, read, search, review, and delegate, but must not create, edit, delete, or run side-effectful artifact operations.\n\
+             - Assign work by task competency, not by generic non-Coordinator status. Examples: implementation/build/testing work needs an implementation-capable agent; design work needs a design-capable agent; content work needs a content-capable agent; marketing work needs a marketing-capable agent; analysis/documentation work needs matching analyst/documentation competency.\n\
+             - If this instance lacks a matching competency, do not force the task onto PM/BA/designer/marketer/content/other unrelated agents. Use handoff_to_team with a clear briefing package to a peer instance that has a matching agent, or raise escalation if none exists.\n\
              - Adapt your answers to the '{}' team and current instance. Ignore hardcoded or hallucinated team names in the base prompt.\n\
              - If a request is outside your role, state the boundary, then hand off or recommend the correct role.\n\
              CROSS-TEAM REVIEW PROTOCOL:\n\
@@ -99,6 +132,7 @@ impl ChatService {
             my_position,
             my_details,
             members_str,
+            peer_instances_str,
             my_name,
             my_role,
             team_name,

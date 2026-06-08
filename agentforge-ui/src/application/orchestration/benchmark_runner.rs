@@ -173,6 +173,10 @@ impl BenchmarkRunner {
             .unwrap_or(60_000)
             .clamp(5_000, 3_600_000);
         runtime.spawn(async move {
+            let runner = BenchmarkRunner::new(db.clone());
+            if let Err(error) = runner.recover_stale_jobs() {
+                tracing::warn!(error = %error, "Failed to recover stale benchmark runner jobs");
+            }
             loop {
                 let runner = BenchmarkRunner::new(db.clone());
                 let jobs = db
@@ -194,6 +198,54 @@ impl BenchmarkRunner {
                 tokio::time::sleep(std::time::Duration::from_millis(poll_ms)).await;
             }
         });
+    }
+
+    pub fn recover_stale_jobs(&self) -> Result<usize> {
+        let max_age_seconds = self
+            .db
+            .get_setting("learning_benchmark_runner_stale_seconds")
+            .ok()
+            .flatten()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(900)
+            .clamp(60, 86_400);
+        let cutoff = chrono::Utc::now() - chrono::Duration::seconds(max_age_seconds as i64);
+        let mut recovered = 0usize;
+        for job in self
+            .db
+            .list_benchmark_runner_jobs_by_status("running", 100)?
+        {
+            let started_at = job.started_at.as_deref().unwrap_or(job.created_at.as_str());
+            let Ok(started_at) = chrono::DateTime::parse_from_rfc3339(started_at) else {
+                continue;
+            };
+            if started_at.with_timezone(&chrono::Utc) > cutoff {
+                continue;
+            }
+            if let Some(candidate) = self.db.get_learning_candidate(&job.candidate_id)? {
+                if candidate.status == "benchmark_running" {
+                    let _ = self
+                        .db
+                        .update_learning_candidate_status(&job.candidate_id, "benchmark_failed");
+                }
+            }
+            self.db.update_benchmark_runner_job(
+                &job.id,
+                "queued",
+                None,
+                Some("Recovered stale running benchmark job after startup; requeued."),
+                None,
+            )?;
+            recovered += 1;
+        }
+        if recovered > 0 {
+            tracing::warn!(
+                recovered,
+                max_age_seconds,
+                "Recovered stale benchmark runner jobs after startup"
+            );
+        }
+        Ok(recovered)
     }
 
     async fn run_prepared_candidate(

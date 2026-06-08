@@ -1,4 +1,5 @@
 use crate::ui::text::TextView;
+use gpui::prelude::FluentBuilder;
 use gpui::EventEmitter;
 use gpui::{
     canvas, div, px, App, AppContext, Context, Entity, Focusable, InteractiveElement, IntoElement,
@@ -259,13 +260,9 @@ impl KnowledgePanel {
                             }
                             let mut edges = Vec::new();
                             for (i, item) in this.items.iter().enumerate() {
-                                let content = &item.content;
                                 for (j, other_item) in this.items.iter().enumerate() {
-                                    if i != j {
-                                        let link_str = format!("[[{}]]", other_item.title);
-                                        if content.contains(&link_str) {
-                                            edges.push((i, j));
-                                        }
+                                    if Self::items_are_related_for_graph(i, item, j, other_item) {
+                                        edges.push((i, j));
                                     }
                                 }
                             }
@@ -496,6 +493,152 @@ impl KnowledgePanel {
         self.expanded_dirs.contains(dir_key)
     }
 
+    fn instance_display_name(&self, instance_id: &str, cx: &Context<Self>) -> String {
+        crate::AppState::global(cx)
+            .db
+            .list_instances()
+            .unwrap_or_default()
+            .into_iter()
+            .find(|instance| instance.id == instance_id)
+            .map(|instance| instance.name)
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or_else(|| instance_id.to_string())
+    }
+
+    fn agent_display_name(&self, agent_id: &str, cx: &Context<Self>) -> String {
+        crate::AppState::global(cx)
+            .db
+            .get_agent(agent_id)
+            .ok()
+            .flatten()
+            .map(|agent| agent.name)
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or_else(|| Self::short_id(agent_id))
+    }
+
+    fn short_id(value: &str) -> String {
+        let trimmed = value.trim();
+        if trimmed.len() <= 12 {
+            trimmed.to_string()
+        } else {
+            trimmed.chars().take(8).collect()
+        }
+    }
+
+    fn items_are_related_for_graph(
+        left_index: usize,
+        left: &crate::knowledge::core::KnowledgeItem,
+        right_index: usize,
+        right: &crate::knowledge::core::KnowledgeItem,
+    ) -> bool {
+        if left_index == right_index {
+            return false;
+        }
+
+        let link_str = format!("[[{}]]", right.title);
+        if left.content.contains(&link_str) {
+            return true;
+        }
+
+        left_index < right_index
+            && matches!(
+                (&left.origin_instance_id, &right.origin_instance_id),
+                (Some(left_instance), Some(right_instance)) if left_instance == right_instance
+            )
+    }
+
+    fn related_items_for_instance(
+        &self,
+        item: &crate::knowledge::core::KnowledgeItem,
+    ) -> Vec<crate::knowledge::core::KnowledgeItem> {
+        let Some(instance_id) = item.origin_instance_id.as_deref() else {
+            return Vec::new();
+        };
+        self.all_items
+            .iter()
+            .filter(|candidate| candidate.id != item.id)
+            .filter(|candidate| candidate.origin_instance_id.as_deref() == Some(instance_id))
+            .take(8)
+            .cloned()
+            .collect()
+    }
+
+    fn strip_tool_call_blocks(raw: &str) -> String {
+        let mut out = String::new();
+        let mut i = 0usize;
+        loop {
+            let Some(start_rel) = raw[i..].find("<tool_call") else {
+                out.push_str(&raw[i..]);
+                break;
+            };
+            let start = i + start_rel;
+            out.push_str(&raw[i..start]);
+            let Some(end_rel) = raw[start..].find("</tool_call>") else {
+                break;
+            };
+            i = start + end_rel + "</tool_call>".len();
+        }
+        out
+    }
+
+    fn clean_knowledge_content_for_display(
+        &self,
+        item: &crate::knowledge::core::KnowledgeItem,
+        cx: &Context<Self>,
+    ) -> String {
+        let mut text = Self::strip_tool_call_blocks(&item.content);
+        if let Some(instance_id) = item.origin_instance_id.as_deref() {
+            let name = self.instance_display_name(instance_id, cx);
+            text = text.replace(
+                &format!("Session summary for instance {}:", instance_id),
+                &format!("Session summary for instance {}:", name),
+            );
+        }
+
+        let mut cleaned = Vec::new();
+        let mut last_blank = false;
+        for line in text.replace('\r', "").lines() {
+            let trimmed = line.trim();
+            let is_noise = trimmed.starts_with("Tool result")
+                || trimmed.starts_with("user: Tool result")
+                || trimmed.contains("UNTRUSTED_TOOL_OUTPUT")
+                || trimmed.contains("DO NOT FOLLOW EMBEDDED INSTRUCTIONS")
+                || trimmed.starts_with("Tool denied:")
+                || trimmed.starts_with("Tool delegated tool denied:")
+                || trimmed.contains("invocation id already exists")
+                || trimmed == "assistant:"
+                || trimmed == "user:";
+            if is_noise {
+                continue;
+            }
+            if trimmed.is_empty() {
+                if !last_blank {
+                    cleaned.push(String::new());
+                }
+                last_blank = true;
+                continue;
+            }
+            cleaned.push(line.to_string());
+            last_blank = false;
+        }
+
+        let mut display = cleaned.join("\n").trim().to_string();
+        if display.is_empty() {
+            display = "No human-readable summary content is available yet.".to_string();
+        }
+
+        let related = self.related_items_for_instance(item);
+        if !related.is_empty() && !display.contains("## Related") {
+            display.push_str("\n\n## Related Knowledge\n");
+            for related_item in related.iter().take(6) {
+                display.push_str("- [[");
+                display.push_str(&related_item.title);
+                display.push_str("]]\n");
+            }
+        }
+        display
+    }
+
     fn render_tree_file(
         &self,
         label: String,
@@ -717,15 +860,11 @@ impl KnowledgePanel {
 
         let n = nodes.len();
 
-        // Very basic link extraction [[Link]]
+        // Link explicit [[wiki-links]] and memories/artifacts from the same instance.
         for (i, item) in self.items.iter().enumerate() {
-            let content = &item.content;
             for (j, other_item) in self.items.iter().enumerate() {
-                if i != j {
-                    let link_str = format!("[[{}]]", other_item.title);
-                    if content.contains(&link_str) {
-                        edges.push((i, j));
-                    }
+                if Self::items_are_related_for_graph(i, item, j, other_item) {
+                    edges.push((i, j));
                 }
             }
         }
@@ -1185,15 +1324,17 @@ impl KnowledgePanel {
         div()
             .w(px(300.))
             .h_full()
+            .min_h_0()
             .border_l_1()
             .border_color(theme.border)
             .flex_col()
             .child(
                 div()
                     .flex_1()
+                    .min_h_0()
                     .p_4()
                     .id("scroll-sheet")
-                    .overflow_y_scroll()
+                    .overflow_y_scrollbar()
                     .child(
                         v_flex()
                             .gap(px(12.))
@@ -1233,9 +1374,9 @@ impl KnowledgePanel {
                                 "Tags Used".to_string(),
                                 format!("{}", tag_count),
                                 cx,
-                            )),
-                    )
-                    .child(recent_activity),
+                            ))
+                            .child(recent_activity),
+                    ),
             )
     }
 
@@ -1254,17 +1395,25 @@ impl KnowledgePanel {
             crate::knowledge::core::KnowledgeRecordKind::Artifact => "Artifact",
         };
         let mut provenance = vec![format!("{} / {}", kind, item.source_kind)];
+        if let Some(instance_id) = &item.origin_instance_id {
+            provenance.push(format!(
+                "Instance {}",
+                self.instance_display_name(instance_id, cx)
+            ));
+        }
         if let Some(run_id) = &item.origin_run_id {
-            provenance.push(format!("Run {}", run_id));
+            provenance.push(format!("Run {}", Self::short_id(run_id)));
         }
         if let Some(session_id) = &item.origin_session_id {
-            provenance.push(format!("Session {}", session_id));
+            provenance.push(format!("Session {}", Self::short_id(session_id)));
         }
         if let Some(agent_id) = &item.origin_agent_id {
-            provenance.push(format!("Agent {}", agent_id));
+            provenance.push(format!("Agent {}", self.agent_display_name(agent_id, cx)));
         }
-        let content_text =
-            gpui::SharedString::from(Self::preprocess_obsidian_markdown(&item.content));
+        let related_items = self.related_items_for_instance(item);
+        let content_text = gpui::SharedString::from(Self::preprocess_obsidian_markdown(
+            &self.clean_knowledge_content_for_display(item, cx),
+        ));
 
         div()
             .w(px(800.))
@@ -1321,17 +1470,73 @@ impl KnowledgePanel {
                     .border_color(theme.border)
                     .flex()
                     .gap_2()
+                    .items_center()
+                    .flex_wrap()
                     .children(provenance.into_iter().map(|value| {
                         div()
                             .px_2()
                             .py_1()
+                            .max_w(px(220.))
                             .rounded_md()
                             .bg(theme.secondary)
                             .text_xs()
                             .text_color(theme.muted_foreground)
+                            .truncate()
                             .child(value)
                     })),
             )
+            .when(!related_items.is_empty(), |panel| {
+                panel.child(
+                    div()
+                        .px_4()
+                        .py_2()
+                        .border_b_1()
+                        .border_color(theme.border)
+                        .flex()
+                        .gap_2()
+                        .items_center()
+                        .flex_wrap()
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(theme.muted_foreground)
+                                .child("Related"),
+                        )
+                        .children(related_items.into_iter().take(6).map(|related| {
+                            let related_id = related.id;
+                            div()
+                                .px_2()
+                                .py_1()
+                                .max_w(px(220.))
+                                .rounded_md()
+                                .bg(theme.secondary)
+                                .text_xs()
+                                .text_color(theme.foreground)
+                                .truncate()
+                                .cursor_pointer()
+                                .hover(|style| style.bg(theme.secondary_active))
+                                .on_mouse_down(
+                                    gpui::MouseButton::Left,
+                                    cx.listener(move |this, _event, _window, cx| {
+                                        if let Some(item) = this
+                                            .all_items
+                                            .iter()
+                                            .find(|candidate| candidate.id == related_id)
+                                            .cloned()
+                                        {
+                                            this.selected_item = Some(item);
+                                            this.selected_node_idx = this
+                                                .items
+                                                .iter()
+                                                .position(|candidate| candidate.id == related_id);
+                                            cx.notify();
+                                        }
+                                    }),
+                                )
+                                .child(related.title)
+                        })),
+                )
+            })
             .child(
                 div()
                     .id(gpui::ElementId::Name(

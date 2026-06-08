@@ -241,9 +241,8 @@ impl BaseProviderAdapter for OpenRouterAdapter {
                 .json(&request_body);
 
             let (tx, rx) = futures::channel::mpsc::unbounded();
-            let rt = get_runtime();
 
-            rt.spawn(async move {
+            tokio::spawn(async move {
                 let mut es = match reqwest_eventsource::EventSource::new(req) {
                     Ok(es) => es,
                     Err(e) => {

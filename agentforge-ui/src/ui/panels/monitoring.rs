@@ -9,6 +9,7 @@ use gpui::{
 };
 use gpui_component::dock::PanelEvent;
 use gpui_component::dock::{Panel, TitleStyle};
+use gpui_component::scroll::ScrollableElement;
 use gpui_component::{h_flex, v_flex, ActiveTheme};
 
 use crate::monitoring::usage_analytics::UsageAnalytics;
@@ -151,11 +152,12 @@ impl Render for MonitoringPanel {
                 .into_any_element(),
         };
 
-        v_flex()
-            .size_full()
-            .bg(theme.background)
-            .child(tabs)
-            .child(div().flex_1().child(content))
+        v_flex().size_full().bg(theme.background).child(tabs).child(
+            div()
+                .flex_1()
+                .overflow_hidden()
+                .child(div().size_full().overflow_y_scrollbar().child(content)),
+        )
     }
 }
 

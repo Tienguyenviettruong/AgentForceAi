@@ -44,6 +44,8 @@ pub struct TeamWorkspacePanel {
     members_active_tab: usize,
     chat_histories: std::collections::HashMap<String, Vec<crate::providers::ChatMessage>>,
     chat_display_rows: std::collections::HashMap<String, Vec<ChatDisplayRow>>,
+    team_message_chat_indices: HashMap<String, (String, usize)>,
+    pending_chat_action: Option<PendingChatAction>,
     expanded_messages: std::collections::HashSet<String>,
     expanded_threads: std::collections::HashSet<String>,
     chat_bus_epoch: Arc<AtomicUsize>,
@@ -106,6 +108,8 @@ impl TeamWorkspacePanel {
             members_active_tab: 0,
             chat_histories: std::collections::HashMap::new(),
             chat_display_rows: std::collections::HashMap::new(),
+            team_message_chat_indices: HashMap::new(),
+            pending_chat_action: None,
             expanded_messages: std::collections::HashSet::new(),
             expanded_threads: std::collections::HashSet::new(),
             chat_bus_epoch: Arc::new(AtomicUsize::new(0)),
@@ -394,41 +398,92 @@ impl TeamWorkspacePanel {
                         let _ = cx.update(|cx| {
                             view.update(cx, |this: &mut TeamWorkspacePanel, cx| {
                                 let db = crate::AppState::global(cx).db.clone();
-                                let agent_name = db
+                                let fallback_agent_name = db
                                     .get_agent(&msg.sender_member_id)
                                     .ok()
                                     .flatten()
                                     .map(|a| a.name)
                                     .unwrap_or_else(|| msg.sender_member_id.clone());
+                                let mut agent_name = fallback_agent_name;
+                                let mut thought_duration_secs = None;
+                                if let Some(metadata) = msg.metadata.as_deref() {
+                                    if let Ok(value) =
+                                        serde_json::from_str::<serde_json::Value>(metadata)
+                                    {
+                                        if let Some(name) =
+                                            value.get("agent_name").and_then(|name| name.as_str())
+                                        {
+                                            if !name.trim().is_empty() {
+                                                agent_name = name.trim().to_string();
+                                            }
+                                        }
+                                        thought_duration_secs = value
+                                            .get("thought_duration_secs")
+                                            .and_then(|seconds| {
+                                                seconds.as_f64().or_else(|| {
+                                                    seconds
+                                                        .as_str()
+                                                        .and_then(|s| s.parse::<f64>().ok())
+                                                })
+                                            });
+                                    }
+                                }
                                 let session_id = this
                                     .instance_active_session
                                     .get(&instance_id)
                                     .cloned()
                                     .or_else(|| this.selected_session_id.clone());
                                 if let Some(session_id) = session_id {
+                                    let mut is_new_message = false;
                                     {
                                         let history = this
                                             .chat_histories
                                             .entry(session_id.clone())
                                             .or_default();
-                                        history.push(crate::providers::ChatMessage {
-                                            role: "assistant".into(),
-                                            content: msg.content.clone().into(),
-                                            parts: vec![],
-                                            agent_name: Some(agent_name.clone().into()),
-                                            thought_duration_secs: None,
-                                        });
+                                        if let Some((mapped_session_id, mapped_index)) =
+                                            this.team_message_chat_indices.get(&msg.id).cloned()
+                                        {
+                                            if mapped_session_id == session_id {
+                                                if let Some(existing) =
+                                                    history.get_mut(mapped_index)
+                                                {
+                                                    existing.content = msg.content.clone().into();
+                                                    existing.agent_name =
+                                                        Some(agent_name.clone().into());
+                                                    if let Some(seconds) = thought_duration_secs {
+                                                        existing.thought_duration_secs =
+                                                            Some(seconds);
+                                                    }
+                                                }
+                                            }
+                                        } else {
+                                            history.push(crate::providers::ChatMessage {
+                                                role: "assistant".into(),
+                                                content: msg.content.clone().into(),
+                                                parts: vec![],
+                                                agent_name: Some(agent_name.clone().into()),
+                                                thought_duration_secs,
+                                            });
+                                            this.team_message_chat_indices.insert(
+                                                msg.id.clone(),
+                                                (session_id.clone(), history.len() - 1),
+                                            );
+                                            is_new_message = true;
+                                        }
                                     }
                                     #[cfg(any(target_os = "windows", target_os = "macos"))]
-                                    this.push_office_chat_message(
-                                        &msg.sender_member_id,
-                                        &msg.content,
-                                        false,
-                                        &agent_name,
-                                        cx,
-                                    );
+                                    if is_new_message {
+                                        this.push_office_chat_message(
+                                            &msg.sender_member_id,
+                                            &msg.content,
+                                            false,
+                                            &agent_name,
+                                            cx,
+                                        );
+                                    }
 
                                     this.rebuild_chat_display(&session_id);
+                                    this.refresh_pending_chat_action(cx);
                                     if this.selected_session_id.as_deref()
                                         == Some(session_id.as_str())
                                     {
@@ -507,8 +562,9 @@ impl TeamWorkspacePanel {
                     .insert(instance_id.clone(), session_id.clone());
                 let msgs = db.get_conversation_turns(&session_id).unwrap_or_default();
                 self.chat_histories.insert(session_id.clone(), msgs);
+                self.rebuild_chat_display(&session_id);
                 let history_len = self
-                    .chat_histories
+                    .chat_display_rows
                     .get(&session_id)
                     .map(|h| h.len())
                     .unwrap_or(0);
@@ -518,6 +574,7 @@ impl TeamWorkspacePanel {
         } else {
             self.sessions_for_instance = Vec::new();
             self.selected_session_id = None;
+            self.pending_chat_action = None;
         }
 
         if let Some(instance_id) = &self.selected_instance_id {
@@ -559,11 +616,33 @@ impl TeamWorkspacePanel {
             self.cross_team_peer_instance_id = None;
             self.cross_team_cases = Vec::new();
             self.selected_cross_team_case_id = None;
+            self.pending_chat_action = None;
         }
 
+        self.refresh_pending_chat_action(cx);
         self.sync_office_webview(cx);
         cx.notify();
     }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum PendingChatAction {
+    Approval {
+        request_id: String,
+        run_id: String,
+        tool_name: String,
+        command: Option<String>,
+        path: Option<String>,
+        risk_label: String,
+        mode_label: Option<String>,
+        requested_at: String,
+    },
+    Readback {
+        case_id: String,
+        readback_id: String,
+        origin_run_id: Option<String>,
+        objective: String,
+    },
 }
 
 #[derive(Clone, Debug)]

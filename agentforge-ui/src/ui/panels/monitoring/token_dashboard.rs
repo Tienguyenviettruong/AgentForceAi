@@ -51,6 +51,74 @@ fn format_tokens(n: usize) -> String {
     }
 }
 
+fn render_token_bar_chart(
+    title: &str,
+    data: &[(String, usize)],
+    cx: &Context<TokenDashboard>,
+) -> impl IntoElement {
+    let theme = cx.theme().clone();
+    let max_value = data.iter().map(|(_, value)| *value).max().unwrap_or(0) as f32;
+    let mut bars = h_flex().items_end().gap_2().h(gpui::px(150.)).w_full();
+
+    if data.is_empty() {
+        bars = bars.child(
+            div()
+                .size_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_color(theme.muted_foreground)
+                .child("No data"),
+        );
+    } else {
+        for (label, value) in data.iter().take(8) {
+            let height = if max_value > 0.0 {
+                ((*value as f32 / max_value) * 120.0).max(6.0)
+            } else {
+                6.0
+            };
+            bars = bars.child(
+                v_flex()
+                    .h_full()
+                    .flex_1()
+                    .items_center()
+                    .justify_end()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child(format_tokens(*value)),
+                    )
+                    .child(
+                        div()
+                            .w_full()
+                            .max_w(gpui::px(42.))
+                            .h(gpui::px(height))
+                            .rounded_sm()
+                            .bg(theme.primary),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child(label.chars().take(10).collect::<String>()),
+                    ),
+            );
+        }
+    }
+
+    v_flex()
+        .p_4()
+        .gap_3()
+        .border_1()
+        .border_color(theme.border)
+        .rounded_md()
+        .bg(theme.secondary)
+        .child(div().font_bold().child(title.to_string()))
+        .child(bars)
+}
+
 impl Render for TokenDashboard {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
@@ -226,6 +294,21 @@ impl Render for TokenDashboard {
                                     .mt_1(),
                             ),
                     ),
+            )
+            .child(
+                h_flex()
+                    .w_full()
+                    .gap_4()
+                    .child(div().flex_1().child(render_token_bar_chart(
+                        "Tokens by Agent",
+                        &self.tokens_per_agent,
+                        cx,
+                    )))
+                    .child(div().flex_1().child(render_token_bar_chart(
+                        "Tokens by Instance",
+                        &self.tokens_per_instance,
+                        cx,
+                    ))),
             )
             .child(
                 v_flex()

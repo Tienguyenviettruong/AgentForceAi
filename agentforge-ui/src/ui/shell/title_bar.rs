@@ -2,8 +2,8 @@ use crate::app_menus;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     anchored, deferred, div, AnyElement, App, AppContext, ClickEvent, Context, DismissEvent,
-    Entity, Focusable, InteractiveElement, IntoElement, MouseButton, ParentElement, Render,
-    SharedString, StatefulInteractiveElement, Styled, Subscription, Window,
+    Entity, EventEmitter, Focusable, InteractiveElement, IntoElement, MouseButton, ParentElement,
+    Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Window,
 };
 use gpui::{img, px, ObjectFit, StyledImage};
 
@@ -25,6 +25,12 @@ pub struct AgentForgeTitleBar {
     mode_select_state: Entity<SelectState<Vec<SharedString>>>,
     logo_menu: Option<Entity<PopupMenu>>,
 }
+
+pub enum TitleBarEvent {
+    ToggleSoloMode,
+}
+
+impl EventEmitter<TitleBarEvent> for AgentForgeTitleBar {}
 
 impl AgentForgeTitleBar {
     pub fn new(
@@ -253,10 +259,14 @@ impl Render for AgentForgeTitleBar {
                     .child((self.child.clone())(window, cx))
                     .child(Select::new(&self.mode_select_state).small())
                     .child(
-                        Button::new("settings")
+                        Button::new("solo-mode")
                             .icon(IconName::Settings2)
                             .small()
-                            .ghost(),
+                            .ghost()
+                            .tooltip("Solo mode")
+                            .on_click(cx.listener(|_, _, _, cx| {
+                                cx.emit(TitleBarEvent::ToggleSoloMode);
+                            })),
                     )
                     .child(
                         div().child(

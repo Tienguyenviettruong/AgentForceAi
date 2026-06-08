@@ -134,6 +134,7 @@ impl TextViewState {
     }
 
     /// Get the text content.
+    #[allow(dead_code)]
     pub(crate) fn source(&self) -> SharedString {
         self.parsed_content.document.source.clone()
     }
@@ -199,6 +200,7 @@ impl TextViewState {
     }
 
     /// Save bounds and unselect if bounds changed.
+    #[allow(dead_code)]
     pub(super) fn update_bounds(&mut self, bounds: Bounds<Pixels>) {
         if self.bounds.size != bounds.size {
             self.clear_selection();

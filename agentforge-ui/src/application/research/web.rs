@@ -47,6 +47,16 @@ pub struct WebSearchResult {
     pub content_summary: String,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct ResearchNotebookSaveContext {
+    pub source_kind: Option<String>,
+    pub source_uri_normalized: Option<String>,
+    pub origin_run_id: Option<String>,
+    pub origin_session_id: Option<String>,
+    pub origin_instance_id: Option<String>,
+    pub origin_agent_id: Option<String>,
+}
+
 pub struct WebSearchEngine;
 
 impl WebSearchEngine {
@@ -119,6 +129,29 @@ pub async fn fetch_url_as_result(url: &str) -> Result<WebSearchResult, String> {
     })
 }
 
+pub fn web_search_result_from_analysis(
+    analysis: file_intelligence::FileAnalysis,
+) -> WebSearchResult {
+    let title = if analysis.file_name.trim().is_empty() {
+        analysis.source.clone()
+    } else {
+        analysis.file_name.clone()
+    };
+    let content_summary = summarize_content(&analysis.text, 1400);
+    WebSearchResult {
+        title,
+        url: analysis.source,
+        snippet: analysis
+            .notes
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "Fetched URL content.".to_string()),
+        fetched_at: Utc::now(),
+        content: analysis.text,
+        content_summary,
+    }
+}
+
 pub fn build_research_notebook(query: &str, results: &[WebSearchResult]) -> String {
     let now = Utc::now().format("%Y-%m-%d %H:%M:%S UTC");
     let mut out = String::new();
@@ -180,24 +213,31 @@ pub async fn save_research_notebook(
     query: &str,
     notebook: &str,
 ) -> anyhow::Result<String> {
+    save_research_notebook_with_context(db, query, notebook, ResearchNotebookSaveContext::default())
+        .await
+}
+
+pub async fn save_research_notebook_with_context(
+    db: Arc<dyn DatabasePort>,
+    query: &str,
+    notebook: &str,
+    context: ResearchNotebookSaveContext,
+) -> anyhow::Result<String> {
+    let source_kind = context
+        .source_kind
+        .clone()
+        .unwrap_or_else(|| "web_research".to_string());
+    let source_uri_normalized = context
+        .source_uri_normalized
+        .clone()
+        .unwrap_or_else(|| research_source_uri(query, &context));
+
     let vault_path = std::env::var("AGENTFORGE_OBSIDIAN_VAULT")
         .ok()
         .filter(|v| !v.trim().is_empty())
         .or_else(|| db.get_setting("obsidian_vault_path").ok().flatten());
 
-    if let Some(vault) = vault_path {
-        let ts = Utc::now().format("%Y%m%d_%H%M%S").to_string();
-        let path = std::path::PathBuf::from(vault)
-            .join("Research")
-            .join(format!("research_{}_{}.md", ts, slugify(query)));
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(&path, notebook.as_bytes())?;
-        crate::infrastructure::fs::obsidian_adapter::sync_obsidian_file(&path, &*db).await;
-        return Ok(path.display().to_string());
-    }
-
+    let mut saved_to = "knowledge_db".to_string();
     let mut item = KnowledgeItem::new(
         if query.trim().is_empty() {
             "Research Notebook"
@@ -205,15 +245,71 @@ pub async fn save_research_notebook(
             query.trim()
         },
         notebook,
-        vec![Tag("research".to_string()), Tag("web".to_string())],
+        vec![
+            Tag("research".to_string()),
+            Tag("web".to_string()),
+            Tag("research_notebook".to_string()),
+        ],
         RetentionPolicy::KeepForever,
     );
-    item.source_kind = "web_research".to_string();
-    if !query.trim().is_empty() {
-        item.source_uri_normalized = Some(format!("research://query/{}", slugify(query)));
+    item.source_kind = source_kind;
+    item.source_uri_normalized = Some(source_uri_normalized);
+    item.origin_run_id = context.origin_run_id;
+    item.origin_session_id = context.origin_session_id;
+    item.origin_instance_id = context.origin_instance_id;
+    item.origin_agent_id = context.origin_agent_id;
+
+    if let Some(vault) = vault_path {
+        let ts = Utc::now().format("%Y%m%d_%H%M%S").to_string();
+        let path = std::path::PathBuf::from(vault)
+            .join("Research")
+            .join(format!("research_{}_{}.md", ts, slugify(query)));
+        let write_result = (|| -> anyhow::Result<()> {
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(&path, notebook.as_bytes())?;
+            Ok(())
+        })();
+        match write_result {
+            Ok(()) => {
+                item.vault_path = Some(path.display().to_string());
+                crate::infrastructure::fs::obsidian_adapter::sync_obsidian_file(&path, &*db).await;
+                saved_to = path.display().to_string();
+            }
+            Err(error) => {
+                tracing::warn!(
+                    error = %error,
+                    "Research notebook Obsidian write failed; keeping knowledge DB copy"
+                );
+            }
+        }
     }
+
     db.upsert_knowledge_item(&item)?;
-    Ok("knowledge_db".to_string())
+    Ok(saved_to)
+}
+
+pub fn list_saved_research_notebooks(
+    db: Arc<dyn DatabasePort>,
+) -> anyhow::Result<Vec<KnowledgeItem>> {
+    let mut items: Vec<KnowledgeItem> = db
+        .get_all_knowledge_items()?
+        .into_iter()
+        .filter(is_research_notebook_item)
+        .collect();
+    items.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+    Ok(items)
+}
+
+pub fn is_research_notebook_item(item: &KnowledgeItem) -> bool {
+    item.source_kind == "web_research"
+        || item.source_kind == "research_scratchpad"
+        || item.tags.iter().any(|tag| tag.0 == "research_notebook")
+        || item
+            .content
+            .trim_start()
+            .starts_with("# Research Notebook:")
 }
 
 async fn fetch_result_pages(results: &mut [WebSearchResult]) {
@@ -540,6 +636,26 @@ fn has_env(name: &str) -> bool {
 
 fn is_http_url(value: &str) -> bool {
     value.starts_with("http://") || value.starts_with("https://")
+}
+
+fn research_source_uri(query: &str, context: &ResearchNotebookSaveContext) -> String {
+    let slug = slugify(query);
+    let ts = Utc::now().format("%Y%m%d%H%M%S%3f");
+    if let Some(run_id) = context
+        .origin_run_id
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        return format!("research://run/{}/query/{}/{}", run_id, slug, ts);
+    }
+    if let Some(session_id) = context
+        .origin_session_id
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        return format!("research://session/{}/query/{}/{}", session_id, slug, ts);
+    }
+    format!("research://query/{}/{}", slug, ts)
 }
 
 fn slugify(value: &str) -> String {

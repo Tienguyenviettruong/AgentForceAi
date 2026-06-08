@@ -80,6 +80,7 @@ pub trait DatabasePort: Send + Sync {
         agent_id: &str,
         instance_id: &str,
     ) -> anyhow::Result<bool>;
+    fn recover_stale_in_progress_tasks(&self, max_age_seconds: u64) -> anyhow::Result<usize>;
     fn mark_task_completed(&self, task_id: &str) -> anyhow::Result<()>;
     fn mark_task_failed(&self, task_id: &str) -> anyhow::Result<()>;
     fn mark_task_waiting_approval(&self, task_id: &str) -> anyhow::Result<()>;

@@ -1,17 +1,18 @@
 use crate::core::traits::database::DatabasePort;
 use crate::infrastructure::database::sqlite_adapter::Database;
 use gpui::{
-    actions, div, px, size, Action, App, AppContext, Bounds, Context, Entity, Global,
-    InteractiveElement, IntoElement, KeyBinding, ParentElement, Render, SharedString, Styled,
-    Window, WindowBounds, WindowKind, WindowOptions,
+    actions, div, px, size, Action, Animation, AnimationExt, App, AppContext, Bounds, Context,
+    Entity, Global, InteractiveElement, IntoElement, KeyBinding, ParentElement, Render,
+    SharedString, Styled, Window, WindowBounds, WindowKind, WindowOptions,
 };
 use gpui_component::{
     dock::register_panel,
     dock::{DockArea, DockEvent, DockItem},
-    v_flex, Root,
+    h_flex, v_flex, ActiveTheme as _, IconName, Root,
 };
 use serde::Deserialize;
 use std::sync::Arc;
+use std::time::Duration;
 
 pub mod application;
 pub mod core;
@@ -127,6 +128,7 @@ impl AppState {
                 .build()
                 .expect("Failed to init tokio runtime"),
         );
+        crate::providers::embeddings::prewarm_embedding_model();
         let obsidian_watcher = std::sync::Arc::new(std::sync::Mutex::new(None));
         let initial_mode = db
             .get_setting("orchestration_mode")
@@ -244,6 +246,7 @@ pub fn init(cx: &mut App) {
                 state.team_bus.clone(),
             ),
         );
+        worker_manager.recover_stale_in_progress_tasks();
         let wm_clone = worker_manager.clone();
         let worker_discovery_poll_ms = state
             .db
@@ -439,6 +442,7 @@ pub struct MainWindow {
     activity_bar: Entity<crate::ui::shell::activity_bar::ActivityBar>,
     status_bar: Entity<crate::ui::shell::status_bar::StatusBar>,
     active_page: SharedString,
+    solo_mode: bool,
     dock_areas: std::collections::HashMap<SharedString, Entity<DockArea>>,
     team_workspace: Entity<crate::ui::panels::team_workspace::TeamWorkspacePanel>,
 }
@@ -447,6 +451,11 @@ impl MainWindow {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let team_workspace =
             cx.new(|cx| crate::ui::panels::team_workspace::TeamWorkspacePanel::new(window, cx));
+        let initial_page = std::env::var("AGENTFORGE_START_PAGE")
+            .ok()
+            .map(|page| page.trim().to_string())
+            .filter(|page| !page.is_empty())
+            .unwrap_or_else(|| "dashboard".to_string());
         let mode_manager = AppState::global(cx).mode_manager.clone();
 
         let mode_manager_clone = mode_manager.clone();
@@ -455,7 +464,11 @@ impl MainWindow {
                 .child(|_, _| div().into_any_element())
         });
 
-        let activity_bar = cx.new(|cx| crate::ui::shell::activity_bar::ActivityBar::new(cx));
+        let activity_bar = cx.new(|cx| {
+            let mut bar = crate::ui::shell::activity_bar::ActivityBar::new(cx);
+            bar.active_item = initial_page.clone().into();
+            bar
+        });
         let status_bar = cx.new(|cx| crate::ui::shell::status_bar::StatusBar::new(cx));
 
         let mut dock_areas = std::collections::HashMap::new();
@@ -658,6 +671,20 @@ impl MainWindow {
         )
         .detach();
 
+        cx.subscribe_in(
+            &title_bar,
+            window,
+            |this, _title_bar, event: &crate::ui::shell::title_bar::TitleBarEvent, _window, cx| {
+                match event {
+                    crate::ui::shell::title_bar::TitleBarEvent::ToggleSoloMode => {
+                        this.solo_mode = !this.solo_mode;
+                        cx.notify();
+                    }
+                }
+            },
+        )
+        .detach();
+
         let active_panel_request = AppState::global(cx).active_panel.clone();
         cx.observe_in(
             &active_panel_request,
@@ -673,7 +700,8 @@ impl MainWindow {
             title_bar,
             activity_bar,
             status_bar,
-            active_page: "dashboard".into(),
+            active_page: initial_page.into(),
+            solo_mode: false,
             dock_areas,
             team_workspace,
         }
@@ -681,6 +709,7 @@ impl MainWindow {
 
     fn switch_panel(&mut self, id: SharedString, _window: &mut Window, cx: &mut Context<Self>) {
         if self.dock_areas.contains_key(&id) || id == "teams" {
+            self.solo_mode = false;
             let was_teams = self.active_page == "teams";
             let is_teams = id == "teams";
 
@@ -698,6 +727,62 @@ impl MainWindow {
                 });
             }
         }
+    }
+
+    fn render_solo_mode(&self, cx: &Context<Self>) -> gpui::AnyElement {
+        let theme = cx.theme().clone();
+
+        div()
+            .flex_1()
+            .min_h(px(0.))
+            .overflow_hidden()
+            .bg(theme.background)
+            .child(
+                div()
+                    .size_full()
+                    .flex()
+                    .flex_row()
+                    .bg(theme.background)
+                    .child(
+                        div()
+                            .w(px(160.))
+                            .h_full()
+                            .flex()
+                            .flex_col()
+                            .border_r(px(1.))
+                            .border_color(theme.border)
+                            .bg(theme.secondary.opacity(0.45))
+                            .p(px(10.))
+                            .gap(px(8.))
+                            .child(
+                                h_flex()
+                                    .id("solo-sidebar-automation")
+                                    .w_full()
+                                    .h(px(36.))
+                                    .px(px(10.))
+                                    .gap(px(8.))
+                                    .rounded_md()
+                                    .bg(theme.primary.opacity(0.12))
+                                    .text_color(theme.foreground)
+                                    .child(div().text_color(theme.primary).child(IconName::Bot))
+                                    .child(
+                                        div()
+                                            .min_w_0()
+                                            .truncate()
+                                            .text_size(px(13.))
+                                            .font_weight(gpui::FontWeight::MEDIUM)
+                                            .child("Automation"),
+                                    ),
+                            ),
+                    )
+                    .child(div().flex_1().h_full().bg(theme.background))
+                    .with_animation(
+                        "solo-mode-slide-in",
+                        Animation::new(Duration::from_secs_f64(0.24)),
+                        |this, delta| this.ml(px((1.0 - delta) * 220.0)),
+                    ),
+            )
+            .into_any_element()
     }
 }
 
@@ -730,7 +815,9 @@ impl Render for MainWindow {
                 this.switch_panel("teams".into(), window, cx);
             }))
             .child(self.title_bar.clone())
-            .child(
+            .child(if self.solo_mode {
+                self.render_solo_mode(cx)
+            } else {
                 div()
                     .flex()
                     .flex_row()
@@ -763,9 +850,14 @@ impl Render for MainWindow {
                             } else {
                                 div().into_any_element()
                             }),
-                    ),
-            )
-            .child(self.status_bar.clone())
+                    )
+                    .into_any_element()
+            })
+            .child(if self.solo_mode {
+                div().into_any_element()
+            } else {
+                self.status_bar.clone().into_any_element()
+            })
             .children(dialog_layer)
             .children(notification_layer)
             .children(sheet_layer)

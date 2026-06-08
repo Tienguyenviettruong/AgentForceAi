@@ -2,8 +2,8 @@ use crate::application::orchestration::tool_gateway::ToolExecutionGateway;
 use crate::infrastructure::mcp::ActionRecorder;
 use gpui::EventEmitter;
 use gpui::{
-    div, App, AppContext, Context, Entity, Focusable, IntoElement, ParentElement, Render, Styled,
-    Window,
+    div, App, AppContext, Context, Entity, Focusable, InteractiveElement, IntoElement,
+    ParentElement, Render, Styled, Window,
 };
 use gpui_component::dock::PanelEvent;
 use gpui_component::dock::{Panel, TitleStyle};
@@ -24,6 +24,7 @@ pub struct ResearchNotebookPanel {
     search_input: Entity<InputState>,
     is_searching: bool,
     search_results: Vec<SearchResult>,
+    saved_notebooks: Vec<SavedResearchNotebook>,
     scratchpad: String,
     save_status: Option<String>,
     action_recorder: Arc<ActionRecorder>,
@@ -37,11 +38,34 @@ struct SearchResult {
     content_summary: String,
 }
 
+#[derive(Clone)]
+struct SavedResearchNotebook {
+    id: String,
+    title: String,
+    source: String,
+    updated_at: String,
+    content: String,
+}
+
+struct AutoSearchOutcome {
+    results: Vec<SearchResult>,
+    notebook: String,
+    status: String,
+}
+
 impl ResearchNotebookPanel {
     pub fn new(_window: &mut Window, cx: &mut App) -> Self {
         let db = crate::AppState::global(cx).db.clone();
         let action_recorder = Arc::new(ActionRecorder::new(db));
         let search_input = cx.new(|cx| InputState::new(_window, cx).placeholder("Search query"));
+        let db_for_load = crate::AppState::global(cx).db.clone();
+        let saved_notebooks = Self::load_saved_notebooks(db_for_load);
+        let scratchpad = saved_notebooks
+            .first()
+            .map(|item| item.content.clone())
+            .unwrap_or_else(|| {
+                "## Research Notes\n\nDraft your synthesized research here before saving to the knowledge base...".to_string()
+            });
 
         Self {
             focus_handle: cx.focus_handle(),
@@ -49,10 +73,30 @@ impl ResearchNotebookPanel {
             search_input,
             is_searching: false,
             search_results: Vec::new(),
-            scratchpad: "## Research Notes\n\nDraft your synthesized research here before saving to the knowledge base...".to_string(),
+            saved_notebooks,
+            scratchpad,
             save_status: None,
             action_recorder,
         }
+    }
+
+    fn load_saved_notebooks(
+        db: Arc<dyn crate::core::traits::database::DatabasePort>,
+    ) -> Vec<SavedResearchNotebook> {
+        crate::application::research::web::list_saved_research_notebooks(db)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|item| SavedResearchNotebook {
+                id: item.id.to_string(),
+                title: item.title,
+                source: item
+                    .source_uri_normalized
+                    .or(item.vault_path)
+                    .unwrap_or_else(|| item.source_kind),
+                updated_at: item.updated_at.format("%Y-%m-%d %H:%M").to_string(),
+                content: item.content,
+            })
+            .collect()
     }
 }
 
@@ -126,44 +170,117 @@ impl Render for ResearchNotebookPanel {
 
                             let view = cx.entity().clone();
                             let action_recorder = action_recorder.clone();
+                            let db_for_save = db.clone();
+                            let runtime = crate::AppState::global(cx).tokio_runtime.clone();
 
                             cx.spawn(async move |_, cx| {
-                                let search_query = crate::application::research::web::WebSearchQuery::new(&query, 6);
-                                let raw_results =
-                                    crate::application::research::web::WebSearchEngine::execute_search(
-                                        &search_query,
-                                    )
-                                    .await
-                                    .unwrap_or_default();
-                                let notebook =
-                                    crate::application::research::web::build_research_notebook(
-                                        &query,
-                                        &raw_results,
+                                let query_for_task = query.clone();
+                                let db_for_task = db_for_save.clone();
+                                let action_recorder_for_task = action_recorder.clone();
+                                let task = runtime.spawn(async move {
+                                    let search_query =
+                                        crate::application::research::web::WebSearchQuery::new(
+                                            &query_for_task,
+                                            6,
+                                        );
+                                    let raw_results =
+                                        match crate::application::research::web::WebSearchEngine::execute_search(
+                                            &search_query,
+                                        )
+                                        .await
+                                        {
+                                            Ok(results) => results,
+                                            Err(error) => {
+                                                return AutoSearchOutcome {
+                                                    results: Vec::new(),
+                                                    notebook: format!(
+                                                        "## Research Notes\n\nAuto-search failed for `{}`.\n\nError: {}",
+                                                        query_for_task, error
+                                                    ),
+                                                    status: format!("Auto-search failed: {}", error),
+                                                };
+                                            }
+                                        };
+                                    let notebook =
+                                        crate::application::research::web::build_research_notebook(
+                                            &query_for_task,
+                                            &raw_results,
+                                        );
+                                    let saved_to =
+                                        match crate::application::research::web::save_research_notebook(
+                                            db_for_task.clone(),
+                                            &query_for_task,
+                                            &notebook,
+                                        )
+                                        .await
+                                        {
+                                            Ok(target) => Some(target),
+                                            Err(error) => {
+                                                tracing::warn!(
+                                                    error = %error,
+                                                    query = %query_for_task,
+                                                    "Failed to save research notebook"
+                                                );
+                                                None
+                                            }
+                                        };
+                                    let results: Vec<SearchResult> = raw_results
+                                        .iter()
+                                        .map(|r| SearchResult {
+                                            title: r.title.clone(),
+                                            url: r.url.clone(),
+                                            snippet: r.snippet.clone(),
+                                            content_summary: r.content_summary.clone(),
+                                        })
+                                        .collect();
+                                    action_recorder_for_task.record_action(
+                                        "web_search".to_string(),
+                                        serde_json::json!({"query": query_for_task}).to_string(),
+                                        format!("Found {} results", results.len()),
                                     );
-                                let results: Vec<SearchResult> = raw_results
-                                    .iter()
-                                    .map(|r| SearchResult {
-                                        title: r.title.clone(),
-                                        url: r.url.clone(),
-                                        snippet: r.snippet.clone(),
-                                        content_summary: r.content_summary.clone(),
-                                    })
-                                    .collect();
-                                action_recorder.record_action(
-                                    "web_search".to_string(),
-                                    serde_json::json!({"query": query}).to_string(),
-                                    format!("Found {} results", results.len()),
-                                );
 
-                                let _ = action_recorder.generate_iflow_and_save().await;
+                                    if let Err(error) =
+                                        action_recorder_for_task.generate_iflow_and_save().await
+                                    {
+                                        tracing::warn!(
+                                            error = %error,
+                                            "Failed to generate iFlow from research action"
+                                        );
+                                    }
+
+                                    let status = saved_to
+                                        .as_ref()
+                                        .map(|target| format!("Saved to Research Notebook: {}", target))
+                                        .unwrap_or_else(|| {
+                                            "Research draft ready; save failed.".to_string()
+                                        });
+                                    AutoSearchOutcome {
+                                        results,
+                                        notebook,
+                                        status,
+                                    }
+                                });
+
+                                let outcome = match task.await {
+                                    Ok(outcome) => outcome,
+                                    Err(error) => AutoSearchOutcome {
+                                        results: Vec::new(),
+                                        notebook: format!(
+                                            "## Research Notes\n\nAuto-search worker failed for `{}`.\n\nError: {}",
+                                            query, error
+                                        ),
+                                        status: format!("Auto-search worker failed: {}", error),
+                                    },
+                                };
 
                                 let _ = cx.update(|cx| {
                                     let _ = view.update(cx, |this: &mut Self, cx| {
                                         this.is_searching = false;
-                                        this.search_results = results;
-                                        this.scratchpad = notebook;
-                                        this.save_status =
-                                            Some("Draft ready. Save explicitly to persist.".to_string());
+                                        this.search_results = outcome.results;
+                                        this.scratchpad = outcome.notebook;
+                                        this.saved_notebooks =
+                                            Self::load_saved_notebooks(db_for_save.clone());
+                                        this.save_status = Some(outcome.status);
                                         cx.notify();
                                     });
                                 });
@@ -184,14 +301,68 @@ impl Render for ResearchNotebookPanel {
                 ),
             );
         } else if self.search_results.is_empty() {
-            results_list = results_list.child(
-                h_flex().w_full().justify_center().py_8().child(
-                    div()
-                        .text_sm()
-                        .text_color(theme.muted_foreground)
-                        .child("Click 'Auto-Search via Agent' to begin research."),
-                ),
-            );
+            if self.saved_notebooks.is_empty() {
+                results_list = results_list.child(
+                    h_flex().w_full().justify_center().py_8().child(
+                        div()
+                            .text_sm()
+                            .text_color(theme.muted_foreground)
+                            .child("Click 'Auto-Search via Agent' to begin research."),
+                    ),
+                );
+            } else {
+                for notebook in &self.saved_notebooks {
+                    let notebook_content = notebook.content.clone();
+                    let notebook_title = notebook.title.clone();
+                    let notebook_source = notebook.source.clone();
+                    results_list = results_list.child(
+                        v_flex()
+                            .id(gpui::ElementId::Name(
+                                format!("saved-research-{}", notebook.id).into(),
+                            ))
+                            .p_3()
+                            .rounded_md()
+                            .bg(theme.secondary)
+                            .border_1()
+                            .border_color(theme.border)
+                            .cursor_pointer()
+                            .on_mouse_down(
+                                gpui::MouseButton::Left,
+                                cx.listener(move |this, _, _, cx| {
+                                    this.search_query = notebook_title.clone();
+                                    this.search_results.clear();
+                                    this.scratchpad = notebook_content.clone();
+                                    this.save_status = Some(format!(
+                                        "Loaded Research Notebook: {}",
+                                        notebook_source
+                                    ));
+                                    cx.notify();
+                                }),
+                            )
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_bold()
+                                    .text_color(theme.foreground)
+                                    .child(notebook.title.clone()),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.muted_foreground)
+                                    .mt_1()
+                                    .child(notebook.updated_at.clone()),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(gpui::green())
+                                    .mt_2()
+                                    .child(notebook.source.clone()),
+                            ),
+                    );
+                }
+            }
         } else {
             for result in &self.search_results {
                 results_list = results_list.child(
@@ -352,6 +523,10 @@ impl Render for ResearchNotebookPanel {
                                                     } else {
                                                         "Save failed.".to_string()
                                                     });
+                                                    if saved {
+                                                        this.saved_notebooks =
+                                                            Self::load_saved_notebooks(db.clone());
+                                                    }
                                                     cx.notify();
                                                 });
                                             });

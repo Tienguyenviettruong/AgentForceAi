@@ -74,6 +74,7 @@ impl Text {
     }
 
     /// Get the text content.
+    #[allow(dead_code)]
     pub(crate) fn get_text(&self, cx: &App) -> SharedString {
         match self {
             Self::String(s) => s.clone(),

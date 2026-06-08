@@ -1,7 +1,7 @@
 use gpui::{div, prelude::*, App, IntoElement};
 use gpui_component::ActiveTheme as _;
 
-use super::charts::{BarChart, ChartData};
+use super::charts::{BarChart, ChartData, PieChart};
 use crate::core::traits::database::DatabasePort;
 use crate::infrastructure::monitoring::{
     activity::{ActivityFeed, ActivityItem, ActivityType},
@@ -25,13 +25,9 @@ impl MonitoringDashboard {
     pub fn render(&self, db: &Arc<dyn DatabasePort>, cx: &App) -> impl IntoElement {
         let theme = cx.theme();
         let runs = db.list_recent_orchestration_runs(200).unwrap_or_default();
-        let events = db.list_recent_run_events(None, 20).unwrap_or_default();
-        let token_total: usize = db
-            .get_total_tokens_per_agent()
-            .unwrap_or_default()
-            .into_iter()
-            .map(|(_, tokens)| tokens)
-            .sum();
+        let events = db.list_recent_run_events(None, 60).unwrap_or_default();
+        let tokens_per_agent = db.get_total_tokens_per_agent().unwrap_or_default();
+        let token_total: usize = tokens_per_agent.iter().map(|(_, tokens)| *tokens).sum();
         let active_count = runs
             .iter()
             .filter(|run| {
@@ -64,13 +60,40 @@ impl MonitoringDashboard {
                 change: None,
             },
         ];
-        let chart_data = runs
-            .iter()
-            .take(12)
+        let mut persisted_by_day = std::collections::BTreeMap::<String, usize>::new();
+        for run in &runs {
+            let day = run.created_at.chars().take(10).collect::<String>();
+            *persisted_by_day.entry(day).or_default() += 1;
+        }
+        let chart_data = persisted_by_day
+            .into_iter()
             .rev()
-            .map(|run| ChartData {
-                label: run.created_at.chars().take(10).collect(),
-                value: 1.0,
+            .take(12)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .map(|(label, value)| ChartData {
+                label,
+                value: value as f32,
+            })
+            .collect::<Vec<_>>();
+        let mut status_counts = std::collections::BTreeMap::<String, usize>::new();
+        for run in &runs {
+            *status_counts.entry(run.status.clone()).or_default() += 1;
+        }
+        let run_status_data = status_counts
+            .into_iter()
+            .map(|(label, value)| ChartData {
+                label,
+                value: value as f32,
+            })
+            .collect::<Vec<_>>();
+        let token_chart_data = tokens_per_agent
+            .iter()
+            .take(8)
+            .map(|(agent, tokens)| ChartData {
+                label: agent.clone(),
+                value: *tokens as f32,
             })
             .collect::<Vec<_>>();
         let activities = events
@@ -112,7 +135,7 @@ impl MonitoringDashboard {
         div()
             .flex()
             .flex_col()
-            .gap_6()
+            .gap_5()
             .p_6()
             .w_full()
             .h_full()
@@ -128,7 +151,7 @@ impl MonitoringDashboard {
             .child(
                 div()
                     .flex()
-                    .gap_6()
+                    .gap_5()
                     .w_full()
                     .child(
                         div()
@@ -138,7 +161,23 @@ impl MonitoringDashboard {
                     .child(
                         div()
                             .flex_1()
+                            .child(PieChart::new("Run Status", run_status_data).render(cx)),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .gap_5()
+                    .w_full()
+                    .child(
+                        div()
+                            .flex_1()
                             .child(ActivityFeed::new(activities).render(cx)),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .child(BarChart::new("Tokens by Agent", token_chart_data).render(cx)),
                     ),
             )
     }

@@ -1,15 +1,227 @@
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    div, px, Context, InteractiveElement, IntoElement, ParentElement, SharedString,
-    StatefulInteractiveElement, Styled,
+    div, px, Animation, AnimationExt, Context, InteractiveElement, IntoElement, ParentElement,
+    SharedString, StatefulInteractiveElement, Styled,
 };
 use gpui_component::button::{Button, ButtonVariants};
+use gpui_component::spinner::Spinner;
 use gpui_component::WindowExt;
 use gpui_component::{h_flex, ActiveTheme as _, IconName};
+use std::time::Duration;
 
 use super::TeamWorkspacePanel;
 
+fn normalized_route_key(value: &str) -> String {
+    value
+        .trim()
+        .to_lowercase()
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .collect()
+}
+
+fn task_payload_value(task: &crate::tasks::shared_task_list::Task) -> Option<serde_json::Value> {
+    task.payload
+        .as_deref()
+        .and_then(|payload| serde_json::from_str::<serde_json::Value>(payload).ok())
+}
+
+fn task_payload_string(value: &serde_json::Value, key: &str) -> String {
+    value
+        .get(key)
+        .and_then(|field| field.as_str())
+        .map(str::trim)
+        .filter(|field| !field.is_empty())
+        .unwrap_or("")
+        .to_string()
+}
+
+fn title_from_description(description: &str) -> Option<String> {
+    description
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(|line| {
+            line.trim_start_matches(|ch: char| {
+                ch.is_ascii_digit() || ch == '.' || ch == ')' || ch == '-'
+            })
+            .trim()
+            .chars()
+            .take(96)
+            .collect::<String>()
+        })
+        .filter(|title| !title.is_empty())
+}
+
 impl TeamWorkspacePanel {
+    fn task_matches_agent(
+        task: &crate::tasks::shared_task_list::Task,
+        agent: &crate::db::Agent,
+    ) -> bool {
+        if task.assignee_id.as_deref() == Some(&agent.id) {
+            return true;
+        }
+        if task.assignee_id.is_some() {
+            return false;
+        }
+
+        let Some(value) = task_payload_value(task) else {
+            return false;
+        };
+        let route = task_payload_string(&value, "role");
+        let route = if route.is_empty() {
+            task_payload_string(&value, "name")
+        } else {
+            route
+        };
+        !route.is_empty()
+            && normalized_route_key(&route) == normalized_route_key(&agent.routing_role())
+    }
+
+    fn task_display_parts(task: &crate::tasks::shared_task_list::Task) -> (String, String) {
+        let Some(value) = task_payload_value(task) else {
+            return ("Untitled task".to_string(), String::new());
+        };
+
+        let description = task_payload_string(&value, "description");
+        let title = task_payload_string(&value, "title");
+        if !title.is_empty() {
+            return (title, description);
+        }
+
+        let name = task_payload_string(&value, "name");
+        let role = task_payload_string(&value, "role");
+        let name_looks_like_role = !name.is_empty()
+            && (normalized_route_key(&name) == normalized_route_key(&role)
+                || matches!(
+                    normalized_route_key(&name).as_str(),
+                    "coordinator" | "pm" | "ba" | "dev" | "developer" | "engineer"
+                ));
+        if name_looks_like_role {
+            if let Some(title) = title_from_description(&description) {
+                return (title, description);
+            }
+        }
+
+        if !name.is_empty() {
+            return (name, description);
+        }
+        if let Some(title) = title_from_description(&description) {
+            return (title, description);
+        }
+        ("Untitled task".to_string(), description)
+    }
+
+    fn render_task_status_indicator(status: &str, color: gpui::Hsla) -> gpui::AnyElement {
+        match status {
+            "completed" => div()
+                .text_color(color)
+                .child(IconName::CircleCheck)
+                .into_any_element(),
+            "failed" => div()
+                .text_color(color)
+                .child(IconName::CircleX)
+                .into_any_element(),
+            "in_progress" => Spinner::new().color(color).into_any_element(),
+            _ => div()
+                .text_color(color)
+                .child(IconName::Asterisk)
+                .into_any_element(),
+        }
+    }
+
+    fn render_task_title(title: String, text_size: f32) -> gpui::AnyElement {
+        let char_count = title.chars().count();
+        let should_marquee = char_count > 34;
+        let title_text = div()
+            .min_w_0()
+            .whitespace_nowrap()
+            .font_weight(gpui::FontWeight::SEMIBOLD)
+            .text_size(px(text_size))
+            .child(title);
+
+        div()
+            .flex_1()
+            .min_w_0()
+            .overflow_hidden()
+            .child(if should_marquee {
+                let travel =
+                    ((char_count.saturating_sub(34) as f32) * text_size * 0.55).clamp(36.0, 180.0);
+                title_text
+                    .with_animation(
+                        "task-title-marquee",
+                        Animation::new(Duration::from_secs_f64(7.0)).repeat(),
+                        move |this, delta| {
+                            let offset = if delta < 0.18 {
+                                0.0
+                            } else if delta > 0.88 {
+                                0.0
+                            } else if delta < 0.53 {
+                                travel * ((delta - 0.18) / 0.35)
+                            } else {
+                                travel * (1.0 - ((delta - 0.53) / 0.35))
+                            };
+                            this.ml(-px(offset))
+                        },
+                    )
+                    .into_any_element()
+            } else {
+                title_text.truncate().into_any_element()
+            })
+            .into_any_element()
+    }
+
+    fn task_assignee_name(
+        task: &crate::tasks::shared_task_list::Task,
+        agents: &[crate::db::Agent],
+    ) -> String {
+        if let Some(aid) = &task.assignee_id {
+            return agents
+                .iter()
+                .find(|agent| &agent.id == aid)
+                .map(|agent| agent.name.clone())
+                .unwrap_or_else(|| "Unknown".to_string());
+        }
+
+        agents
+            .iter()
+            .find(|agent| Self::task_matches_agent(task, agent))
+            .map(|agent| format!("{} (inferred)", agent.name))
+            .unwrap_or_else(|| "Unassigned".to_string())
+    }
+
+    fn task_requested_role(task: &crate::tasks::shared_task_list::Task) -> Option<String> {
+        let value = task_payload_value(task)?;
+        let role = task_payload_string(&value, "role");
+        if !role.is_empty() {
+            return Some(role);
+        }
+        let requested_role = task_payload_string(&value, "requested_role");
+        if !requested_role.is_empty() {
+            return Some(requested_role);
+        }
+        None
+    }
+
+    fn task_assignment_warning(
+        task: &crate::tasks::shared_task_list::Task,
+        agents: &[crate::db::Agent],
+    ) -> Option<String> {
+        if task.assignee_id.is_some()
+            || agents
+                .iter()
+                .any(|agent| Self::task_matches_agent(task, agent))
+        {
+            return None;
+        }
+        Self::task_requested_role(task).map(|role| {
+            format!(
+                "Requested role: {} - No matching online agent in this instance",
+                role
+            )
+        })
+    }
+
     pub(crate) fn render_member_item(
         &self,
         agent: &crate::db::Agent,
@@ -27,19 +239,7 @@ impl TeamWorkspacePanel {
 
         let agent_tasks: Vec<_> = tasks
             .iter()
-            .filter(|t| {
-                if t.assignee_id.as_deref() == Some(&agent.id) {
-                    return true;
-                }
-                let Some(payload) = &t.payload else {
-                    return false;
-                };
-                let Ok(v) = serde_json::from_str::<serde_json::Value>(payload) else {
-                    return false;
-                };
-                let role = v.get("role").and_then(|x| x.as_str()).unwrap_or("");
-                !role.is_empty() && role == agent.routing_role()
-            })
+            .filter(|t| Self::task_matches_agent(t, agent))
             .collect();
         let agent_tasks_key = format!(
             "agent-tasks-{}-{}",
@@ -156,26 +356,7 @@ impl TeamWorkspacePanel {
                         "in_progress" => gpui::blue(),
                         _ => theme.muted_foreground,
                     };
-                    let status_icon = match t.status.as_str() {
-                        "completed" => IconName::CircleCheck,
-                        "failed" => IconName::CircleX,
-                        "in_progress" => IconName::LoaderCircle,
-                        _ => IconName::Asterisk,
-                    };
-                    let (task_title, task_desc) = t
-                        .payload
-                        .as_deref()
-                        .and_then(|p| {
-                            serde_json::from_str::<
-                                    crate::application::orchestration::core::DagTask,
-                                >(p)
-                                .ok()
-                        })
-                        .map(|dt| (dt.name, dt.description))
-                        .unwrap_or_else(|| {
-                            let short_id = t.id.split(':').next_back().unwrap_or(&t.id);
-                            (short_id.to_string(), String::new())
-                        });
+                    let (task_title, task_desc) = Self::task_display_parts(t);
                     tasks_list = tasks_list.child(
                         div()
                             .p(px(12.))
@@ -187,23 +368,25 @@ impl TeamWorkspacePanel {
                             .gap(px(4.))
                             .child(
                                 h_flex()
+                                    .w_full()
+                                    .min_w_0()
                                     .justify_between()
-                                    .child(
-                                        div()
-                                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                                            .text_size(px(13.))
-                                            .child(task_title),
-                                    )
+                                    .child(Self::render_task_title(task_title, 13.))
                                     .child(
                                         h_flex()
+                                            .flex_none()
                                             .gap(px(4.))
                                             .text_color(status_color)
-                                            .child(status_icon),
+                                            .child(Self::render_task_status_indicator(
+                                                t.status.as_str(),
+                                                status_color,
+                                            )),
                                     ),
                             )
                             .when(!task_desc.is_empty(), |d| {
                                 d.child(
                                     div()
+                                        .overflow_hidden()
                                         .text_size(px(12.))
                                         .text_color(theme.muted_foreground)
                                         .child(task_desc),
@@ -213,72 +396,6 @@ impl TeamWorkspacePanel {
                 }
                 d.child(tasks_list)
             })
-    }
-
-    pub(crate) fn render_group_header(
-        &self,
-        icon_color: gpui::Hsla,
-        title: &str,
-        is_expanded: bool,
-        theme: &gpui_component::Theme,
-        cx: &Context<Self>,
-    ) -> impl IntoElement {
-        let title_clone = title.to_string();
-        div()
-            .flex()
-            .flex_col()
-            .border_t(px(1.))
-            .border_b(px(1.))
-            .border_color(theme.border)
-            .bg(theme.secondary.opacity(0.3))
-            .child(
-                h_flex()
-                    .id(SharedString::from(title.to_string()))
-                    .justify_between()
-                    .py(px(8.))
-                    .px(px(12.))
-                    .cursor_pointer()
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        if this.expanded_groups.contains(&title_clone) {
-                            this.expanded_groups.remove(&title_clone);
-                        } else {
-                            this.expanded_groups.insert(title_clone.clone());
-                        }
-                        cx.notify();
-                    }))
-                    .child(
-                        h_flex()
-                            .gap(px(8.))
-                            .child(
-                                div()
-                                    .text_color(theme.muted_foreground)
-                                    .child(if is_expanded {
-                                        IconName::ChevronDown
-                                    } else {
-                                        IconName::ChevronRight
-                                    }),
-                            )
-                            .child(
-                                div()
-                                    .w(px(20.))
-                                    .h(px(20.))
-                                    .rounded_sm()
-                                    .bg(icon_color.opacity(0.1))
-                                    .text_color(icon_color)
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .child(IconName::User),
-                            )
-                            .child(
-                                div()
-                                    .overflow_x_hidden()
-                                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                                    .text_size(px(14.))
-                                    .child(title.to_string()),
-                            ),
-                    ),
-            )
     }
 
     pub(crate) fn render_members_column(&self, cx: &Context<Self>) -> impl IntoElement {
@@ -392,13 +509,10 @@ impl TeamWorkspacePanel {
                                                         let db = crate::AppState::global(cx).db.clone();
                                                         let new_id = format!("inst-{}", uuid::Uuid::new_v4().simple());
                                                         if db.create_instance(&new_id, "New Instance", &team_id, None, Some("running")).is_ok() {
-                                                            this.reload(cx);
                                                             this.selected_instance_id = Some(new_id.clone());
                                                             this.selected_team_id = None;
                                                             this.start_team_bus_subscription(new_id.clone(), cx);
-                                                            let history_len = this.chat_histories.get(&new_id).map(|h| h.len()).unwrap_or(0);
-                                                            this.chat_list_state = gpui::ListState::new(history_len, gpui::ListAlignment::Bottom, px(200.));
-                                                            cx.notify();
+                                                            this.reload(cx);
                                                         }
                                                     }
                                                 }))
@@ -506,25 +620,21 @@ impl TeamWorkspacePanel {
                     .flex()
                     .flex_col()
                     .when(self.members_active_tab == 0, |d| {
-                        d.child(
-                            self.render_group_header(
-                                gpui::blue(),
-                                "All Agents",
-                                self.expanded_groups.contains("All Agents"),
-                                theme,
-                                cx,
-                            ),
-                        )
-                        .when(
-                            self.expanded_groups.contains("All Agents"),
-                            |d| {
-                                let mut list = div().flex().flex_col();
-                                for agent in &agents {
-                                    list = list.child(self.render_member_item(agent, &tasks, cx));
-                                }
-                                d.child(list)
-                            },
-                        )
+                        let mut list = div().flex().flex_col();
+                        if agents.is_empty() {
+                            list = list.child(
+                                div()
+                                    .p(px(16.))
+                                    .text_color(theme.muted_foreground)
+                                    .text_size(px(13.))
+                                    .child("No agents in this team."),
+                            );
+                        } else {
+                            for agent in &agents {
+                                list = list.child(self.render_member_item(agent, &tasks, cx));
+                            }
+                        }
+                        d.child(list)
                     })
                     .when(self.members_active_tab == 1, |d| {
                         let mut list = div().flex().flex_col().p(px(16.)).gap(px(12.));
@@ -544,31 +654,9 @@ impl TeamWorkspacePanel {
                                     "in_progress" => gpui::blue(),
                                     _ => theme.muted_foreground,
                                 };
-                                let status_icon = match t.status.as_str() {
-                                    "completed" => IconName::CircleCheck,
-                                    "failed" => IconName::CircleX,
-                                    "in_progress" => IconName::LoaderCircle,
-                                    _ => IconName::Asterisk,
-                                };
-                                let (task_title, task_desc) = t
-                                    .payload
-                                    .as_deref()
-                                    .and_then(|p| serde_json::from_str::<crate::application::orchestration::core::DagTask>(p).ok())
-                                    .map(|dt| (dt.name, dt.description))
-                                    .unwrap_or_else(|| ("Task".to_string(), "".to_string()));
-                                let short_id = t
-                                    .id
-                                    .split(':')
-                                    .last()
-                                    .unwrap_or(&t.id)
-                                    .chars()
-                                    .take(8)
-                                    .collect::<String>();
-                                let assignee_name = if let Some(aid) = &t.assignee_id {
-                                    agents.iter().find(|a| &a.id == aid).map(|a| a.name.clone()).unwrap_or_else(|| "Unknown".to_string())
-                                } else {
-                                    "Unassigned".to_string()
-                                };
+                                let (task_title, task_desc) = Self::task_display_parts(&t);
+                                let assignee_name = Self::task_assignee_name(&t, &agents);
+                                let assignment_warning = Self::task_assignment_warning(&t, &agents);
                                 list = list.child(
                                     div()
                                         .p(px(12.))
@@ -580,25 +668,28 @@ impl TeamWorkspacePanel {
                                         .gap(px(8.))
                                         .child(
                                             h_flex()
+                                                .w_full()
+                                                .min_w_0()
                                                 .justify_between()
                                                 .child(
                                                     h_flex()
+                                                        .flex_1()
+                                                        .min_w_0()
                                                         .gap(px(6.))
                                                         .items_center()
-                                                        .child(div().font_weight(gpui::FontWeight::SEMIBOLD).text_size(px(14.)).child(task_title))
-                                                        .child(
-                                                            div()
-                                                                .text_size(px(12.))
-                                                                .text_color(theme.muted_foreground.opacity(0.7))
-                                                                .child(format!("#{}", short_id)),
-                                                        ),
+                                                        .child(Self::render_task_title(
+                                                            task_title, 14.,
+                                                        ))
                                                 )
                                                 .child(
                                                     h_flex()
+                                                        .flex_none()
                                                         .gap(px(4.))
                                                         .text_color(status_color)
-                                                        .child(status_icon)
-                                                        .child(div().text_size(px(12.)).child(t.status.clone()))
+                                                        .child(Self::render_task_status_indicator(
+                                                            t.status.as_str(),
+                                                            status_color,
+                                                        ))
                                                 )
                                         )
                                         .child(
@@ -618,9 +709,18 @@ impl TeamWorkspacePanel {
                                                         .child(format!("Priority: {}", t.priority))
                                                 )
                                         )
+                                        .when_some(assignment_warning, |d, warning| {
+                                            d.child(
+                                                div()
+                                                    .text_size(px(12.))
+                                                    .text_color(gpui::red())
+                                                    .child(warning),
+                                            )
+                                        })
                                         .when(!task_desc.is_empty(), |d| {
                                             d.child(
                                                 div()
+                                                    .overflow_hidden()
                                                     .text_size(px(12.))
                                                     .text_color(theme.muted_foreground)
                                                     .child(task_desc),

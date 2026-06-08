@@ -147,6 +147,69 @@ fn mode_policy_distinguishes_human_supervision_and_autonomous_execution() {
 }
 
 #[test]
+fn external_file_access_requires_approval_before_path_resolution() {
+    let db = isolated_database();
+    seed_governed_run(&db, "supervision");
+    let workspace =
+        std::env::temp_dir().join(format!("agentforge-workspace-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&workspace).expect("workspace fixture");
+    db.set_setting("workspace_instance", &workspace.to_string_lossy())
+        .expect("workspace setting");
+
+    let external_file =
+        std::env::temp_dir().join(format!("agentforge-external-{}.txt", uuid::Uuid::new_v4()));
+    std::fs::write(&external_file, "external").expect("external fixture");
+    let external_path = external_file.to_string_lossy().to_string();
+    let payload = serde_json::json!({ "path": external_path });
+    let gateway = ToolExecutionGateway::new(db.clone());
+    let tool_request = request("read_file", &payload);
+
+    assert!(matches!(
+        gateway.authorize_runtime(&tool_request),
+        PolicyDecision::ApprovalRequired { .. }
+    ));
+    assert!(gateway
+        .resolve_authorized_tool_path(&tool_request, payload["path"].as_str().unwrap())
+        .unwrap_err()
+        .contains("requires approval"));
+
+    let approvals = db
+        .list_pending_approval_requests(10)
+        .expect("approval list");
+    assert_eq!(approvals.len(), 1);
+    assert!(approvals[0].operation.contains("path="));
+    db.resolve_approval_request(
+        &approvals[0].id,
+        "approved",
+        Some(LOCAL_DESKTOP_ACTOR_ID),
+        Some("test approval"),
+    )
+    .expect("approval resolution");
+
+    let resolved = gateway
+        .resolve_authorized_tool_path(&tool_request, payload["path"].as_str().unwrap())
+        .expect("approved external path should resolve");
+    assert_eq!(resolved, external_file);
+}
+
+#[test]
+fn parent_directory_traversal_is_denied_instead_of_approved() {
+    let db = isolated_database();
+    seed_governed_run(&db, "human_interaction");
+    let workspace =
+        std::env::temp_dir().join(format!("agentforge-workspace-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&workspace).expect("workspace fixture");
+    db.set_setting("workspace_instance", &workspace.to_string_lossy())
+        .expect("workspace setting");
+
+    let payload = serde_json::json!({ "path": "../secret.txt" });
+    assert!(matches!(
+        ToolExecutionGateway::new(db).authorize_runtime(&request("read_file", &payload)),
+        PolicyDecision::Denied(reason) if reason.contains("parent-directory traversal")
+    ));
+}
+
+#[test]
 fn normalized_task_dependency_blocks_claim_until_prerequisite_is_complete() {
     let db = isolated_database();
     seed_governed_run(&db, "supervision");

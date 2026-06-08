@@ -37,35 +37,50 @@ impl AssetSource for CombinedAssets {
         Ok(combined_list)
     }
 }
-fn main() {
-    // Required this for Windows to render the WebView.
+
+fn run_app() {
+    // Required for Windows to render the WebView.
     #[cfg(target_os = "windows")]
     unsafe {
         std::env::set_var("GPUI_DISABLE_DIRECT_COMPOSITION", "true");
     }
 
-    // Create the application
     let app = gpui::Application::new().with_assets(CombinedAssets);
 
     app.run(move |cx| {
-        // Initialize all AgentForgeAI systems (themes, actions, panels, menus)
         init(cx);
 
-        // Initialize RoleManager and load roles
         let db = agentforge_ui::AppState::global(cx).db.clone();
         let role_manager = agentforge_ui::application::teams::role::RoleManager::new(db.clone());
         if let Err(e) = role_manager.load_roles() {
             eprintln!("Failed to load roles: {}", e);
         }
 
-        // Activate the application (bring window to front)
         cx.activate(true);
 
-        // Open the main AgentForgeAI window
         create_main_window(
             "AgentForgeAI",
             |window, cx| cx.new(|cx| agentforge_ui::MainWindow::new(window, cx)),
             cx,
         );
     });
+}
+
+fn main() {
+    // Spawn the entire GPUI app on a thread with a large stack (64 MB).
+    //
+    // In debug mode on Windows the default main-thread stack is ~1 MB.
+    // GPUI's render pipeline + deeply nested render_chat_column / render_markdown
+    // functions easily exceed that limit when a session with many messages is
+    // selected, producing STATUS_STACK_BUFFER_OVERRUN (exit code 0xc000041d).
+    //
+    // 64 MB is well above the worst-case depth and has negligible memory cost
+    // (virtual address space is committed lazily by the OS).
+    let handle = std::thread::Builder::new()
+        .name("agentforge-main".to_string())
+        .stack_size(64 * 1024 * 1024) // 64 MB
+        .spawn(run_app)
+        .expect("Failed to spawn main app thread");
+
+    handle.join().expect("Main app thread panicked");
 }

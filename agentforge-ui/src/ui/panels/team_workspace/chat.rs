@@ -18,7 +18,7 @@ use std::ops::Range;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use super::TeamWorkspacePanel;
+use super::{PendingChatAction, TeamWorkspacePanel};
 use crate::ui::components::markdown::render_markdown_message;
 
 fn provider_kind(p: &crate::db::Provider) -> &str {
@@ -32,16 +32,17 @@ fn build_provider_adapter(
 }
 
 fn format_session_label(s: &crate::core::models::session::SessionRecord) -> String {
-    let short_id = &s.id[..std::cmp::min(6, s.id.len())];
-    let dt = chrono::DateTime::parse_from_rfc3339(&s.created_at)
+    chrono::DateTime::parse_from_rfc3339(&s.created_at)
         .ok()
         .map(|d| d.with_timezone(&chrono::Local))
         .map(|d| d.format("%m-%d %H:%M").to_string())
-        .unwrap_or_else(|| "Session".to_string());
-    format!("{} - {}", dt, short_id)
+        .unwrap_or_else(|| "Session".to_string())
 }
 
-const AI_THINKING_LABEL: &str = "Ai thinking";
+const AI_THINKING_LABEL: &str = "AI thinking";
+const CHAT_COLLAPSE_LINE_LIMIT: usize = 80;
+const CHAT_COLLAPSE_CHAR_LIMIT: usize = 4_000;
+const CHAT_RENDER_CHAR_LIMIT: usize = 30_000;
 
 fn chat_message_metadata(agent_name: &str, thought_duration_secs: Option<f64>) -> String {
     let mut metadata = serde_json::json!({ "agent_name": agent_name });
@@ -384,7 +385,7 @@ impl Element for LinkInlineOverlay {
 }
 
 impl TeamWorkspacePanel {
-    #[cfg(any())]
+    #[allow(dead_code)]
     fn update_chat_message_content(
         &mut self,
         session_id: &str,
@@ -834,7 +835,7 @@ impl TeamWorkspacePanel {
                                                                                             });
                                                                                         }
                                                                                     })
-                                                                                .label(format!("{} - {}", latest, cid.chars().take(8).collect::<String>()));
+                                                                                .label(latest.clone());
                                                                             col = col.child(
                                                                                 gpui_component::v_flex()
                                                                                     .w_full()
@@ -868,7 +869,9 @@ impl TeamWorkspacePanel {
                                                                 this.instance_active_session.insert(instance_id.clone(), s.id.clone());
                                                                 let msgs = crate::AppState::global(cx).db.get_conversation_turns(&s.id).unwrap_or_default();
                                                                 this.chat_histories.insert(s.id.clone(), msgs);
-                                                                let history_len = this.chat_histories.get(&s.id).map(|h| h.len()).unwrap_or(0);
+                                                                this.rebuild_chat_display(&s.id);
+                                                                this.refresh_pending_chat_action(cx);
+                                                                let history_len = this.chat_display_rows.get(&s.id).map(|h| h.len()).unwrap_or(0);
                                                                 this.chat_list_state = gpui::ListState::new(history_len, gpui::ListAlignment::Bottom, px(200.));
                                                             }
                                                             cx.notify();
@@ -992,6 +995,7 @@ impl TeamWorkspacePanel {
                                                             history.push(crate::providers::ChatMessage { role: "user".into(), content: text.clone().into(), agent_name: None, thought_duration_secs: None , parts: vec![] });
                                                         }
                                                         this.rebuild_chat_display(&session_id);
+                                                        this.refresh_pending_chat_action(cx);
                                                         let display_len = this.chat_display_rows.get(&session_id).map(|v| v.len()).unwrap_or(0);
                                                         this.chat_list_state = gpui::ListState::new(display_len, gpui::ListAlignment::Bottom, gpui::px(200.));
 
@@ -1587,7 +1591,6 @@ impl TeamWorkspacePanel {
                                                     .text_color(theme.muted_foreground)
                                                     .overflow_hidden()
                                                     .whitespace_nowrap()
-                                                    .text_ellipsis()
                                                     .child("Tạo đặc tả")
                                             )
                                     )
@@ -1629,7 +1632,6 @@ impl TeamWorkspacePanel {
                                                     .text_color(theme.muted_foreground)
                                                     .overflow_hidden()
                                                     .whitespace_nowrap()
-                                                    .text_ellipsis()
                                                     .child("Tạo kế hoạch")
                                             )
                                     )
@@ -1671,7 +1673,6 @@ impl TeamWorkspacePanel {
                                                     .text_color(theme.muted_foreground)
                                                     .overflow_hidden()
                                                     .whitespace_nowrap()
-                                                    .text_ellipsis()
                                                     .child("Chạy task pending")
                                             )
                                     )
@@ -1764,6 +1765,7 @@ impl TeamWorkspacePanel {
                                                 .size_full(),
                                             ),
                                         )
+                                        .child(self.render_cached_pending_action_summary(cx))
                                         .child(form)
                                 )
                         )
@@ -1792,8 +1794,10 @@ impl TeamWorkspacePanel {
                                                     .get_conversation_turns(&session_id)
                                                     .unwrap_or_default();
                                                 this.chat_histories.insert(session_id.clone(), msgs);
+                                                this.rebuild_chat_display(&session_id);
+                                                this.refresh_pending_chat_action(cx);
                                                 let history_len = this
-                                                    .chat_histories
+                                                    .chat_display_rows
                                                     .get(&session_id)
                                                     .map(|h| h.len())
                                                     .unwrap_or(0);
@@ -2526,11 +2530,87 @@ impl TeamWorkspacePanel {
                             let Some(provider_config) = provider_config else { break; };
 
                             let tasks = db_clone_agent.list_tasks_for_instance(&instance_id_clone_agent).unwrap_or_default();
+                            let agent_route_key = agent
+                                .routing_role()
+                                .trim()
+                                .to_lowercase()
+                                .chars()
+                                .filter(|ch| ch.is_ascii_alphanumeric())
+                                .collect::<String>();
+                            let task_matches_agent = |task: &crate::tasks::shared_task_list::Task| {
+                                if task.assignee_id.as_ref() == Some(&agent_id_clone) {
+                                    return true;
+                                }
+                                if task.assignee_id.is_some() {
+                                    return false;
+                                }
+                                let Some(payload) = task.payload.as_deref() else {
+                                    return false;
+                                };
+                                let Ok(value) = serde_json::from_str::<serde_json::Value>(payload) else {
+                                    return false;
+                                };
+                                let route = value
+                                    .get("role")
+                                    .and_then(|role| role.as_str())
+                                    .or_else(|| value.get("name").and_then(|name| name.as_str()))
+                                    .unwrap_or("")
+                                    .trim()
+                                    .to_lowercase()
+                                    .chars()
+                                    .filter(|ch| ch.is_ascii_alphanumeric())
+                                    .collect::<String>();
+                                !route.is_empty() && route == agent_route_key
+                            };
+                            let task_capability_violation = |task: &crate::tasks::shared_task_list::Task| -> Option<String> {
+                                let payload = task.payload.as_deref()?;
+                                let value = serde_json::from_str::<serde_json::Value>(payload).ok()?;
+                                let field = |key: &str| {
+                                    value
+                                        .get(key)
+                                        .and_then(|field| field.as_str())
+                                        .map(str::trim)
+                                        .filter(|field| !field.is_empty())
+                                        .unwrap_or("")
+                                        .to_string()
+                                };
+                                let mut title = field("title");
+                                if title.is_empty() {
+                                    title = field("name");
+                                }
+                                crate::application::orchestration::role_policy::validate_agent_task_assignment(
+                                    &agent,
+                                    &field("task_type"),
+                                    &title,
+                                    &field("description"),
+                                )
+                                .err()
+                            };
 
                             let mut next_task = None;
                             for task in &tasks {
-                                if task.status == "pending" && task.assignee_id.as_ref() == Some(&agent_id_clone) {
+                                if task.status == "pending" && task_matches_agent(task) {
                                     if db_clone_agent.is_task_unblocked(&task.id).unwrap_or(false) {
+                                        if let Some(reason) = task_capability_violation(task) {
+                                            let status_text = format!("[Task Routing Error] {}:\n{}", task.id, reason);
+                                            let _ = db_clone_agent.mark_task_failed(&task.id);
+                                            let metadata = chat_message_metadata(&agent.name, None);
+                                            let mut msg = crate::teambus::routing::TeamMessage::new_broadcast(
+                                                instance_id_clone_agent.clone(),
+                                                "assistant".to_string(),
+                                                status_text.clone(),
+                                            );
+                                            msg.metadata = Some(metadata.clone());
+                                            let _ = db_clone_agent.insert_team_message(&msg);
+                                            let _ = team_bus_clone_agent.route_message(msg).await;
+                                            let _ = db_clone_agent.append_conversation_turn(
+                                                &session_id_clone_agent,
+                                                "assistant",
+                                                &status_text,
+                                                Some(&metadata),
+                                            );
+                                            continue;
+                                        }
                                         next_task = Some(task.clone());
                                         break;
                                     }
@@ -2539,7 +2619,7 @@ impl TeamWorkspacePanel {
 
                             let Some(task) = next_task else {
                                 // If there are pending tasks but dependencies aren't met, wait and retry.
-                                let has_pending = tasks.iter().any(|t| t.status == "pending" && t.assignee_id.as_ref() == Some(&agent_id_clone));
+                                let has_pending = tasks.iter().any(|t| t.status == "pending" && task_matches_agent(t));
                                 if has_pending {
                                     cx.background_executor().timer(std::time::Duration::from_secs(2)).await;
                                     continue;
@@ -2564,14 +2644,172 @@ impl TeamWorkspacePanel {
 
                             // Instruct the LLM to output files if needed
                             let instructions = if let Some(ref ws) = workspace_dir_agent {
-                                format!("Execute the following task. You are working in the directory: {}. To generate or modify files, call write_file or edit_file with a relative path inside this workspace. Sensitive tools may pause for governance approval. Do not express file operations as markdown. Task:\n", ws)
+                                format!("Execute the following task. You are working in the directory: {}. To generate or modify files, call write_file or edit_file with a relative path inside this workspace. Do not use run_cli to create directories/files when write_file can create parent directories automatically. Use run_cli only for actual build/test/diagnostic commands. Sensitive tools may pause for governance approval. Do not express file operations as markdown. Task:\n", ws)
                             } else {
-                                "Execute the following task. A configured workspace is required for file changes, and file operations must use write_file or edit_file tools. Sensitive tools may pause for governance approval. Do not express file operations as markdown. Task:\n".to_string()
+                                "Execute the following task. A configured workspace is required for file changes, and file operations must use write_file or edit_file tools. Do not use run_cli to create directories/files. Sensitive tools may pause for governance approval. Do not express file operations as markdown. Task:\n".to_string()
                             };
 
-                            let task_text = task.payload.clone().unwrap_or_else(|| task.id.clone());
+                            let task_text = task.payload.as_deref().map(|payload| {
+                                serde_json::from_str::<serde_json::Value>(payload)
+                                    .ok()
+                                    .map(|value| {
+                                        let field = |key: &str| {
+                                            value
+                                                .get(key)
+                                                .and_then(|field| field.as_str())
+                                                .map(str::trim)
+                                                .filter(|field| !field.is_empty())
+                                                .unwrap_or("")
+                                                .to_string()
+                                        };
+                                        let description = field("description");
+                                        let mut title = field("title");
+                                        if title.is_empty() {
+                                            title = field("name");
+                                        }
+                                        let role = field("role");
+                                        let title_key = title
+                                            .trim()
+                                            .to_lowercase()
+                                            .chars()
+                                            .filter(|ch| ch.is_ascii_alphanumeric())
+                                            .collect::<String>();
+                                        let role_key = role
+                                            .trim()
+                                            .to_lowercase()
+                                            .chars()
+                                            .filter(|ch| ch.is_ascii_alphanumeric())
+                                            .collect::<String>();
+                                        if !title_key.is_empty()
+                                            && (title_key == role_key
+                                                || matches!(
+                                                    title_key.as_str(),
+                                                    "coordinator"
+                                                        | "pm"
+                                                        | "ba"
+                                                        | "dev"
+                                                        | "developer"
+                                                        | "engineer"
+                                                ))
+                                        {
+                                            if let Some(first_line) = description
+                                                .lines()
+                                                .map(str::trim)
+                                                .find(|line| !line.is_empty())
+                                            {
+                                                title = first_line
+                                                    .trim_start_matches(|ch: char| {
+                                                        ch.is_ascii_digit()
+                                                            || ch == '.'
+                                                            || ch == ')'
+                                                            || ch == '-'
+                                                    })
+                                                    .trim()
+                                                    .chars()
+                                                    .take(96)
+                                                    .collect();
+                                            }
+                                        }
+                                        let mut text = String::new();
+                                        if !title.is_empty() {
+                                            text.push_str("Title: ");
+                                            text.push_str(&title);
+                                            text.push('\n');
+                                        }
+                                        if !role.is_empty() {
+                                            text.push_str("Assigned role: ");
+                                            text.push_str(&role);
+                                            text.push('\n');
+                                        }
+                                        if !description.is_empty() {
+                                            text.push_str("Description:\n");
+                                            text.push_str(&description);
+                                        }
+                                        if text.trim().is_empty() {
+                                            payload.to_string()
+                                        } else {
+                                            text
+                                        }
+                                    })
+                                    .unwrap_or_else(|| payload.to_string())
+                            }).unwrap_or_else(|| task.id.clone());
 
                             task_prompt.push(crate::providers::ChatMessage { role: "user".into(), content: format!("{}{}", instructions, task_text).into(), agent_name: None, thought_duration_secs: None , parts: vec![] });
+
+                            let agent_name_str = agent.name.clone();
+                            let metadata = chat_message_metadata(&agent_name_str, None);
+                            let mut msg = crate::teambus::routing::TeamMessage::new_broadcast(
+                                instance_id_clone_agent.clone(),
+                                "assistant".to_string(),
+                                String::new(),
+                            );
+                            msg.metadata = Some(metadata.clone());
+                            msg.delivery_status = "typing".to_string();
+                            let msg_id = msg.id.clone();
+                            let _ = db_clone_agent.insert_team_message(&msg);
+                            let _ = team_bus_clone_agent.route_message(msg.clone()).await;
+
+                            let mut msg_idx = None;
+                            let _ = cx.update(|cx| view_agent.update(cx, |this: &mut Self, cx| {
+                                let session_id = this
+                                    .instance_active_session
+                                    .get(&instance_id_clone_agent)
+                                    .cloned()
+                                    .or_else(|| this.selected_session_id.clone());
+                                if let Some(session_id) = session_id {
+                                    let history = this.chat_histories.entry(session_id.clone()).or_default();
+                                    history.push(crate::providers::ChatMessage {
+                                        role: "assistant".into(),
+                                        content: "".into(),
+                                        parts: vec![],
+                                        agent_name: Some(agent_name_str.clone().into()),
+                                        thought_duration_secs: None,
+                                    });
+                                    msg_idx = history.len().checked_sub(1);
+                                    this.rebuild_chat_display(&session_id);
+                                    this.refresh_pending_chat_action(cx);
+                                    if this.selected_session_id.as_deref() == Some(session_id.as_str()) {
+                                        let display_len = this
+                                            .chat_display_rows
+                                            .get(&session_id)
+                                            .map(|v| v.len())
+                                            .unwrap_or(0);
+                                        this.chat_list_state = gpui::ListState::new(
+                                            display_len,
+                                            gpui::ListAlignment::Bottom,
+                                            gpui::px(200.),
+                                        );
+                                    }
+                                }
+                                cx.notify();
+                            }));
+
+                            let (stream_tx, mut stream_rx) =
+                                tokio::sync::mpsc::unbounded_channel::<String>();
+                            let view_stream = view_agent.clone();
+                            let db_stream = db_clone_agent.clone();
+                            let msg_id_stream = msg_id.clone();
+                            let session_id_stream = session_id_clone_agent.clone();
+                            let msg_idx_stream = msg_idx;
+                            cx.spawn(async move |cx| {
+                                while let Some(partial) = stream_rx.recv().await {
+                                    let _ = db_stream.update_team_message_content(&msg_id_stream, &partial);
+                                    let Some(msg_idx) = msg_idx_stream else {
+                                        continue;
+                                    };
+                                    let _ = cx.update(|cx| {
+                                        view_stream.update(cx, |this: &mut Self, cx| {
+                                            this.update_chat_message_content(
+                                                &session_id_stream,
+                                                msg_idx,
+                                                partial.clone(),
+                                                None,
+                                                cx,
+                                            );
+                                        });
+                                    });
+                                }
+                            }).detach();
 
                             let result = if let Some(adapter) = build_provider_adapter(&provider_config) {
                                 let mcp_registry = std::sync::Arc::new(
@@ -2592,26 +2830,37 @@ impl TeamWorkspacePanel {
                                             .clone()
                                             .or_else(|| Some(run_id_clone_agent.clone())),
                                         None,
-                                        None,
+                                        Some(std::sync::Arc::new(move |partial| {
+                                            let _ = stream_tx.send(partial);
+                                        })),
                                     );
+                                let response_started_at = std::time::Instant::now();
                                 executor.execute_task(task_prompt).await
+                                    .map(|text| (text, response_started_at.elapsed().as_secs_f64()))
+                                    .map_err(|error| (error, response_started_at.elapsed().as_secs_f64()))
                             } else {
-                                Err(anyhow::anyhow!(
+                                Err((
+                                    anyhow::anyhow!(
                                     "Provider adapter is not supported for /run: {}",
                                     provider_config.provider_name
+                                    ),
+                                    0.0,
                                 ))
                             };
 
+                            let thought_duration_secs = match &result {
+                                Ok((_, seconds)) | Err((_, seconds)) => *seconds,
+                            };
                             let (status_text, status) = match result {
-                                Ok(text) if text.starts_with("Approval required before executing") => (
-                                    format!("[Task Waiting Approval] {}:\n{}", task.id, text),
+                                Ok((text, _)) if text.starts_with("Approval required before executing") => (
+                                    text,
                                     "waiting_approval",
                                 ),
-                                Ok(text) => {
+                                Ok((text, _)) => {
                                     let chat_service = crate::application::services::chat_service::ChatService::new(db_clone_agent.clone(), team_bus_clone_agent.clone());
                                     let (files_written, _) = chat_service.parse_generated_response(&text, workspace_dir_agent.as_ref());
 
-                                    let mut final_text = format!("[Task Completed] {}:\n{}", task.id, text);
+                                    let mut final_text = text;
                                     if !files_written.is_empty() {
                                         final_text.push_str("\n\n**Files Generated/Modified:**\n");
                                         for f in files_written {
@@ -2628,7 +2877,7 @@ impl TeamWorkspacePanel {
 
                                     (final_text, "completed")
                                 },
-                                Err(e) => (format!("[Task Failed] {}:\n{}", task.id, e), "failed"),
+                                Err((e, _)) => (format!("Task failed: {}", e), "failed"),
                             };
 
                             let _ = match status {
@@ -2637,17 +2886,22 @@ impl TeamWorkspacePanel {
                                 _ => db_clone_agent.mark_task_failed(&task.id),
                             };
 
-                            let agent_name_str = agent.name.clone();
-                            let metadata = chat_message_metadata(&agent_name_str, None);
-
-                            let mut msg = crate::teambus::routing::TeamMessage::new_broadcast(
-                                instance_id_clone_agent.clone(),
-                                "assistant".to_string(),
-                                status_text.clone(),
-                            );
-                            msg.metadata = Some(metadata.clone());
-                            let _ = db_clone_agent.insert_team_message(&msg);
-                            let _ = team_bus_clone_agent.route_message(msg).await;
+                            let final_delivery_status = if status == "completed" {
+                                "delivered"
+                            } else {
+                                status
+                            };
+                            let _ = db_clone_agent.update_team_message_content(&msg_id, &status_text);
+                            let _ = db_clone_agent
+                                .update_team_message_delivery_status(&msg_id, final_delivery_status);
+                            let mut final_msg = msg.clone();
+                            final_msg.content = status_text.clone();
+                            final_msg.delivery_status = final_delivery_status.to_string();
+                            final_msg.created_at = chrono::Utc::now().to_rfc3339();
+                            let final_metadata =
+                                chat_message_metadata(&agent_name_str, Some(thought_duration_secs));
+                            final_msg.metadata = Some(final_metadata.clone());
+                            let _ = team_bus_clone_agent.route_message(final_msg).await;
 
                             // Save to database so it persists across reloads!
                             let _ = db_clone_agent.ensure_session(&session_id_clone_agent, &agent_id_clone, Some(&instance_id_clone_agent));
@@ -2655,7 +2909,7 @@ impl TeamWorkspacePanel {
                                 &session_id_clone_agent,
                                 "assistant",
                                 &status_text,
-                                Some(&metadata),
+                                Some(&final_metadata),
                             );
                             let _ = db_clone_agent.touch_session(&session_id_clone_agent);
 
@@ -2666,17 +2920,17 @@ impl TeamWorkspacePanel {
                                     .cloned()
                                     .or_else(|| this.selected_session_id.clone());
                                 if let Some(session_id) = session_id {
-                                    {
-                                        let history = this.chat_histories.entry(session_id.clone()).or_default();
-                                        history.push(crate::providers::ChatMessage {
-                                            role: "assistant".into(),
-                                            content: status_text.clone().into(),
-                                            parts: vec![],
-                                            agent_name: Some(agent_name_str.into()),
-                                            thought_duration_secs: None,
-                                        });
+                                    if let Some(msg_idx) = msg_idx {
+                                        this.update_chat_message_content(
+                                            &session_id,
+                                            msg_idx,
+                                            status_text.clone(),
+                                            Some(thought_duration_secs),
+                                            cx,
+                                        );
                                     }
                                     this.rebuild_chat_display(&session_id);
+                                    this.refresh_pending_chat_action(cx);
                                     if this.selected_session_id.as_deref() == Some(session_id.as_str()) {
                                         let display_len = this
                                             .chat_display_rows
@@ -2776,7 +3030,8 @@ impl TeamWorkspacePanel {
             if let Ok(agent_ids) = db.get_instance_agents(&instance_id_for_ai) {
                 let agent_ids: Vec<String> = agent_ids;
                 let mut current_history = history_clone.clone();
-                let auto_context = crate::application::file_intelligence::build_chat_context(
+                let auto_context_result =
+                    crate::application::file_intelligence::build_chat_context_with_sources(
                     &query_text,
                     &attached_files_for_context,
                     workspace_dir_for_ai.as_deref(),
@@ -2786,15 +3041,41 @@ impl TeamWorkspacePanel {
                     },
                 )
                 .await;
-                if !auto_context.trim().is_empty() {
+                if !auto_context_result.markdown.trim().is_empty() {
                     if let Some(last_user) = current_history
                         .iter_mut()
                         .rev()
                         .find(|msg| msg.role == "user")
                     {
                         last_user.content =
-                            format!("{}{}", last_user.content, auto_context).into();
+                            format!("{}{}", last_user.content, auto_context_result.markdown).into();
                     }
+                }
+                if !auto_context_result.url_analyses.is_empty() {
+                    let results = auto_context_result
+                        .url_analyses
+                        .into_iter()
+                        .map(crate::application::research::web::web_search_result_from_analysis)
+                        .collect::<Vec<_>>();
+                    let notebook = crate::application::research::web::build_research_notebook(
+                        &query_text,
+                        &results,
+                    );
+                    let _ =
+                        crate::application::research::web::save_research_notebook_with_context(
+                            db.clone(),
+                            &query_text,
+                            &notebook,
+                            crate::application::research::web::ResearchNotebookSaveContext {
+                                source_kind: Some("web_research".to_string()),
+                                source_uri_normalized: None,
+                                origin_run_id: Some(run_id_for_ai.clone()),
+                                origin_session_id: Some(session_id_for_ai.clone()),
+                                origin_instance_id: Some(instance_id_for_ai.clone()),
+                                origin_agent_id: None,
+                            },
+                        )
+                        .await;
                 }
 
                 let debate_steps: Vec<(String, &'static str)> = if debate_mode && agent_ids.len() > 1 {
@@ -2897,6 +3178,7 @@ impl TeamWorkspacePanel {
                                             msg_idx = history.len() - 1;
                                         }
                                         this.rebuild_chat_display(&session_id_for_ai);
+                                        this.refresh_pending_chat_action(cx);
                                         let display_len = this
                                             .chat_display_rows
                                             .get(&session_id_for_ai)
@@ -3138,6 +3420,7 @@ impl TeamWorkspacePanel {
                             history.push(crate::providers::ChatMessage { role: "assistant".into(), content: error_text.into(), agent_name: None, thought_duration_secs: None , parts: vec![] });
                         }
                         this.rebuild_chat_display(&session_id_for_ai);
+                        this.refresh_pending_chat_action(cx);
                         let assistant_msg = crate::teambus::routing::TeamMessage::new_broadcast(
                             instance_id_for_ai.clone(),
                             "assistant".to_string(),
@@ -3163,6 +3446,957 @@ impl TeamWorkspacePanel {
         }).detach();
         }
     }
+    pub(crate) fn refresh_pending_chat_action(&mut self, cx: &mut Context<Self>) {
+        let Some(instance_id) = self.selected_instance_id.clone() else {
+            self.pending_chat_action = None;
+            return;
+        };
+        let db = crate::AppState::global(cx).db.clone();
+
+        for request in db.list_pending_approval_requests(100).unwrap_or_default() {
+            let Some(run) = db.get_orchestration_run(&request.run_id).ok().flatten() else {
+                continue;
+            };
+            if run.instance_id != instance_id {
+                continue;
+            }
+
+            let details = approval_operation_details(&request.operation);
+            let tool_name = if details.tool_name.is_empty() {
+                "tool".to_string()
+            } else {
+                details.tool_name
+            };
+            let risk_label = approval_risk_label(&tool_name, details.path.as_deref());
+            self.pending_chat_action = Some(PendingChatAction::Approval {
+                request_id: request.id,
+                run_id: request.run_id,
+                tool_name,
+                command: details.command,
+                path: details.path,
+                risk_label,
+                mode_label: details.mode.or(Some(run.mode)),
+                requested_at: request.created_at,
+            });
+            return;
+        }
+
+        let pending_readback = db
+            .list_recent_collaboration_cases(25)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|case_record| {
+                case_record.owner_instance_id == instance_id
+                    || case_record.target_instance_id == instance_id
+            })
+            .find_map(|case_record| {
+                db.list_case_readbacks(&case_record.id)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|readback| readback.status == "submitted")
+                    .last()
+                    .map(|readback| (case_record, readback))
+            });
+
+        self.pending_chat_action =
+            pending_readback.map(|(case_record, readback)| PendingChatAction::Readback {
+                case_id: case_record.id,
+                readback_id: readback.id,
+                origin_run_id: case_record.origin_run_id,
+                objective: case_record.objective,
+            });
+    }
+
+    fn render_cached_pending_action_summary(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let Some(action) = self.pending_chat_action.clone() else {
+            return div().into_any_element();
+        };
+        let theme = cx.theme().clone();
+
+        match action {
+            PendingChatAction::Approval {
+                request_id,
+                run_id,
+                tool_name,
+                command,
+                path,
+                risk_label,
+                mode_label,
+                requested_at,
+            } => {
+                let approve_id = request_id.clone();
+                let approve_run_id = run_id.clone();
+                let reject_id = request_id.clone();
+                let reject_run_id = run_id.clone();
+
+                div()
+                    .w_full()
+                    .px(px(14.))
+                    .pb(px(8.))
+                    .child(
+                        div()
+                            .w_full()
+                            .rounded_md()
+                            .border_1()
+                            .border_color(gpui::yellow().opacity(0.45))
+                            .bg(gpui::yellow().opacity(0.08))
+                            .p_3()
+                            .flex()
+                            .flex_col()
+                            .gap_2()
+                            .child(
+                                h_flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .gap_2()
+                                    .child(
+                                        h_flex()
+                                            .items_center()
+                                            .gap_2()
+                                            .child(
+                                                Icon::new(IconName::SquareTerminal)
+                                                    .size(px(14.))
+                                                    .text_color(gpui::yellow()),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_sm()
+                                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                    .child("Tool approval required"),
+                                            ),
+                                    )
+                                    .child(
+                                        div()
+                                            .px(px(8.))
+                                            .py(px(3.))
+                                            .rounded_full()
+                                            .bg(gpui::yellow().opacity(0.16))
+                                            .text_color(gpui::yellow())
+                                            .text_size(px(11.))
+                                            .child(risk_label),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap_1()
+                                    .text_size(px(12.))
+                                    .text_color(theme.muted_foreground)
+                                    .child(format!("tool: {}", tool_name))
+                                    .when_some(mode_label, |this, mode| {
+                                        this.child(format!("mode: {}", mode))
+                                    })
+                                    .child(format!("requested: {}", requested_at))
+                                    .when_some(path, |this, path| {
+                                        this.child(format!(
+                                            "path: {}",
+                                            compact_for_card(&path, 180)
+                                        ))
+                                    })
+                                    .when_some(command, |this, command| {
+                                        this.child(format!(
+                                            "command: {}",
+                                            compact_for_card(&command, 180)
+                                        ))
+                                    }),
+                            )
+                            .child(
+                                h_flex()
+                                    .justify_end()
+                                    .gap_2()
+                                    .child(
+                                        Button::new(gpui::SharedString::from(format!(
+                                            "chat-cached-approve-{}",
+                                            approve_id
+                                        )))
+                                        .small()
+                                        .primary()
+                                        .label("Approve")
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            let state = crate::AppState::global(cx);
+                                            let db = state.db.clone();
+                                            let actor_id = state.current_actor_id.clone();
+                                            let _ = db.resolve_approval_request(
+                                                &approve_id,
+                                                "approved",
+                                                Some(&actor_id),
+                                                Some("Approved from chat action card"),
+                                            );
+                                            let _ = db.resolve_waiting_tasks_for_run(
+                                                &approve_run_id,
+                                                "pending",
+                                            );
+                                            let _ = db.update_orchestration_run_status(
+                                                &approve_run_id,
+                                                "running",
+                                                None,
+                                            );
+                                            let _ = db.insert_run_event(
+                                                &crate::core::models::RunEventRecord {
+                                                    id: uuid::Uuid::new_v4().to_string(),
+                                                    run_id: approve_run_id.clone(),
+                                                    event_type: "tool_approval_approved"
+                                                        .to_string(),
+                                                    actor_type: "user".to_string(),
+                                                    actor_id: Some(actor_id),
+                                                    task_id: None,
+                                                    payload: None,
+                                                    created_at: chrono::Utc::now().to_rfc3339(),
+                                                },
+                                            );
+                                            let _ = crate::application::iflow_engine::automation::IFlowAutomation::resume_approved_run(
+                                                db,
+                                                state.team_bus.clone(),
+                                                state.tokio_runtime.clone(),
+                                                &approve_run_id,
+                                            );
+                                            this.refresh_pending_chat_action(cx);
+                                            cx.notify();
+                                        })),
+                                    )
+                                    .child(
+                                        Button::new(gpui::SharedString::from(format!(
+                                            "chat-cached-reject-{}",
+                                            reject_id
+                                        )))
+                                        .small()
+                                        .label("Reject")
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            let state = crate::AppState::global(cx);
+                                            let db = state.db.clone();
+                                            let actor_id = state.current_actor_id.clone();
+                                            let _ = db.resolve_approval_request(
+                                                &reject_id,
+                                                "rejected",
+                                                Some(&actor_id),
+                                                Some("Rejected from chat action card"),
+                                            );
+                                            let _ = db.resolve_waiting_tasks_for_run(
+                                                &reject_run_id,
+                                                "failed",
+                                            );
+                                            let _ = db.update_orchestration_run_status(
+                                                &reject_run_id,
+                                                "failed",
+                                                None,
+                                            );
+                                            let _ = db.insert_run_event(
+                                                &crate::core::models::RunEventRecord {
+                                                    id: uuid::Uuid::new_v4().to_string(),
+                                                    run_id: reject_run_id.clone(),
+                                                    event_type: "tool_approval_rejected"
+                                                        .to_string(),
+                                                    actor_type: "user".to_string(),
+                                                    actor_id: Some(actor_id),
+                                                    task_id: None,
+                                                    payload: None,
+                                                    created_at: chrono::Utc::now().to_rfc3339(),
+                                                },
+                                            );
+                                            let _ = crate::application::iflow_engine::automation::IFlowAutomation::reject_waiting_run(
+                                                db,
+                                                state.team_bus.clone(),
+                                                &reject_run_id,
+                                            );
+                                            this.refresh_pending_chat_action(cx);
+                                            cx.notify();
+                                        })),
+                                    ),
+                            ),
+                    )
+                    .into_any_element()
+            }
+            PendingChatAction::Readback {
+                case_id,
+                readback_id,
+                origin_run_id,
+                objective,
+            } => {
+                let accept_case_id = case_id.clone();
+                let accept_readback_id = readback_id.clone();
+                let answer_prompt = "Tra loi case:\n- Cau tra loi: ".to_string();
+                let label = compact_for_card(&objective, 140);
+                div()
+                    .w_full()
+                    .px(px(14.))
+                    .pb(px(8.))
+                    .child(
+                        h_flex()
+                            .w_full()
+                            .rounded_md()
+                            .border_1()
+                            .border_color(gpui::blue().opacity(0.35))
+                            .bg(gpui::blue().opacity(0.06))
+                            .p_3()
+                            .items_center()
+                            .justify_between()
+                            .gap_3()
+                            .child(
+                                h_flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .min_w_0()
+                                    .child(Icon::new(IconName::Building2).size(px(14.)))
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_col()
+                                            .min_w_0()
+                                            .child(
+                                                div()
+                                                    .text_sm()
+                                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                    .child("Readback awaiting acceptance"),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_size(px(12.))
+                                                    .text_color(theme.muted_foreground)
+                                                    .child(label),
+                                            ),
+                                    ),
+                            )
+                            .child(
+                                h_flex()
+                                    .gap_2()
+                                    .flex_none()
+                                    .child(
+                                        Button::new(gpui::SharedString::from(format!(
+                                            "chat-cached-accept-readback-{}",
+                                            accept_readback_id
+                                        )))
+                                        .small()
+                                        .primary()
+                                        .label("Accept")
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            let state = crate::AppState::global(cx);
+                                            let service =
+                                                crate::application::orchestration::collaboration::CollaborationService::new(
+                                                    state.db.clone(),
+                                                );
+                                            let _ = service.accept_readback(
+                                                &accept_case_id,
+                                                &accept_readback_id,
+                                                &state.current_actor_id,
+                                            );
+                                            if let Some(run_id) = origin_run_id.as_deref() {
+                                                let _ = state.db.update_orchestration_run_status(
+                                                    run_id,
+                                                    "running",
+                                                    None,
+                                                );
+                                                let _ = state
+                                                    .db
+                                                    .resolve_waiting_tasks_for_run(run_id, "pending");
+                                                let _ = crate::application::iflow_engine::automation::IFlowAutomation::resume_approved_run(
+                                                    state.db.clone(),
+                                                    state.team_bus.clone(),
+                                                    state.tokio_runtime.clone(),
+                                                    run_id,
+                                                );
+                                            }
+                                            this.refresh_pending_chat_action(cx);
+                                            cx.notify();
+                                        })),
+                                    )
+                                    .child(
+                                        Button::new(gpui::SharedString::from(format!(
+                                            "chat-cached-answer-readback-{}",
+                                            readback_id
+                                        )))
+                                        .small()
+                                        .label("Answer")
+                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                            this.chat_input_state.update(cx, |state, cx| {
+                                                state.set_value(&answer_prompt, window, cx);
+                                            });
+                                            cx.notify();
+                                        })),
+                                    ),
+                            ),
+                    )
+                    .into_any_element()
+            }
+        }
+    }
+
+    #[allow(dead_code)]
+    fn render_pending_action_summary_legacy(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let Some(instance_id) = self.selected_instance_id.clone() else {
+            return div().into_any_element();
+        };
+        let theme = cx.theme().clone();
+        let db = crate::AppState::global(cx).db.clone();
+
+        let pending_approval = db
+            .list_pending_approval_requests(50)
+            .unwrap_or_default()
+            .into_iter()
+            .find(|request| {
+                db.get_orchestration_run(&request.run_id)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|run| run.instance_id == instance_id)
+            });
+
+        if let Some(request) = pending_approval {
+            let approve_id = request.id.clone();
+            let approve_run_id = request.run_id.clone();
+            let reject_id = request.id.clone();
+            let reject_run_id = request.run_id.clone();
+            let label = compact_for_card(&request.operation, 120);
+            return div()
+                .w_full()
+                .px(px(14.))
+                .pb(px(8.))
+                .child(
+                    h_flex()
+                        .w_full()
+                        .rounded_md()
+                        .border_1()
+                        .border_color(gpui::yellow().opacity(0.45))
+                        .bg(gpui::yellow().opacity(0.08))
+                        .p_3()
+                        .items_center()
+                        .justify_between()
+                        .gap_3()
+                        .child(
+                            h_flex()
+                                .items_center()
+                                .gap_2()
+                                .min_w_0()
+                                .child(Icon::new(IconName::SquareTerminal).size(px(14.)))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .min_w_0()
+                                        .child(
+                                            div()
+                                                .text_sm()
+                                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                .child("Tool approval required"),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(px(12.))
+                                                .text_color(theme.muted_foreground)
+                                                .child(label),
+                                        ),
+                                ),
+                        )
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .flex_none()
+                                .child(
+                                    Button::new(gpui::SharedString::from(format!(
+                                        "chat-summary-approve-{}",
+                                        approve_id
+                                    )))
+                                    .small()
+                                    .primary()
+                                    .label("Approve")
+                                    .on_click(cx.listener(move |_this, _, _, cx| {
+                                        let state = crate::AppState::global(cx);
+                                        let db = state.db.clone();
+                                        let _ = db.resolve_approval_request(
+                                            &approve_id,
+                                            "approved",
+                                            Some(&state.current_actor_id),
+                                            Some("Approved from chat action summary"),
+                                        );
+                                        let _ = db.resolve_waiting_tasks_for_run(
+                                            &approve_run_id,
+                                            "pending",
+                                        );
+                                        let _ = db.update_orchestration_run_status(
+                                            &approve_run_id,
+                                            "running",
+                                            None,
+                                        );
+                                        let _ = crate::application::iflow_engine::automation::IFlowAutomation::resume_approved_run(
+                                            db,
+                                            state.team_bus.clone(),
+                                            state.tokio_runtime.clone(),
+                                            &approve_run_id,
+                                        );
+                                        cx.notify();
+                                    })),
+                                )
+                                .child(
+                                    Button::new(gpui::SharedString::from(format!(
+                                        "chat-summary-reject-{}",
+                                        reject_id
+                                    )))
+                                    .small()
+                                    .label("Reject")
+                                    .on_click(cx.listener(move |_this, _, _, cx| {
+                                        let state = crate::AppState::global(cx);
+                                        let db = state.db.clone();
+                                        let _ = db.resolve_approval_request(
+                                            &reject_id,
+                                            "rejected",
+                                            Some(&state.current_actor_id),
+                                            Some("Rejected from chat action summary"),
+                                        );
+                                        let _ =
+                                            db.resolve_waiting_tasks_for_run(&reject_run_id, "failed");
+                                        let _ = db.update_orchestration_run_status(
+                                            &reject_run_id,
+                                            "failed",
+                                            None,
+                                        );
+                                        let _ = crate::application::iflow_engine::automation::IFlowAutomation::reject_waiting_run(
+                                            db,
+                                            state.team_bus.clone(),
+                                            &reject_run_id,
+                                        );
+                                        cx.notify();
+                                    })),
+                                ),
+                        ),
+                )
+                .into_any_element();
+        }
+
+        let pending_readback = db
+            .list_recent_collaboration_cases(25)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|case_record| {
+                case_record.owner_instance_id == instance_id
+                    || case_record.target_instance_id == instance_id
+            })
+            .find_map(|case_record| {
+                db.list_case_readbacks(&case_record.id)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|readback| readback.status == "submitted")
+                    .last()
+                    .map(|readback| (case_record, readback))
+            });
+
+        if let Some((case_record, readback)) = pending_readback {
+            let accept_case_id = case_record.id.clone();
+            let accept_readback_id = readback.id.clone();
+            let origin_run_id = case_record.origin_run_id.clone();
+            let answer_prompt = "Tra loi case:\n- Cau tra loi: ".to_string();
+            let label = compact_for_card(&case_record.objective, 140);
+            return div()
+                .w_full()
+                .px(px(14.))
+                .pb(px(8.))
+                .child(
+                    h_flex()
+                        .w_full()
+                        .rounded_md()
+                        .border_1()
+                        .border_color(gpui::blue().opacity(0.35))
+                        .bg(gpui::blue().opacity(0.06))
+                        .p_3()
+                        .items_center()
+                        .justify_between()
+                        .gap_3()
+                        .child(
+                            h_flex()
+                                .items_center()
+                                .gap_2()
+                                .min_w_0()
+                                .child(Icon::new(IconName::Building2).size(px(14.)))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .min_w_0()
+                                        .child(
+                                            div()
+                                                .text_sm()
+                                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                .child("Readback awaiting acceptance"),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(px(12.))
+                                                .text_color(theme.muted_foreground)
+                                                .child(label),
+                                        ),
+                                ),
+                        )
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .flex_none()
+                                .child(
+                                    Button::new(gpui::SharedString::from(format!(
+                                        "chat-summary-accept-readback-{}",
+                                        accept_readback_id
+                                    )))
+                                    .small()
+                                    .primary()
+                                    .label("Accept")
+                                    .on_click(cx.listener(move |_this, _, _, cx| {
+                                        let state = crate::AppState::global(cx);
+                                        let service =
+                                            crate::application::orchestration::collaboration::CollaborationService::new(
+                                                state.db.clone(),
+                                            );
+                                        let _ = service.accept_readback(
+                                            &accept_case_id,
+                                            &accept_readback_id,
+                                            &state.current_actor_id,
+                                        );
+                                        if let Some(run_id) = origin_run_id.as_deref() {
+                                            let _ = state.db.update_orchestration_run_status(
+                                                run_id,
+                                                "running",
+                                                None,
+                                            );
+                                            let _ = state
+                                                .db
+                                                .resolve_waiting_tasks_for_run(run_id, "pending");
+                                            let _ = crate::application::iflow_engine::automation::IFlowAutomation::resume_approved_run(
+                                                state.db.clone(),
+                                                state.team_bus.clone(),
+                                                state.tokio_runtime.clone(),
+                                                run_id,
+                                            );
+                                        }
+                                        cx.notify();
+                                    })),
+                                )
+                                .child(
+                                    Button::new(gpui::SharedString::from(format!(
+                                        "chat-summary-answer-readback-{}",
+                                        readback.id
+                                    )))
+                                    .small()
+                                    .label("Answer")
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.chat_input_state.update(cx, |state, cx| {
+                                            state.set_value(&answer_prompt, window, cx);
+                                        });
+                                        cx.notify();
+                                    })),
+                                ),
+                        ),
+                )
+                .into_any_element();
+        }
+
+        div().into_any_element()
+    }
+
+    #[allow(dead_code)]
+    fn render_pending_action_cards_legacy(
+        &self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let Some(instance_id) = self.selected_instance_id.clone() else {
+            return div().into_any_element();
+        };
+        let theme = cx.theme().clone();
+        let db = crate::AppState::global(cx).db.clone();
+        let mut cards = div()
+            .w_full()
+            .px(px(14.))
+            .pb(px(8.))
+            .flex()
+            .flex_col()
+            .gap_2();
+        let mut count = 0usize;
+
+        for request in db
+            .list_pending_approval_requests(1000)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|request| {
+                db.get_orchestration_run(&request.run_id)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|run| run.instance_id == instance_id)
+            })
+            .take(2)
+        {
+            count += 1;
+            let approve_id = request.id.clone();
+            let approve_run_id = request.run_id.clone();
+            let reject_id = request.id.clone();
+            let reject_run_id = request.run_id.clone();
+            let operation_label = compact_for_card(&request.operation, 140);
+
+            cards = cards.child(
+                div()
+                    .w_full()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(gpui::yellow().opacity(0.45))
+                    .bg(gpui::yellow().opacity(0.08))
+                    .p_3()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_3()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .min_w_0()
+                            .child(
+                                h_flex()
+                                    .gap_2()
+                                    .items_center()
+                                    .child(
+                                        Icon::new(IconName::SquareTerminal)
+                                            .size(px(14.))
+                                            .text_color(gpui::yellow()),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                                            .child("Tool approval required"),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .text_color(theme.muted_foreground)
+                                    .child(operation_label),
+                            ),
+                    )
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .flex_none()
+                            .child(
+                                Button::new(gpui::SharedString::from(format!(
+                                    "chat-approve-{}",
+                                    approve_id
+                                )))
+                                .small()
+                                .primary()
+                                .label("Approve")
+                                .on_click(cx.listener(move |_this, _, _, cx| {
+                                    let state = crate::AppState::global(cx);
+                                    let db = state.db.clone();
+                                    let team_bus = state.team_bus.clone();
+                                    let runtime = state.tokio_runtime.clone();
+                                    let actor_id = state.current_actor_id.clone();
+                                    let _ = db.resolve_approval_request(
+                                        &approve_id,
+                                        "approved",
+                                        Some(&actor_id),
+                                        Some("Approved from chat action card"),
+                                    );
+                                    let _ = db
+                                        .resolve_waiting_tasks_for_run(&approve_run_id, "pending");
+                                    let _ = db.update_orchestration_run_status(
+                                        &approve_run_id,
+                                        "running",
+                                        None,
+                                    );
+                                    let _ = crate::application::iflow_engine::automation::IFlowAutomation::resume_approved_run(
+                                        db,
+                                        team_bus,
+                                        runtime,
+                                        &approve_run_id,
+                                    );
+                                    cx.notify();
+                                })),
+                            )
+                            .child(
+                                Button::new(gpui::SharedString::from(format!(
+                                    "chat-reject-{}",
+                                    reject_id
+                                )))
+                                .small()
+                                .label("Reject")
+                                .on_click(cx.listener(move |_this, _, _, cx| {
+                                    let state = crate::AppState::global(cx);
+                                    let db = state.db.clone();
+                                    let team_bus = state.team_bus.clone();
+                                    let actor_id = state.current_actor_id.clone();
+                                    let _ = db.resolve_approval_request(
+                                        &reject_id,
+                                        "rejected",
+                                        Some(&actor_id),
+                                        Some("Rejected from chat action card"),
+                                    );
+                                    let _ =
+                                        db.resolve_waiting_tasks_for_run(&reject_run_id, "failed");
+                                    let _ = db.update_orchestration_run_status(
+                                        &reject_run_id,
+                                        "failed",
+                                        None,
+                                    );
+                                    let _ = crate::application::iflow_engine::automation::IFlowAutomation::reject_waiting_run(
+                                        db,
+                                        team_bus,
+                                        &reject_run_id,
+                                    );
+                                    cx.notify();
+                                })),
+                            ),
+                    ),
+            );
+        }
+
+        for case_record in db
+            .list_recent_collaboration_cases(100)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|case_record| {
+                case_record.owner_instance_id == instance_id
+                    || case_record.target_instance_id == instance_id
+            })
+            .take(50)
+        {
+            let Some(readback) = db
+                .list_case_readbacks(&case_record.id)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|readback| readback.status == "submitted")
+                .last()
+            else {
+                continue;
+            };
+            count += 1;
+            if count > 4 {
+                break;
+            }
+
+            let accept_case_id = case_record.id.clone();
+            let accept_readback_id = readback.id.clone();
+            let origin_run_id = case_record.origin_run_id.clone();
+            let objective = compact_for_card(&case_record.objective, 150);
+            let understanding = compact_for_card(&readback.understanding, 150);
+            let questions = readback_questions_label(&readback.questions_json);
+            let answer_prompt = "Trả lời case:\n- Câu trả lời: ".to_string();
+
+            cards = cards.child(
+                div()
+                    .w_full()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(gpui::blue().opacity(0.35))
+                    .bg(gpui::blue().opacity(0.06))
+                    .p_3()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_3()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .min_w_0()
+                            .child(
+                                h_flex()
+                                    .gap_2()
+                                    .items_center()
+                                    .child(
+                                        Icon::new(IconName::Building2)
+                                            .size(px(14.))
+                                            .text_color(gpui::blue()),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                                            .child("Readback awaiting acceptance"),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .text_color(theme.muted_foreground)
+                                    .child(objective),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .text_color(theme.foreground)
+                                    .child(format!("Understanding: {}", understanding)),
+                            )
+                            .when_some(questions, |this, questions| {
+                                this.child(
+                                    div()
+                                        .text_size(px(12.))
+                                        .text_color(theme.muted_foreground)
+                                        .child(format!("Questions: {}", questions)),
+                                )
+                            }),
+                    )
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .flex_none()
+                            .child(
+                                Button::new(gpui::SharedString::from(format!(
+                                    "chat-accept-readback-{}",
+                                    accept_readback_id
+                                )))
+                                .small()
+                                .primary()
+                                .label("Accept")
+                                .on_click(cx.listener(move |_this, _, _, cx| {
+                                    let state = crate::AppState::global(cx);
+                                    let service =
+                                        crate::application::orchestration::collaboration::CollaborationService::new(
+                                            state.db.clone(),
+                                        );
+                                    let _ = service.accept_readback(
+                                        &accept_case_id,
+                                        &accept_readback_id,
+                                        &state.current_actor_id,
+                                    );
+                                    if let Some(run_id) = origin_run_id.as_deref() {
+                                        let _ = state.db.update_orchestration_run_status(
+                                            run_id,
+                                            "running",
+                                            None,
+                                        );
+                                        let _ =
+                                            state.db.resolve_waiting_tasks_for_run(run_id, "pending");
+                                        let _ = crate::application::iflow_engine::automation::IFlowAutomation::resume_approved_run(
+                                            state.db.clone(),
+                                            state.team_bus.clone(),
+                                            state.tokio_runtime.clone(),
+                                            run_id,
+                                        );
+                                    }
+                                    cx.notify();
+                                })),
+                            )
+                            .child(
+                                Button::new(gpui::SharedString::from(format!(
+                                    "chat-answer-readback-{}",
+                                    readback.id
+                                )))
+                                .small()
+                                .label("Answer")
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.chat_input_state.update(cx, |state, cx| {
+                                        state.set_value(&answer_prompt, window, cx);
+                                    });
+                                    cx.notify();
+                                })),
+                            ),
+                    ),
+            );
+        }
+
+        if count == 0 {
+            return div().into_any_element();
+        }
+        cards.into_any_element()
+    }
+
     pub(crate) fn render_entry(
         &mut self,
         ix: usize,
@@ -3175,9 +4409,8 @@ impl TeamWorkspacePanel {
             return div().into_any_element();
         };
 
-        let _history = self.chat_histories.entry(session_id.clone()).or_default();
-        if !self.chat_display_rows.contains_key(&session_id) {
-            self.rebuild_chat_display(&session_id);
+        if !self.chat_histories.contains_key(&session_id) {
+            return div().into_any_element();
         }
         let Some(rows) = self.chat_display_rows.get(&session_id) else {
             return div().into_any_element();
@@ -3228,11 +4461,6 @@ impl TeamWorkspacePanel {
                         from_team_label
                     }
                 };
-                let correlation_short = if correlation_id.len() > 8 {
-                    &correlation_id[..8]
-                } else {
-                    &correlation_id
-                };
                 // Smart badge: 3 states based on has_request + has_response
                 let (status_color, status_label) = if has_response {
                     (gpui::green(), "✓ Responded")
@@ -3241,7 +4469,7 @@ impl TeamWorkspacePanel {
                 } else {
                     (gpui::blue(), "Handoff")
                 };
-                return div()
+                let thread_card = div()
                     .id(("cross-team-thread", ix))
                     .w_full()
                     .px(px(12.))
@@ -3316,10 +4544,7 @@ impl TeamWorkspacePanel {
                                                 div()
                                                     .text_size(px(12.))
                                                     .text_color(theme.muted_foreground)
-                                                    .child(format!(
-                                                        "{} - {}",
-                                                        correlation_short, from_team_short
-                                                    )),
+                                                    .child(from_team_short),
                                             ),
                                     ),
                             )
@@ -3329,7 +4554,12 @@ impl TeamWorkspacePanel {
                                     .text_color(theme.muted_foreground)
                                     .child(preview),
                             ),
-                    )
+                    );
+                return div()
+                    .w_full()
+                    .px(px(4.))
+                    .py(px(5.))
+                    .child(thread_card)
                     .into_any_element();
             }
             super::ChatDisplayRow::Message { source_index, msg } => (source_index, msg),
@@ -3340,14 +4570,23 @@ impl TeamWorkspacePanel {
         let msg_key = format!("{}_{}", session_id, source_index);
         let is_expanded = self.expanded_messages.contains(&msg_key);
 
-        // Count lines for user message to see if we need collapse
-        let lines: Vec<&str> = msg.content.lines().collect();
-        let needs_collapse = is_user && lines.len() > 5;
+        let line_count = msg.content.lines().count();
+        let is_large_message = line_count > CHAT_COLLAPSE_LINE_LIMIT
+            || exceeds_char_limit(msg.content.as_ref(), CHAT_COLLAPSE_CHAR_LIMIT);
+        let needs_collapse = (is_user && line_count > 5) || (!is_user && is_large_message);
 
         let content_to_render = if needs_collapse && !is_expanded {
-            // Show only first line + indicator
-            let first_line = lines.first().unwrap_or(&"");
-            format!("{} ...", first_line)
+            if is_user {
+                let first_line = msg.content.lines().next().unwrap_or("");
+                format!("{} ...", first_line)
+            } else {
+                truncate_chars_with_marker(
+                    msg.content.as_ref(),
+                    CHAT_COLLAPSE_CHAR_LIMIT,
+                    "\n\n[content collapsed for render safety; expand to view more]",
+                )
+                .unwrap_or_else(|| msg.content.to_string())
+            }
         } else {
             msg.content.to_string()
         };
@@ -3414,6 +4653,14 @@ impl TeamWorkspacePanel {
             }
         }
 
+        if let Some(truncated) = truncate_chars_with_marker(
+            &display_content,
+            CHAT_RENDER_CHAR_LIMIT,
+            "\n\n[truncated for render safety]",
+        ) {
+            display_content = truncated;
+        }
+
         let agent_avatar = div()
             .w(px(28.))
             .h(px(28.))
@@ -3436,6 +4683,7 @@ impl TeamWorkspacePanel {
         };
 
         let elem = if is_user {
+            let collapse_key = msg_key.clone();
             h_flex()
                 .id(("msg-row", ix))
                 .group("msg_row")
@@ -3498,6 +4746,7 @@ impl TeamWorkspacePanel {
                         .flex()
                         .child(text_element)
                         .when(needs_collapse, |d: gpui::Div| {
+                            let collapse_key = collapse_key.clone();
                             d.child(
                                 div()
                                     .id(("collapse-btn", ix))
@@ -3510,10 +4759,10 @@ impl TeamWorkspacePanel {
                                         IconName::ChevronDown
                                     })
                                     .on_click(cx.listener(move |this, _, _, cx| {
-                                        if this.expanded_messages.contains(&msg_key) {
-                                            this.expanded_messages.remove(&msg_key);
+                                        if this.expanded_messages.contains(&collapse_key) {
+                                            this.expanded_messages.remove(&collapse_key);
                                         } else {
-                                            this.expanded_messages.insert(msg_key.clone());
+                                            this.expanded_messages.insert(collapse_key.clone());
                                         }
                                         cx.notify();
                                     })),
@@ -3522,6 +4771,7 @@ impl TeamWorkspacePanel {
                 )
                 .into_any_element()
         } else {
+            let collapse_key = msg_key.clone();
             div()
                 .w_full()
                 .flex()
@@ -3552,6 +4802,39 @@ impl TeamWorkspacePanel {
                                         .overflow_hidden()
                                         .child(text_element),
                                 )
+                                .when(needs_collapse, |this| {
+                                    let collapse_key = collapse_key.clone();
+                                    this.child(
+                                        div()
+                                            .id(("assistant-collapse-btn", ix))
+                                            .mt(px(6.))
+                                            .flex()
+                                            .items_center()
+                                            .gap(px(4.))
+                                            .cursor_pointer()
+                                            .text_size(px(12.))
+                                            .text_color(theme.muted_foreground)
+                                            .child(if is_expanded {
+                                                IconName::ChevronUp
+                                            } else {
+                                                IconName::ChevronDown
+                                            })
+                                            .child(if is_expanded {
+                                                "Show less"
+                                            } else {
+                                                "Show more"
+                                            })
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                if this.expanded_messages.contains(&collapse_key) {
+                                                    this.expanded_messages.remove(&collapse_key);
+                                                } else {
+                                                    this.expanded_messages
+                                                        .insert(collapse_key.clone());
+                                                }
+                                                cx.notify();
+                                            })),
+                                    )
+                                })
                                 .when_some(thought_duration_secs, |this, seconds| {
                                     this.child(
                                         div()
@@ -3577,12 +4860,106 @@ impl TeamWorkspacePanel {
         theme: &gpui_component::Theme,
         cx: &mut Window,
     ) -> gpui::AnyElement {
+        let safe_content = truncate_chars_with_marker(
+            content,
+            CHAT_RENDER_CHAR_LIMIT,
+            "\n\n[truncated for render safety]",
+        );
+        let content = safe_content.as_deref().unwrap_or(content);
+
         if let Some(html) = extract_renderable_html(content) {
             return crate::ui::text::html(html)
                 .selectable(true)
                 .into_any_element();
         }
         render_markdown_message(content, theme, cx).into_any_element()
+    }
+}
+
+fn exceeds_char_limit(value: &str, limit: usize) -> bool {
+    value.chars().nth(limit).is_some()
+}
+
+fn truncate_chars_with_marker(value: &str, max_chars: usize, marker: &str) -> Option<String> {
+    let mut chars = value.chars();
+    let mut out = String::new();
+    for _ in 0..max_chars {
+        let Some(ch) = chars.next() else {
+            return None;
+        };
+        out.push(ch);
+    }
+    if chars.next().is_none() {
+        return None;
+    }
+    out.push_str(marker);
+    Some(out)
+}
+
+#[derive(Default)]
+struct ApprovalOperationDetails {
+    tool_name: String,
+    command: Option<String>,
+    path: Option<String>,
+    mode: Option<String>,
+}
+
+fn approval_operation_details(operation: &str) -> ApprovalOperationDetails {
+    let mut details = ApprovalOperationDetails::default();
+    details.mode = operation
+        .rsplit_once(":mode=")
+        .map(|(_, mode)| mode.trim().to_string())
+        .filter(|mode| !mode.is_empty());
+
+    let Some(rest) = operation.strip_prefix("tool:") else {
+        return details;
+    };
+    let Some((tool_name, tail)) = rest.split_once(':') else {
+        details.tool_name = rest.trim().to_string();
+        return details;
+    };
+    details.tool_name = tool_name.trim().to_string();
+
+    let summary = if let Some((summary, _)) = tail.split_once(":payload=") {
+        summary
+    } else if tail.starts_with("payload=") {
+        ""
+    } else {
+        tail.split(":mode=").next().unwrap_or(tail)
+    };
+
+    for part in summary
+        .split(';')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+    {
+        if let Some(path) = part.strip_prefix("path=") {
+            details.path = Some(path.trim().to_string()).filter(|path| !path.is_empty());
+        } else if let Some(command) = part.strip_prefix("command=") {
+            details.command =
+                Some(command.trim().to_string()).filter(|command| !command.is_empty());
+        }
+    }
+
+    details
+}
+
+fn approval_risk_label(tool_name: &str, path: Option<&str>) -> String {
+    match crate::application::orchestration::tool_gateway::ToolExecutionGateway::risk_for(
+        tool_name, false,
+    ) {
+        crate::application::orchestration::tool_gateway::ToolRisk::ReadOnly if path.is_some() => {
+            "external path".to_string()
+        }
+        crate::application::orchestration::tool_gateway::ToolRisk::ReadOnly => {
+            "read-only".to_string()
+        }
+        crate::application::orchestration::tool_gateway::ToolRisk::ControlledMutation => {
+            "controlled mutation".to_string()
+        }
+        crate::application::orchestration::tool_gateway::ToolRisk::Sensitive => {
+            "sensitive".to_string()
+        }
     }
 }
 
@@ -3613,4 +4990,31 @@ fn extract_renderable_html(content: &str) -> Option<String> {
         return Some(trimmed.to_string());
     }
     None
+}
+
+fn compact_for_card(value: &str, max_chars: usize) -> String {
+    let trimmed = value.trim();
+    if trimmed.chars().count() <= max_chars {
+        return trimmed.to_string();
+    }
+    let head: String = trimmed.chars().take(max_chars.saturating_sub(1)).collect();
+    format!("{}...", head)
+}
+
+#[allow(dead_code)]
+fn readback_questions_label(questions_json: &str) -> Option<String> {
+    let value = serde_json::from_str::<serde_json::Value>(questions_json).ok()?;
+    let questions = value
+        .as_array()?
+        .iter()
+        .filter_map(|item| item.as_str().map(str::trim))
+        .filter(|item| !item.is_empty())
+        .take(3)
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    if questions.is_empty() {
+        None
+    } else {
+        Some(compact_for_card(&questions.join("; "), 180))
+    }
 }

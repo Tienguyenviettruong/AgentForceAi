@@ -324,7 +324,7 @@ impl GovernanceManager {
             .ok()
             .flatten()
             .and_then(|value| value.parse::<usize>().ok())
-            .unwrap_or(100_000);
+            .unwrap_or(1_000_000);
         let used = db.get_total_tokens_for_run(run_id).unwrap_or(0);
         if used >= limit {
             let reason = format!("Token budget exhausted: {} / {} tokens.", used, limit);

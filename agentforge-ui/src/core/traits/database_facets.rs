@@ -34,6 +34,7 @@ pub trait WorkerCoordinationPort: ProviderConfigPort {
         agent_id: &str,
         instance_id: &str,
     ) -> anyhow::Result<bool>;
+    fn recover_stale_in_progress_tasks(&self, max_age_seconds: u64) -> anyhow::Result<usize>;
     fn mark_task_completed(&self, task_id: &str) -> anyhow::Result<()>;
     fn mark_task_failed(&self, task_id: &str) -> anyhow::Result<()>;
     fn mark_task_waiting_approval(&self, task_id: &str) -> anyhow::Result<()>;
@@ -76,6 +77,10 @@ impl<T: DatabasePort + ?Sized> WorkerCoordinationPort for T {
         instance_id: &str,
     ) -> anyhow::Result<bool> {
         DatabasePort::claim_task_for_instance(self, task_id, agent_id, instance_id)
+    }
+
+    fn recover_stale_in_progress_tasks(&self, max_age_seconds: u64) -> anyhow::Result<usize> {
+        DatabasePort::recover_stale_in_progress_tasks(self, max_age_seconds)
     }
 
     fn mark_task_completed(&self, task_id: &str) -> anyhow::Result<()> {

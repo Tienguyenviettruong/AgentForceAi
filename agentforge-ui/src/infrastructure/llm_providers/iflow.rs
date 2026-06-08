@@ -135,9 +135,8 @@ impl BaseProviderAdapter for IFlowAdapter {
             .join("\n");
         Box::pin(async move {
             let (tx, rx) = futures::channel::mpsc::unbounded();
-            let rt = get_runtime();
 
-            rt.spawn(async move {
+            tokio::spawn(async move {
                 let mut command = tokio::process::Command::new(cmd);
                 if let Some(wid) = workflow_id {
                     command.arg("--workflow").arg(wid);

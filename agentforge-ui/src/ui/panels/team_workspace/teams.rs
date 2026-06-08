@@ -280,6 +280,7 @@ impl TeamWorkspacePanel {
                     this.workspace_path = None;
                 }
 
+                this.refresh_pending_chat_action(cx);
                 cx.notify();
             }))
             .border(px(1.))
@@ -442,6 +443,7 @@ impl TeamWorkspacePanel {
                 }
                 this.selected_team_id = Some(id_str.clone());
                 this.selected_instance_id = None;
+                this.pending_chat_action = None;
                 cx.notify();
             }))
             .hover(|s| s.bg(theme.secondary))

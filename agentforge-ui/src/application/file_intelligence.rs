@@ -69,6 +69,12 @@ impl FileAnalysis {
     }
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct ChatContextBuildResult {
+    pub markdown: String,
+    pub url_analyses: Vec<FileAnalysis>,
+}
+
 pub async fn analyze_path(path: impl AsRef<Path>, options: AnalyzeOptions) -> Result<FileAnalysis> {
     let path = path.as_ref().to_path_buf();
     let bytes =
@@ -178,7 +184,19 @@ pub async fn build_chat_context(
     workspace_dir: Option<&str>,
     options: AnalyzeOptions,
 ) -> String {
+    build_chat_context_with_sources(user_text, attached_files, workspace_dir, options)
+        .await
+        .markdown
+}
+
+pub async fn build_chat_context_with_sources(
+    user_text: &str,
+    attached_files: &[String],
+    workspace_dir: Option<&str>,
+    options: AnalyzeOptions,
+) -> ChatContextBuildResult {
     let mut sections = Vec::new();
+    let mut url_analyses = Vec::new();
 
     for file in attached_files {
         let trimmed = file.trim();
@@ -192,7 +210,12 @@ pub async fn build_chat_context(
         };
 
         match result {
-            Ok(analysis) => sections.push(analysis.render_markdown(options.max_text_chars)),
+            Ok(analysis) => {
+                if is_http_url(trimmed) {
+                    url_analyses.push(analysis.clone());
+                }
+                sections.push(analysis.render_markdown(options.max_text_chars));
+            }
             Err(e) => sections.push(format!(
                 "### {}\n- Source: {}\n- Error: {}\n",
                 display_name_from_source(trimmed),
@@ -205,7 +228,10 @@ pub async fn build_chat_context(
     for url in extract_urls(user_text) {
         let result = analyze_url(&url, options).await;
         match result {
-            Ok(analysis) => sections.push(analysis.render_markdown(options.max_text_chars)),
+            Ok(analysis) => {
+                url_analyses.push(analysis.clone());
+                sections.push(analysis.render_markdown(options.max_text_chars));
+            }
             Err(e) => sections.push(format!(
                 "### {}\n- Source: {}\n- Error: {}\n",
                 display_name_from_source(&url),
@@ -216,7 +242,10 @@ pub async fn build_chat_context(
     }
 
     if sections.is_empty() {
-        return String::new();
+        return ChatContextBuildResult {
+            markdown: String::new(),
+            url_analyses,
+        };
     }
 
     let mut out = String::new();
@@ -224,7 +253,10 @@ pub async fn build_chat_context(
     out.push_str("AgentForge extracted this context before sending the prompt to the provider. Use it as grounded source material; mention extraction limits when relevant.\n\n");
     out.push_str(&sections.join("\n"));
     out.push_str("\n--- END AUTO-EXTRACTED CONTEXT ---\n");
-    out
+    ChatContextBuildResult {
+        markdown: out,
+        url_analyses,
+    }
 }
 
 pub fn extract_urls(text: &str) -> Vec<String> {

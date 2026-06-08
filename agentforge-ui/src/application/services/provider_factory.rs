@@ -6,12 +6,15 @@ use std::sync::Mutex;
 /// Determine provider kind from provider config
 pub fn provider_kind(p: &crate::db::Provider) -> &str {
     match p.provider_name.as_str() {
-        "openrouter" | "claude" | "gemini" | "codex" | "opencode" => p.provider_name.as_str(),
+        "openrouter" | "claude" | "gemini" | "codex" | "opencode" | "custom" => {
+            p.provider_name.as_str()
+        }
         _ => match p.adapter_type.as_str() {
             "AnthropicAdapter" => "claude",
             "OpenAIAdapter" => "codex",
             "GeminiAdapter" => "gemini",
             "OpenCodeAdapter" => "opencode",
+            "CustomAdapter" => "custom",
             _ => p.provider_name.as_str(),
         },
     }
@@ -63,15 +66,17 @@ pub fn create_adapter(
                 None
             }
         }
-        _ => {
-            // Default fallback to openrouter
-            let mut adapter = crate::providers::openrouter::OpenRouterAdapter::new();
+        "custom" => {
+            let mut adapter = crate::infrastructure::llm_providers::custom::CustomAdapterSDK::new(
+                "CustomAdapter",
+            );
             if adapter.initialize(provider_config).is_ok() {
                 Some(Arc::new(adapter) as Arc<dyn BaseProviderAdapter>)
             } else {
                 None
             }
         }
+        _ => None,
     }
 }
 
@@ -139,4 +144,34 @@ pub fn resolve_provider_config(
                     .find(|p| provider_kind(p) == agent.provider.as_str())
             })
         })
+}
+
+#[cfg(test)]
+mod tests {
+    fn provider(adapter_type: &str, provider_name: &str) -> crate::db::Provider {
+        crate::db::Provider {
+            id: "provider-test".to_string(),
+            provider_name: provider_name.to_string(),
+            model: "test-model".to_string(),
+            adapter_type: adapter_type.to_string(),
+            command: Some("https://example.test".to_string()),
+            api_key_ref: Some("env:AGENTFORGE_TEST_KEY".to_string()),
+            status: "active".to_string(),
+            capabilities: None,
+        }
+    }
+
+    #[test]
+    fn custom_adapter_maps_to_custom_provider() {
+        let provider = provider("CustomAdapter", "ClaudePro");
+        assert_eq!(super::provider_kind(&provider), "custom");
+        let adapter = super::create_adapter(&provider).expect("custom adapter should initialize");
+        assert_eq!(adapter.provider_id(), "custom");
+    }
+
+    #[test]
+    fn unknown_adapter_fails_closed() {
+        let provider = provider("UnknownAdapter", "unknown-provider");
+        assert!(super::create_adapter(&provider).is_none());
+    }
 }

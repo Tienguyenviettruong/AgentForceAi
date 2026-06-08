@@ -1,3 +1,4 @@
+use crate::application::orchestration::role_policy;
 use crate::application::orchestration::tool_gateway::{
     PolicyDecision, ToolExecutionGateway, ToolRequest,
 };
@@ -23,6 +24,7 @@ pub struct ToolCall {
 
 #[derive(Clone, Debug)]
 struct ContextTokenizerProfile {
+    profile_id: &'static str,
     chars_per_token: usize,
     cjk_chars_per_token: usize,
     punctuation_chars_per_token: usize,
@@ -38,6 +40,7 @@ impl ContextTokenizerProfile {
         );
         if identity.contains("claude") {
             Self {
+                profile_id: "anthropic-claude-heuristic-v2",
                 chars_per_token: 3,
                 cjk_chars_per_token: 1,
                 punctuation_chars_per_token: 4,
@@ -51,6 +54,7 @@ impl ContextTokenizerProfile {
             || identity.contains("gemma")
         {
             Self {
+                profile_id: "code-and-cjk-heavy-heuristic-v2",
                 chars_per_token: 3,
                 cjk_chars_per_token: 1,
                 punctuation_chars_per_token: 4,
@@ -58,6 +62,7 @@ impl ContextTokenizerProfile {
             }
         } else if identity.contains("gemini") {
             Self {
+                profile_id: "google-gemini-heuristic-v2",
                 chars_per_token: 4,
                 cjk_chars_per_token: 1,
                 punctuation_chars_per_token: 5,
@@ -65,6 +70,7 @@ impl ContextTokenizerProfile {
             }
         } else {
             Self {
+                profile_id: "generic-openai-compatible-heuristic-v2",
                 chars_per_token: 4,
                 cjk_chars_per_token: 1,
                 punctuation_chars_per_token: 6,
@@ -133,6 +139,92 @@ pub struct AgentExecutor {
 }
 
 impl AgentExecutor {
+    fn normalize_route_key(value: &str) -> String {
+        value
+            .trim()
+            .to_lowercase()
+            .chars()
+            .filter(|ch| ch.is_ascii_alphanumeric())
+            .collect()
+    }
+
+    fn json_string_field<'a>(value: &'a serde_json::Value, key: &str) -> &'a str {
+        value.get(key).and_then(|v| v.as_str()).unwrap_or("").trim()
+    }
+
+    fn derive_task_title(title: &str, description: &str, role: &str) -> String {
+        let title = title.trim();
+        if !title.is_empty() {
+            return title.chars().take(96).collect();
+        }
+
+        let first_line = description
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .unwrap_or("");
+        let first_line = first_line
+            .trim_start_matches(|ch: char| {
+                ch.is_ascii_digit() || ch == '.' || ch == ')' || ch == '-'
+            })
+            .trim();
+        if !first_line.is_empty() {
+            return first_line.chars().take(96).collect();
+        }
+
+        let role = role.trim();
+        if role.is_empty() {
+            "Delegated task".to_string()
+        } else {
+            format!("{} task", role)
+        }
+    }
+
+    fn current_agent_role(&self) -> String {
+        self.db
+            .get_agent(&self.agent_id)
+            .ok()
+            .flatten()
+            .map(|agent| agent.routing_role())
+            .unwrap_or_else(|| "Agent".to_string())
+    }
+
+    fn available_agent_assignments(
+        &self,
+    ) -> (HashMap<String, crate::core::models::Agent>, Vec<String>) {
+        let mut assignment_map = HashMap::new();
+        let mut available_roles = Vec::new();
+
+        let agent_ids = self
+            .db
+            .get_instance_agents(&self.team_instance_id)
+            .unwrap_or_default();
+        for agent_id in agent_ids {
+            let Ok(Some(agent)) = self.db.get_agent(&agent_id) else {
+                continue;
+            };
+            if agent.status.to_lowercase() == "offline" {
+                continue;
+            }
+
+            let role = agent.routing_role();
+            if !available_roles.iter().any(|existing| existing == &role) {
+                available_roles.push(role.clone());
+            }
+
+            for key in role_policy::assignment_keys_for_agent(&agent) {
+                assignment_map.insert(key.clone(), agent.clone());
+                let normalized = role_policy::normalize_route_key(&key);
+                if !normalized.is_empty() {
+                    assignment_map.insert(normalized, agent.clone());
+                }
+            }
+        }
+
+        available_roles.sort();
+        (assignment_map, available_roles)
+    }
+
     pub fn new(
         provider: Arc<dyn BaseProviderAdapter>,
         mcp_registry: Arc<McpToolRegistry>,
@@ -393,9 +485,14 @@ impl AgentExecutor {
             .map(|message| format!("{}:\n{}", message.role, message.content))
             .collect::<Vec<_>>()
             .join("\n\n");
+        let tokenizer_profile = self.context_tokenizer_profile();
+        let estimated_request_tokens = tokenizer_profile.estimate_tokens(&request_content);
         let selected_capabilities = serde_json::json!({
             "provider": self.provider.provider_id(),
             "request_index": request_index,
+            "tokenizer_profile": tokenizer_profile.profile_id,
+            "estimated_request_tokens": estimated_request_tokens,
+            "redaction_status": "context_hash_only_full_prompt_not_persisted",
             "capabilities": selected_capabilities,
         });
         let now = chrono::Utc::now().to_rfc3339();
@@ -535,6 +632,32 @@ impl AgentExecutor {
         .await
     }
 
+    fn max_tool_iterations_for(&self, history: &[ChatMessage]) -> usize {
+        if let Some(configured) = self
+            .db
+            .get_setting("agent_executor_max_tool_iterations")
+            .ok()
+            .flatten()
+            .and_then(|value| value.parse::<usize>().ok())
+        {
+            return configured.clamp(1, 100);
+        }
+
+        let task_text = history
+            .iter()
+            .rev()
+            .find(|message| message.role == "user")
+            .map(|message| message.content.as_ref())
+            .unwrap_or_default();
+        match role_policy::canonical_task_type("", "", task_text).as_str() {
+            "implementation" | "build" | "operations" => 25,
+            "testing" => 18,
+            "documentation" | "content" | "design" | "marketing" => 14,
+            "planning" | "product" | "analysis" | "research" | "architecture" => 10,
+            _ => 8,
+        }
+    }
+
     pub async fn execute_task(&self, mut history: Vec<ChatMessage>) -> Result<String> {
         if self
             .cancel_flag
@@ -546,10 +669,16 @@ impl AgentExecutor {
         }
         self.record_run_event("agent_execution_started", None, None);
         let mut iteration = 0;
-        let max_iterations = 5;
+        let max_iterations = self.max_tool_iterations_for(&history);
+        let current_agent_role = self.current_agent_role();
 
         // Apply Smart Context Pruning (summarize evicted messages)
+        tracing::debug!("AgentExecutor starting smart_prune_history");
         history = self.smart_prune_history(&history, 20).await;
+        tracing::debug!(
+            history_len = history.len(),
+            "AgentExecutor smart_prune_history completed"
+        );
 
         // 1. Tool Injection
         let mut tools_json = serde_json::json!({
@@ -670,7 +799,7 @@ impl AgentExecutor {
                 },
                 {
                     "name": "create_subtasks",
-                    "description": "Create subtasks and dispatch them to agents with specific roles.",
+                    "description": "Create a finite, non-duplicated task plan and dispatch each task to an available agent routing role with matching competency. Call this at most once for a user goal, then provide a concise final summary. If this instance lacks the required competency, use handoff_to_team instead of assigning the task to an unrelated role.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -679,10 +808,12 @@ impl AgentExecutor {
                                 "items": {
                                     "type": "object",
                                     "properties": {
-                                        "description": { "type": "string" },
-                                        "role": { "type": "string" }
+                                        "title": { "type": "string", "description": "Short human-readable task title. Do not use an agent role as the title." },
+                                        "description": { "type": "string", "description": "Concrete work to perform, scoped to the user goal." },
+                                        "role": { "type": "string", "description": "Exact routing_role from Team Members Available. The role must have matching competency/allowed_task_types for this work." },
+                                        "task_type": { "type": "string", "description": "Domain-agnostic task category such as planning, product, analysis, research, documentation, implementation, testing, build, architecture, design, content, marketing, operations, review, or handoff. Coordinator may only receive non-artifact-changing task types." }
                                     },
-                                    "required": ["description", "role"]
+                                    "required": ["title", "description", "role", "task_type"]
                                 }
                             }
                         },
@@ -719,7 +850,7 @@ impl AgentExecutor {
                 },
                 {
                     "name": "web_search",
-                    "description": "Search the web, optionally fetch result pages, extract page content, and save a Research Notebook for grounded citations.",
+                    "description": "Search the web, fetch/extract source content when requested, and always save a Research Notebook for grounded citations.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -732,26 +863,26 @@ impl AgentExecutor {
                                 "description": "Optional domain filters such as openai.com or docs.rs."
                             },
                             "fetch_pages": { "type": "boolean", "description": "Fetch and extract result pages. Default true." },
-                            "save_notebook": { "type": "boolean", "description": "Save extracted results into the Research Notebook/knowledge base. Default true." }
+                            "save_notebook": { "type": "boolean", "description": "Deprecated; web searches are always captured in the Research Notebook." }
                         },
                         "required": ["query"]
                     }
                 },
                 {
                     "name": "fetch_url",
-                    "description": "Fetch one URL, extract readable content using file intelligence, and optionally save it to the Research Notebook.",
+                    "description": "Fetch one URL, extract readable content using file intelligence, and always save it to the Research Notebook.",
                     "parameters": {
                         "type": "object",
                         "properties": {
                             "url": { "type": "string" },
-                            "save_notebook": { "type": "boolean", "description": "Default true." }
+                            "save_notebook": { "type": "boolean", "description": "Deprecated; fetched URLs are always captured in the Research Notebook." }
                         },
                         "required": ["url"]
                     }
                 },
                 {
                     "name": "run_cli",
-                    "description": "Run a command or shell snippet in the configured workspace. Supports cwd, stdin, timeout, and works for every provider through this executor.",
+                    "description": "Run a build/test/diagnostic command or shell snippet in the configured workspace. Do not use this to create directories or files; write_file creates parent directories automatically. Supports cwd, stdin, timeout, and works for every provider through this executor. External or unavailable working directories pause for governance approval.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -770,7 +901,7 @@ impl AgentExecutor {
                 },
                 {
                     "name": "write_file",
-                    "description": "Write content to a file in the workspace. Creates parent directories if needed. Use for creating new files.",
+                    "description": "Write content to a file in the selected workspace. Creates parent directories if needed. Use this for project/file creation; do not ask the user to provide files manually. Absolute or out-of-workspace paths pause for governance approval.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -782,7 +913,7 @@ impl AgentExecutor {
                 },
                 {
                     "name": "read_file",
-                    "description": "Read and understand an existing file in the workspace. Supports text, HTML/XML, PDF, DOCX, XLSX, PPTX, OpenDocument, ZIP listings, and media metadata.",
+                    "description": "Read and understand an existing file. In-workspace reads are allowed; absolute or out-of-workspace reads pause for governance approval. Supports text, HTML/XML, PDF, DOCX, XLSX, PPTX, OpenDocument, ZIP listings, and media metadata.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -794,7 +925,7 @@ impl AgentExecutor {
                 },
                 {
                     "name": "analyze_file",
-                    "description": "Alias for read_file when the intent is document/media analysis rather than raw text.",
+                    "description": "Alias for read_file when the intent is document/media analysis rather than raw text. External paths pause for governance approval.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -806,7 +937,7 @@ impl AgentExecutor {
                 },
                 {
                     "name": "edit_file",
-                    "description": "Edit an existing file by finding and replacing text. Use this to modify specific parts of existing files.",
+                    "description": "Edit an existing file by finding and replacing text. Use this to modify specific parts of existing files. Absolute or out-of-workspace paths pause for governance approval.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -905,6 +1036,7 @@ impl AgentExecutor {
                 }
             }
         }
+        role_policy::filter_tools_json_for_role(&mut tools_json, &current_agent_role);
 
         let tools_schema_str = serde_json::to_string_pretty(&tools_json).unwrap();
 
@@ -1007,10 +1139,15 @@ impl AgentExecutor {
                     }
                 }
                 // 2c. Vector/semantic search on knowledge_chunks (embedding-based)
-                if let Ok(query_vec) = crate::providers::embeddings::EmbeddingProvider::new()
-                    .get_embedding(&query)
-                    .await
-                {
+                // Use a timeout so a slow/unavailable ONNX model never blocks the chat.
+                tracing::debug!("AgentExecutor requesting semantic RAG embedding");
+                let embedding_result = tokio::time::timeout(
+                    tokio::time::Duration::from_secs(5),
+                    crate::providers::embeddings::EmbeddingProvider::new().get_embedding(&query),
+                )
+                .await;
+                if let Ok(Ok(query_vec)) = embedding_result {
+                    tracing::debug!("AgentExecutor semantic RAG embedding completed");
                     if let Ok(similar) = self.db.search_similar_chunks(&query_vec, 3) {
                         if !similar.is_empty() {
                             if !any {
@@ -1335,7 +1472,9 @@ impl AgentExecutor {
             let mut response_text = String::new();
             let mut tool_calls = Vec::<ToolCall>::new();
             let mut token_usage = crate::core::models::TokenUsage::default();
+            tracing::debug!(iteration, "AgentExecutor calling provider stream");
             let mut stream = self.provider.send_message_stream(history.clone()).await?;
+            tracing::debug!("AgentExecutor provider stream opened");
             use futures::StreamExt;
             while let Some(chunk) = stream.next().await {
                 if self
@@ -1348,17 +1487,41 @@ impl AgentExecutor {
                 }
                 match chunk {
                     Ok(crate::core::models::chat::StreamChunk::Text(t)) => {
+                        if response_text.is_empty() {
+                            tracing::debug!("AgentExecutor received first stream chunk");
+                        }
                         response_text.push_str(&t);
                         if let Some(cb) = &self.stream_callback {
                             cb(Self::sanitize_for_display(&response_text));
                         }
                     }
                     Ok(crate::core::models::chat::StreamChunk::Done(u)) => {
+                        tracing::debug!("AgentExecutor provider stream completed");
                         token_usage = u;
                         break;
                     }
-                    Err(e) => return Err(anyhow::anyhow!("Stream error: {}", e)),
+                    Err(e) => {
+                        tracing::warn!(error = %e, "AgentExecutor provider stream failed");
+                        return Err(anyhow::anyhow!("Stream error: {}", e));
+                    }
                 }
+            }
+            tracing::debug!(
+                response_len = response_text.len(),
+                "AgentExecutor stream loop completed"
+            );
+            if response_text.trim().is_empty() {
+                self.record_run_event(
+                    "agent_response_empty",
+                    None,
+                    Some(
+                        "Provider completed streaming without text. Check custom provider model, protocol, streaming support, and endpoint response format."
+                            .to_string(),
+                    ),
+                );
+                return Err(anyhow::anyhow!(
+                    "Provider returned an empty response. Verify the selected model/deployment id, base URL/protocol, and whether the provider supports streaming chat completions."
+                ));
             }
             let _ = self.db.insert_token_usage(
                 Some(&self.team_instance_id),
@@ -1416,12 +1579,16 @@ impl AgentExecutor {
                 thought_duration_secs: None,
             });
 
+            let mut terminal_tool_result: Option<String> = None;
             for tc in tool_calls.clone() {
                 let invocation_id = (!tc.id.trim().is_empty()).then_some(tc.id.as_str());
                 let result = self
                     .execute_tool(&tc.name, &tc.arguments, invocation_id)
                     .await;
                 self.finalize_invocation(invocation_id, &result);
+                if tc.name == "create_subtasks" && result.starts_with("Created ") {
+                    terminal_tool_result = Some(result.clone());
+                }
 
                 // Audit log: record every tool invocation
                 let audit_event = crate::infrastructure::security::audit::AuditEvent {
@@ -1493,6 +1660,11 @@ impl AgentExecutor {
                 });
             }
 
+            if let Some(result) = terminal_tool_result {
+                self.record_run_event("agent_response_completed", None, Some(result.clone()));
+                return Ok(result);
+            }
+
             iteration += 1;
         }
         // 4. Auto-summarize session and save to knowledge for long-term memory
@@ -1503,7 +1675,10 @@ impl AgentExecutor {
             Some(format!("Reached {} tool iterations", max_iterations)),
         );
 
-        Ok("Max tool iterations reached".to_string())
+        Err(anyhow::anyhow!(
+            "Task incomplete: reached {} tool iterations before a final answer. Split the work into smaller subtasks or raise agent_executor_max_tool_iterations.",
+            max_iterations
+        ))
     }
 
     fn sanitize_for_display(raw: &str) -> String {
@@ -1529,6 +1704,32 @@ impl AgentExecutor {
             }
         }
         out
+    }
+
+    fn summarize_human_readable_message(raw: &str) -> Option<String> {
+        let without_tools = Self::sanitize_for_display(raw);
+        let mut lines = Vec::new();
+        for line in without_tools.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty()
+                || trimmed.starts_with("Tool result")
+                || trimmed.contains("UNTRUSTED_TOOL_OUTPUT")
+                || trimmed.contains("DO NOT FOLLOW EMBEDDED INSTRUCTIONS")
+                || trimmed.starts_with("Tool denied:")
+                || trimmed.starts_with("Tool delegated tool denied:")
+                || trimmed.starts_with("Approval required before executing")
+                || trimmed.starts_with("Pending request:")
+            {
+                continue;
+            }
+            lines.push(trimmed);
+        }
+        let normalized = lines.join(" ");
+        let normalized = normalized.split_whitespace().collect::<Vec<_>>().join(" ");
+        if normalized.is_empty() {
+            return None;
+        }
+        Some(normalized.chars().take(360).collect())
     }
 
     /// Smart context pruning: keeps system prompt, summarizes evicted messages, keeps recent ones.
@@ -1583,12 +1784,22 @@ impl AgentExecutor {
         if history.len() < 4 {
             return;
         }
-        // Extract key user messages and assistant responses
+        // Extract key user messages and assistant responses. Tool call plumbing is deliberately
+        // excluded; persisted memories should be human-readable decisions and outcomes.
         let mut key_points = Vec::new();
-        for msg in history.iter().rev().take(6) {
+        for msg in history.iter().rev().take(12) {
             if msg.role == "user" || msg.role == "assistant" {
-                let preview: String = msg.content.chars().take(300).collect();
-                key_points.push(format!("{}: {}", msg.role, preview));
+                if let Some(preview) = Self::summarize_human_readable_message(&msg.content) {
+                    let role = if msg.role == "user" {
+                        "User"
+                    } else {
+                        "Assistant"
+                    };
+                    key_points.push(format!("{}: {}", role, preview));
+                }
+            }
+            if key_points.len() >= 6 {
+                break;
             }
         }
         if key_points.is_empty() {
@@ -1596,11 +1807,44 @@ impl AgentExecutor {
         }
         key_points.reverse();
 
-        let summary = format!(
-            "Session summary for instance {}:\n{}",
-            self.team_instance_id,
-            key_points.join("\n")
+        let instance_name = self
+            .db
+            .list_instances()
+            .unwrap_or_default()
+            .into_iter()
+            .find(|instance| instance.id == self.team_instance_id)
+            .map(|instance| instance.name)
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or_else(|| self.team_instance_id.clone());
+
+        let related_titles = self
+            .db
+            .get_all_knowledge_entries()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|entry| entry.instance_id.as_deref() == Some(&self.team_instance_id))
+            .filter(|entry| entry.title.starts_with("Session Summary"))
+            .take(6)
+            .map(|entry| entry.title)
+            .collect::<Vec<_>>();
+
+        let mut summary = format!(
+            "# Session Summary\n\nInstance: {}\n\n## Key Points\n",
+            instance_name
         );
+        for point in key_points {
+            summary.push_str("- ");
+            summary.push_str(&point);
+            summary.push('\n');
+        }
+        if !related_titles.is_empty() {
+            summary.push_str("\n## Related Memories\n");
+            for title in related_titles {
+                summary.push_str("- [[");
+                summary.push_str(&title);
+                summary.push_str("]]\n");
+            }
+        }
 
         let entry = crate::core::models::knowledge::KnowledgeEntry {
             id: uuid::Uuid::new_v4().to_string(),
@@ -1625,6 +1869,11 @@ impl AgentExecutor {
         args: &serde_json::Value,
         invocation_id: Option<&str>,
     ) -> String {
+        let current_agent_role = self.current_agent_role();
+        if !role_policy::tool_allowed_for_role(&current_agent_role, name) {
+            return role_policy::tool_denied_message(&current_agent_role, name);
+        }
+
         if matches!(
             name,
             "validate_lesson"
@@ -1656,7 +1905,7 @@ impl AgentExecutor {
         }
         let is_mcp = selected_mcp.is_some();
         let gateway = self.tool_gateway();
-        match gateway.authorize_runtime(&ToolRequest {
+        let tool_request = ToolRequest {
             tool_name: name,
             payload: args,
             instance_id: &self.team_instance_id,
@@ -1665,7 +1914,8 @@ impl AgentExecutor {
             invocation_id,
             delegated_agent_id: &self.agent_id,
             is_mcp,
-        }) {
+        };
+        match gateway.authorize_runtime(&tool_request) {
             PolicyDecision::Allowed => {}
             PolicyDecision::ApprovalRequired { request_id } => {
                 return format!(
@@ -2041,36 +2291,131 @@ impl AgentExecutor {
                             .map(|i| i.team_id)
                     })
                     .unwrap_or_default();
-                let name_map = self
-                    .db
-                    .get_instance_agent_name_mapping(&self.team_instance_id)
-                    .unwrap_or_default();
+                let (assignment_map, available_roles) = self.available_agent_assignments();
+                let available_agents: Vec<crate::core::models::Agent> = assignment_map
+                    .values()
+                    .cloned()
+                    .fold(Vec::new(), |mut agents, agent| {
+                        if !agents.iter().any(|existing| existing.id == agent.id) {
+                            agents.push(agent);
+                        }
+                        agents
+                    });
+                if available_roles.is_empty() {
+                    return "Task assignment rejected: no online agents are available in this instance."
+                        .to_string();
+                }
+
+                struct PlannedTaskAssignment {
+                    title: String,
+                    description: String,
+                    requested_role: String,
+                    assigned_role: String,
+                    task_type: String,
+                    agent: crate::core::models::Agent,
+                }
+
+                let mut planned_tasks = Vec::<PlannedTaskAssignment>::new();
+                let mut validation_errors = Vec::<String>::new();
+
+                for (idx, t) in tasks.iter().enumerate() {
+                    let desc = Self::json_string_field(t, "description").to_string();
+                    let requested_role = Self::json_string_field(t, "role").to_string();
+                    let task_type = Self::json_string_field(t, "task_type").to_string();
+                    let title = Self::derive_task_title(
+                        Self::json_string_field(t, "title"),
+                        &desc,
+                        &requested_role,
+                    );
+                    if requested_role.trim().is_empty() {
+                        validation_errors.push(format!("Task {} is missing role.", idx + 1));
+                        continue;
+                    }
+
+                    let normalized_role = Self::normalize_route_key(&requested_role);
+                    let Some(agent) = assignment_map
+                        .get(&requested_role)
+                        .or_else(|| assignment_map.get(&normalized_role))
+                        .cloned()
+                    else {
+                        validation_errors.push(format!(
+                            "Task '{}' requested invalid role '{}'. Available roles: {}.",
+                            title,
+                            requested_role,
+                            available_roles.join(", ")
+                        ));
+                        continue;
+                    };
+
+                    let assigned_role = agent.routing_role();
+                    if let Err(reason) = role_policy::validate_agent_task_assignment(
+                        &agent, &task_type, &title, &desc,
+                    ) {
+                        let capable = role_policy::capable_agent_labels_for_task(
+                            &available_agents,
+                            &task_type,
+                            &title,
+                            &desc,
+                        );
+                        let capable = if capable.is_empty() {
+                            "none in this instance; hand off to a peer instance with matching competency".to_string()
+                        } else {
+                            capable.join(", ")
+                        };
+                        validation_errors.push(format!(
+                            "Task '{}': {} Capable agents here: {}.",
+                            title, reason, capable
+                        ));
+                        continue;
+                    }
+
+                    planned_tasks.push(PlannedTaskAssignment {
+                        title,
+                        description: desc,
+                        requested_role,
+                        assigned_role,
+                        task_type,
+                        agent,
+                    });
+                }
+
+                if !validation_errors.is_empty() {
+                    return format!(
+                        "Task assignment rejected:\n- {}\nAvailable roles: {}.",
+                        validation_errors.join("\n- "),
+                        available_roles.join(", ")
+                    );
+                }
+
                 let mut workflow_node_ids = Vec::new();
                 let mut workflow_nodes = Vec::<(String, String, String, String)>::new();
-                for t in tasks {
-                    let desc = t.get("description").and_then(|v| v.as_str()).unwrap_or("");
-                    let role = t.get("role").and_then(|v| v.as_str()).unwrap_or("");
-                    let assignee_id = name_map.get(role).map(|s| s.as_str());
+                for planned in planned_tasks {
                     let dag_id = uuid::Uuid::new_v4().to_string();
                     let task_id = format!("{}:{}", self.team_instance_id, dag_id);
-                    let payload =
-                        serde_json::to_string(&crate::application::orchestration::core::DagTask {
-                            id: dag_id.clone(),
-                            name: role.to_string(),
-                            description: desc.to_string(),
-                            dependencies: Vec::new(),
-                            priority: 2,
-                            deadline: None,
-                            assignee_id: assignee_id.map(|s| s.to_string()),
-                        })
-                        .unwrap_or_default();
+                    let assignee_id = planned.agent.id.as_str();
+                    let assignee_name = planned.agent.name.clone();
+                    let payload = serde_json::json!({
+                        "id": dag_id.clone(),
+                        "name": planned.title.clone(),
+                        "title": planned.title.clone(),
+                        "description": planned.description.clone(),
+                        "role": planned.assigned_role.clone(),
+                        "requested_role": planned.requested_role.clone(),
+                        "task_type": planned.task_type.clone(),
+                        "dependencies": [],
+                        "priority": 2,
+                        "deadline": null,
+                        "assignee_id": assignee_id,
+                        "assignee_name": assignee_name,
+                    })
+                    .to_string();
                     if !team_id.is_empty() {
                         let _ = self.db.upsert_task(
                             &task_id,
                             &team_id,
                             Some(&self.team_instance_id),
                             self.run_id.as_deref(),
-                            assignee_id,
+                            Some(assignee_id),
                             "pending",
                             "medium",
                             Some(&payload),
@@ -2080,16 +2425,16 @@ impl AgentExecutor {
                         crate::infrastructure::message_bus::routing::TeamMessage::new_role_group(
                             self.team_instance_id.clone(),
                             self.agent_id.clone(),
-                            role.to_string(),
-                            format!("[NEW_TASK] {}", desc),
+                            planned.assigned_role.clone(),
+                            format!("[NEW_TASK] {}\n{}", planned.title, planned.description),
                         );
                     let _ = self.team_bus.route_message(msg).await;
                     workflow_node_ids.push(dag_id.clone());
                     workflow_nodes.push((
                         dag_id,
-                        role.to_string(),
-                        desc.to_string(),
-                        assignee_id.unwrap_or("auto").to_string(),
+                        planned.title,
+                        planned.description,
+                        assignee_id.to_string(),
                     ));
                 }
                 if !workflow_node_ids.is_empty() {
@@ -2261,10 +2606,7 @@ impl AgentExecutor {
                 .get("fetch_pages")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(true);
-            let save_notebook = args
-                .get("save_notebook")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(true);
+            let _requested_save_notebook = args.get("save_notebook").and_then(|v| v.as_bool());
             let domains = args
                 .get("domains")
                 .and_then(|v| v.as_array())
@@ -2296,17 +2638,22 @@ impl AgentExecutor {
                 Ok(results) => {
                     let notebook =
                         crate::application::research::web::build_research_notebook(query, &results);
-                    let saved_to = if save_notebook {
-                        crate::application::research::web::save_research_notebook(
+                    let saved_to =
+                        crate::application::research::web::save_research_notebook_with_context(
                             self.db.clone(),
                             query,
                             &notebook,
+                            crate::application::research::web::ResearchNotebookSaveContext {
+                                source_kind: Some("web_research".to_string()),
+                                source_uri_normalized: None,
+                                origin_run_id: self.run_id.clone(),
+                                origin_session_id: self.session_id.clone(),
+                                origin_instance_id: Some(self.team_instance_id.clone()),
+                                origin_agent_id: Some(self.agent_id.clone()),
+                            },
                         )
                         .await
-                        .ok()
-                    } else {
-                        None
-                    };
+                        .ok();
                     let mut response = format!(
                         "Search results for '{}': {} result(s).\n",
                         query,
@@ -2327,25 +2674,27 @@ impl AgentExecutor {
             if url.trim().is_empty() {
                 return "Error: url is required.".to_string();
             }
-            let save_notebook = args
-                .get("save_notebook")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(true);
+            let _requested_save_notebook = args.get("save_notebook").and_then(|v| v.as_bool());
             match crate::application::research::web::fetch_url_as_result(url).await {
                 Ok(result) => {
                     let notebook =
                         crate::application::research::web::build_research_notebook(url, &[result]);
-                    let saved_to = if save_notebook {
-                        crate::application::research::web::save_research_notebook(
+                    let saved_to =
+                        crate::application::research::web::save_research_notebook_with_context(
                             self.db.clone(),
                             url,
                             &notebook,
+                            crate::application::research::web::ResearchNotebookSaveContext {
+                                source_kind: Some("web_research".to_string()),
+                                source_uri_normalized: None,
+                                origin_run_id: self.run_id.clone(),
+                                origin_session_id: self.session_id.clone(),
+                                origin_instance_id: Some(self.team_instance_id.clone()),
+                                origin_agent_id: Some(self.agent_id.clone()),
+                            },
                         )
                         .await
-                        .ok()
-                    } else {
-                        None
-                    };
+                        .ok();
                     let mut response = String::new();
                     if let Some(target) = saved_to {
                         response.push_str(&format!("Research Notebook saved to: {}\n\n", target));
@@ -2411,7 +2760,7 @@ impl AgentExecutor {
                 .filter(|value| !value.trim().is_empty())
                 .unwrap_or(".");
             let working_dir =
-                match gateway.resolve_workspace_path(&self.team_instance_id, requested_cwd) {
+                match gateway.resolve_authorized_tool_path(&tool_request, requested_cwd) {
                     Ok(path) => path,
                     Err(reason) => return reason,
                 };
@@ -2479,7 +2828,7 @@ impl AgentExecutor {
             if file_path.is_empty() {
                 return "Error: path is required.".to_string();
             }
-            let resolved = match gateway.resolve_workspace_path(&self.team_instance_id, file_path) {
+            let resolved = match gateway.resolve_authorized_tool_path(&tool_request, file_path) {
                 Ok(path) => path,
                 Err(reason) => return reason,
             };
@@ -2502,7 +2851,7 @@ impl AgentExecutor {
                 .and_then(|v| v.as_u64())
                 .unwrap_or(16_000)
                 .clamp(1_000, 80_000) as usize;
-            let resolved = match gateway.resolve_workspace_path(&self.team_instance_id, file_path) {
+            let resolved = match gateway.resolve_authorized_tool_path(&tool_request, file_path) {
                 Ok(path) => path,
                 Err(reason) => return reason,
             };
@@ -2529,7 +2878,7 @@ impl AgentExecutor {
             if file_path.is_empty() || find_text.is_empty() {
                 return "Error: path and find are required.".to_string();
             }
-            let resolved = match gateway.resolve_workspace_path(&self.team_instance_id, file_path) {
+            let resolved = match gateway.resolve_authorized_tool_path(&tool_request, file_path) {
                 Ok(path) => path,
                 Err(reason) => return reason,
             };
