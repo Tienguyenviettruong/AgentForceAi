@@ -243,11 +243,19 @@ pub fn open_new_agent_dialog<V: 'static>(
     on_success: impl Fn(&mut V, &mut Context<V>) + 'static + Clone,
 ) {
     let name_input = cx.new(|cx| InputState::new(window, cx).placeholder("Agent name"));
-    let system_prompt_input =
-        cx.new(|cx| InputState::new(window, cx).placeholder("System prompt (optional)"));
+    let system_prompt_input = cx.new(|cx| {
+        InputState::new(window, cx)
+            .multi_line(true)
+            .auto_grow(3, 10)
+            .placeholder("System prompt (optional)")
+    });
     let role_input = cx.new(|cx| InputState::new(window, cx).placeholder("Role / Position"));
-    let details_input =
-        cx.new(|cx| InputState::new(window, cx).placeholder("Agent Details / Info"));
+    let details_input = cx.new(|cx| {
+        InputState::new(window, cx)
+            .multi_line(true)
+            .auto_grow(2, 8)
+            .placeholder("Agent Details / Info")
+    });
 
     let providers: Vec<SharedString> = db
         .list_providers()
@@ -859,7 +867,10 @@ pub fn open_edit_agent_dialog<V: 'static>(
         state
     });
     let system_prompt_input = cx.new(|cx| {
-        let mut state = InputState::new(window, cx).placeholder("System prompt (optional)");
+        let mut state = InputState::new(window, cx)
+            .multi_line(true)
+            .auto_grow(3, 10)
+            .placeholder("System prompt (optional)");
         if let Some(sp) = &agent_to_edit.system_prompt {
             state.replace(sp.clone(), window, cx);
         }
@@ -871,7 +882,10 @@ pub fn open_edit_agent_dialog<V: 'static>(
         state
     });
     let details_input = cx.new(|cx| {
-        let mut state = InputState::new(window, cx).placeholder("Agent Details / Info");
+        let mut state = InputState::new(window, cx)
+            .multi_line(true)
+            .auto_grow(2, 8)
+            .placeholder("Agent Details / Info");
         state.replace(current_details, window, cx);
         state
     });

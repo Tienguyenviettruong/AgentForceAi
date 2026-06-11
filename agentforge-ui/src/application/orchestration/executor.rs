@@ -139,6 +139,15 @@ pub struct AgentExecutor {
 }
 
 impl AgentExecutor {
+    const DISPLAY_PROTOCOL_MARKERS: [&'static str; 6] = [
+        "<|channel>thought<channel|>",
+        "<|channel>final<channel|>",
+        "<|channel>analysis<channel|>",
+        "<|start|>",
+        "<|end|>",
+        "<|message|>",
+    ];
+
     fn normalize_route_key(value: &str) -> String {
         value
             .trim()
@@ -1703,7 +1712,9 @@ impl AgentExecutor {
                 break;
             }
         }
-        out
+        Self::DISPLAY_PROTOCOL_MARKERS
+            .iter()
+            .fold(out, |text, marker| text.replace(marker, ""))
     }
 
     fn summarize_human_readable_message(raw: &str) -> Option<String> {

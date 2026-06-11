@@ -1,0 +1,1318 @@
+{
+  "schema": "agentforge.office.assets.v1",
+  "tile_size": 40,
+  "style": {
+    "projection": "top_down_pixel",
+    "background": "transparent_png",
+    "palette": "dark office with violet, blue, green, and warm wood accents"
+  },
+  "static_atlas": {
+    "file": "office_static_atlas.png",
+    "width": 512,
+    "height": 492,
+    "frames": {
+      "desk_single": {
+        "x": 4,
+        "y": 4,
+        "w": 96,
+        "h": 64,
+        "anchor": {
+          "x": 48,
+          "y": 58
+        },
+        "file": "sprites/furniture/desk_single.png"
+      },
+      "desk_dual": {
+        "x": 104,
+        "y": 4,
+        "w": 128,
+        "h": 80,
+        "anchor": {
+          "x": 64,
+          "y": 72
+        },
+        "file": "sprites/furniture/desk_dual.png"
+      },
+      "standing_desk": {
+        "x": 236,
+        "y": 4,
+        "w": 96,
+        "h": 72,
+        "anchor": {
+          "x": 48,
+          "y": 64
+        },
+        "file": "sprites/furniture/standing_desk.png"
+      },
+      "office_chair_blue": {
+        "x": 336,
+        "y": 4,
+        "w": 40,
+        "h": 48,
+        "anchor": {
+          "x": 20,
+          "y": 44
+        },
+        "file": "sprites/furniture/office_chair_blue.png"
+      },
+      "office_chair_violet": {
+        "x": 380,
+        "y": 4,
+        "w": 40,
+        "h": 48,
+        "anchor": {
+          "x": 20,
+          "y": 44
+        },
+        "file": "sprites/furniture/office_chair_violet.png"
+      },
+      "guest_chair": {
+        "x": 424,
+        "y": 4,
+        "w": 44,
+        "h": 46,
+        "anchor": {
+          "x": 22,
+          "y": 44
+        },
+        "file": "sprites/furniture/guest_chair.png"
+      },
+      "sofa_3seat": {
+        "x": 4,
+        "y": 88,
+        "w": 128,
+        "h": 64,
+        "anchor": {
+          "x": 64,
+          "y": 57
+        },
+        "file": "sprites/furniture/sofa_3seat.png"
+      },
+      "sofa_side": {
+        "x": 136,
+        "y": 88,
+        "w": 64,
+        "h": 120,
+        "anchor": {
+          "x": 33,
+          "y": 109
+        },
+        "file": "sprites/furniture/sofa_side.png"
+      },
+      "coffee_table": {
+        "x": 204,
+        "y": 88,
+        "w": 96,
+        "h": 56,
+        "anchor": {
+          "x": 48,
+          "y": 49
+        },
+        "file": "sprites/furniture/coffee_table.png"
+      },
+      "meeting_table": {
+        "x": 304,
+        "y": 88,
+        "w": 144,
+        "h": 72,
+        "anchor": {
+          "x": 72,
+          "y": 66
+        },
+        "file": "sprites/furniture/meeting_table.png"
+      },
+      "reception_counter": {
+        "x": 4,
+        "y": 212,
+        "w": 160,
+        "h": 72,
+        "anchor": {
+          "x": 80,
+          "y": 70
+        },
+        "file": "sprites/waiting_room/reception_counter.png"
+      },
+      "bookshelf": {
+        "x": 168,
+        "y": 212,
+        "w": 120,
+        "h": 52,
+        "anchor": {
+          "x": 60,
+          "y": 47
+        },
+        "file": "sprites/furniture/bookshelf.png"
+      },
+      "waiting_bench": {
+        "x": 292,
+        "y": 212,
+        "w": 144,
+        "h": 64,
+        "anchor": {
+          "x": 72,
+          "y": 61
+        },
+        "file": "sprites/waiting_room/waiting_bench.png"
+      },
+      "queue_rope": {
+        "x": 4,
+        "y": 288,
+        "w": 96,
+        "h": 48,
+        "anchor": {
+          "x": 48,
+          "y": 43
+        },
+        "file": "sprites/waiting_room/queue_rope.png"
+      },
+      "lounge_rug": {
+        "x": 104,
+        "y": 288,
+        "w": 128,
+        "h": 80,
+        "anchor": {
+          "x": 64,
+          "y": 70
+        },
+        "file": "sprites/waiting_room/lounge_rug.png"
+      },
+      "floor_wayfinding_arrow": {
+        "x": 236,
+        "y": 288,
+        "w": 80,
+        "h": 40,
+        "anchor": {
+          "x": 40,
+          "y": 32
+        },
+        "file": "sprites/waiting_room/floor_wayfinding_arrow.png"
+      },
+      "plant_tall": {
+        "x": 320,
+        "y": 288,
+        "w": 48,
+        "h": 72,
+        "anchor": {
+          "x": 24,
+          "y": 66
+        },
+        "file": "sprites/decor/plant_tall.png"
+      },
+      "plant_small": {
+        "x": 372,
+        "y": 288,
+        "w": 40,
+        "h": 48,
+        "anchor": {
+          "x": 20,
+          "y": 43
+        },
+        "file": "sprites/decor/plant_small.png"
+      },
+      "floor_lamp": {
+        "x": 416,
+        "y": 288,
+        "w": 48,
+        "h": 80,
+        "anchor": {
+          "x": 24,
+          "y": 73
+        },
+        "file": "sprites/decor/floor_lamp.png"
+      },
+      "wall_frame": {
+        "x": 4,
+        "y": 372,
+        "w": 56,
+        "h": 40,
+        "anchor": {
+          "x": 28,
+          "y": 34
+        },
+        "file": "sprites/decor/wall_frame.png"
+      },
+      "wall_clock": {
+        "x": 64,
+        "y": 372,
+        "w": 40,
+        "h": 40,
+        "anchor": {
+          "x": 20,
+          "y": 36
+        },
+        "file": "sprites/decor/wall_clock.png"
+      },
+      "whiteboard": {
+        "x": 108,
+        "y": 372,
+        "w": 96,
+        "h": 56,
+        "anchor": {
+          "x": 48,
+          "y": 48
+        },
+        "file": "sprites/decor/whiteboard.png"
+      },
+      "water_cooler": {
+        "x": 208,
+        "y": 372,
+        "w": 44,
+        "h": 72,
+        "anchor": {
+          "x": 22,
+          "y": 66
+        },
+        "file": "sprites/decor/water_cooler.png"
+      },
+      "glass_divider": {
+        "x": 256,
+        "y": 372,
+        "w": 120,
+        "h": 52,
+        "anchor": {
+          "x": 60,
+          "y": 48
+        },
+        "file": "sprites/decor/glass_divider.png"
+      },
+      "neon_status_panel": {
+        "x": 380,
+        "y": 372,
+        "w": 64,
+        "h": 48,
+        "anchor": {
+          "x": 32,
+          "y": 43
+        },
+        "file": "sprites/decor/neon_status_panel.png"
+      },
+      "floor_dev_tile": {
+        "x": 448,
+        "y": 372,
+        "w": 40,
+        "h": 40,
+        "anchor": {
+          "x": 20,
+          "y": 20
+        },
+        "file": "sprites/tiles/floor_dev_tile.png"
+      },
+      "floor_lounge_tile": {
+        "x": 4,
+        "y": 448,
+        "w": 40,
+        "h": 40,
+        "anchor": {
+          "x": 20,
+          "y": 20
+        },
+        "file": "sprites/tiles/floor_lounge_tile.png"
+      },
+      "wall_segment": {
+        "x": 48,
+        "y": 448,
+        "w": 40,
+        "h": 40,
+        "anchor": {
+          "x": 20,
+          "y": 39
+        },
+        "file": "sprites/tiles/wall_segment.png"
+      },
+      "glass_wall_tile": {
+        "x": 92,
+        "y": 448,
+        "w": 40,
+        "h": 40,
+        "anchor": {
+          "x": 20,
+          "y": 37
+        },
+        "file": "sprites/tiles/glass_wall_tile.png"
+      }
+    }
+  },
+  "categories": {
+    "characters": [
+      {
+        "id": "employee_engineer_idle",
+        "file": "sprites/characters/employee_engineer_idle.png",
+        "type": "sprite_sheet",
+        "frame_width": 48,
+        "frame_height": 64,
+        "frames": 6,
+        "fps": 8,
+        "anchor": {
+          "x": 24,
+          "y": 55
+        },
+        "tags": [
+          "employee",
+          "engineer",
+          "idle"
+        ]
+      },
+      {
+        "id": "employee_engineer_walk",
+        "file": "sprites/characters/employee_engineer_walk.png",
+        "type": "sprite_sheet",
+        "frame_width": 48,
+        "frame_height": 64,
+        "frames": 8,
+        "fps": 10,
+        "anchor": {
+          "x": 24,
+          "y": 55
+        },
+        "tags": [
+          "employee",
+          "engineer",
+          "walk"
+        ]
+      },
+      {
+        "id": "employee_engineer_typing",
+        "file": "sprites/characters/employee_engineer_typing.png",
+        "type": "sprite_sheet",
+        "frame_width": 48,
+        "frame_height": 64,
+        "frames": 6,
+        "fps": 8,
+        "anchor": {
+          "x": 24,
+          "y": 55
+        },
+        "tags": [
+          "employee",
+          "engineer",
+          "typing"
+        ]
+      },
+      {
+        "id": "employee_engineer_talk",
+        "file": "sprites/characters/employee_engineer_talk.png",
+        "type": "sprite_sheet",
+        "frame_width": 48,
+        "frame_height": 64,
+        "frames": 6,
+        "fps": 8,
+        "anchor": {
+          "x": 24,
+          "y": 55
+        },
+        "tags": [
+          "employee",
+          "engineer",
+          "talk"
+        ]
+      },
+      {
+        "id": "employee_engineer_wave",
+        "file": "sprites/characters/employee_engineer_wave.png",
+        "type": "sprite_sheet",
+        "frame_width": 48,
+        "frame_height": 64,
+        "frames": 6,
+        "fps": 8,
+        "anchor": {
+          "x": 24,
+          "y": 55
+        },
+        "tags": [
+          "employee",
+          "engineer",
+          "wave"
+        ]
+      },
+      {
+        "id": "employee_designer_idle",
+        "file": "sprites/characters/employee_designer_idle.png",
+        "type": "sprite_sheet",
+        "frame_width": 48,
+        "frame_height": 64,
+        "frames": 6,
+        "fps": 8,
+        "anchor": {
+          "x": 24,
+          "y": 55
+        },
+        "tags": [
+          "employee",
+          "designer",
+          "idle"
+        ]
+      },
+      {
+        "id": "employee_designer_walk",
+        "file": "sprites/characters/employee_designer_walk.png",
+        "type": "sprite_sheet",
+        "frame_width": 48,
+        "frame_height": 64,
+        "frames": 8,
+        "fps": 10,
+        "anchor": {
+          "x": 24,
+          "y": 55
+        },
+        "tags": [
+          "employee",
+          "designer",
+          "walk"
+        ]
+      },
+      {
+        "id": "employee_designer_typing",
+        "file": "sprites/characters/employee_designer_typing.png",
+        "type": "sprite_sheet",
+        "frame_width": 48,
+        "frame_height": 64,
+        "frames": 6,
+        "fps": 8,
+        "anchor": {
+          "x": 24,
+          "y": 55
+        },
+        "tags": [
+          "employee",
+          "designer",
+          "typing"
+        ]
+      },
+      {
+        "id": "employee_designer_talk",
+        "file": "sprites/characters/employee_designer_talk.png",
+        "type": "sprite_sheet",
+        "frame_width": 48,
+        "frame_height": 64,
+        "frames": 6,
+        "fps": 8,
+        "anchor": {
+          "x": 24,
+          "y": 55
+        },
+        "tags": [
+          "employee",
+          "designer",
+          "talk"
+        ]
+      },
+      {
+        "id": "employee_designer_wave",
+        "file": "sprites/characters/employee_designer_wave.png",
+        "type": "sprite_sheet",
+        "frame_width": 48,
+        "frame_height": 64,
+        "frames": 6,
+        "fps": 8,
+        "anchor": {
+          "x": 24,
+          "y": 55
+        },
+        "tags": [
+          "employee",
+          "designer",
+          "wave"
+        ]
+      },
+      {
+        "id": "employee_manager_idle",
+        "file": "sprites/characters/employee_manager_idle.png",
+        "type": "sprite_sheet",
+        "frame_width": 48,
+        "frame_height": 64,
+        "frames": 6,
+        "fps": 8,
+        "anchor": {
+          "x": 24,
+          "y": 55
+        },
+        "tags": [
+          "employee",
+          "manager",
+          "idle"
+        ]
+      },
+      {
+        "id": "employee_manager_walk",
+        "file": "sprites/characters/employee_manager_walk.png",
+        "type": "sprite_sheet",
+        "frame_width": 48,
+        "frame_height": 64,
+        "frames": 8,
+        "fps": 10,
+        "anchor": {
+          "x": 24,
+          "y": 55
+        },
+        "tags": [
+          "employee",
+          "manager",
+          "walk"
+        ]
+      },
+      {
+        "id": "employee_manager_typing",
+        "file": "sprites/characters/employee_manager_typing.png",
+        "type": "sprite_sheet",
+        "frame_width": 48,
+        "frame_height": 64,
+        "frames": 6,
+        "fps": 8,
+        "anchor": {
+          "x": 24,
+          "y": 55
+        },
+        "tags": [
+          "employee",
+          "manager",
+          "typing"
+        ]
+      },
+      {
+        "id": "employee_manager_talk",
+        "file": "sprites/characters/employee_manager_talk.png",
+        "type": "sprite_sheet",
+        "frame_width": 48,
+        "frame_height": 64,
+        "frames": 6,
+        "fps": 8,
+        "anchor": {
+          "x": 24,
+          "y": 55
+        },
+        "tags": [
+          "employee",
+          "manager",
+          "talk"
+        ]
+      },
+      {
+        "id": "employee_manager_wave",
+        "file": "sprites/characters/employee_manager_wave.png",
+        "type": "sprite_sheet",
+        "frame_width": 48,
+        "frame_height": 64,
+        "frames": 6,
+        "fps": 8,
+        "anchor": {
+          "x": 24,
+          "y": 55
+        },
+        "tags": [
+          "employee",
+          "manager",
+          "wave"
+        ]
+      },
+      {
+        "id": "employee_ops_idle",
+        "file": "sprites/characters/employee_ops_idle.png",
+        "type": "sprite_sheet",
+        "frame_width": 48,
+        "frame_height": 64,
+        "frames": 6,
+        "fps": 8,
+        "anchor": {
+          "x": 24,
+          "y": 55
+        },
+        "tags": [
+          "employee",
+          "ops",
+          "idle"
+        ]
+      },
+      {
+        "id": "employee_ops_walk",
+        "file": "sprites/characters/employee_ops_walk.png",
+        "type": "sprite_sheet",
+        "frame_width": 48,
+        "frame_height": 64,
+        "frames": 8,
+        "fps": 10,
+        "anchor": {
+          "x": 24,
+          "y": 55
+        },
+        "tags": [
+          "employee",
+          "ops",
+          "walk"
+        ]
+      },
+      {
+        "id": "employee_ops_typing",
+        "file": "sprites/characters/employee_ops_typing.png",
+        "type": "sprite_sheet",
+        "frame_width": 48,
+        "frame_height": 64,
+        "frames": 6,
+        "fps": 8,
+        "anchor": {
+          "x": 24,
+          "y": 55
+        },
+        "tags": [
+          "employee",
+          "ops",
+          "typing"
+        ]
+      },
+      {
+        "id": "employee_ops_talk",
+        "file": "sprites/characters/employee_ops_talk.png",
+        "type": "sprite_sheet",
+        "frame_width": 48,
+        "frame_height": 64,
+        "frames": 6,
+        "fps": 8,
+        "anchor": {
+          "x": 24,
+          "y": 55
+        },
+        "tags": [
+          "employee",
+          "ops",
+          "talk"
+        ]
+      },
+      {
+        "id": "employee_ops_wave",
+        "file": "sprites/characters/employee_ops_wave.png",
+        "type": "sprite_sheet",
+        "frame_width": 48,
+        "frame_height": 64,
+        "frames": 6,
+        "fps": 8,
+        "anchor": {
+          "x": 24,
+          "y": 55
+        },
+        "tags": [
+          "employee",
+          "ops",
+          "wave"
+        ]
+      }
+    ],
+    "furniture": [
+      {
+        "id": "desk_single",
+        "file": "sprites/furniture/desk_single.png",
+        "type": "image",
+        "width": 96,
+        "height": 64,
+        "anchor": {
+          "x": 48,
+          "y": 58
+        },
+        "tags": [
+          "desk",
+          "workstation",
+          "furniture"
+        ]
+      },
+      {
+        "id": "desk_dual",
+        "file": "sprites/furniture/desk_dual.png",
+        "type": "image",
+        "width": 128,
+        "height": 80,
+        "anchor": {
+          "x": 64,
+          "y": 72
+        },
+        "tags": [
+          "desk",
+          "dual",
+          "workstation"
+        ]
+      },
+      {
+        "id": "standing_desk",
+        "file": "sprites/furniture/standing_desk.png",
+        "type": "image",
+        "width": 96,
+        "height": 72,
+        "anchor": {
+          "x": 48,
+          "y": 64
+        },
+        "tags": [
+          "desk",
+          "standing",
+          "workstation"
+        ]
+      },
+      {
+        "id": "office_chair_blue",
+        "file": "sprites/furniture/office_chair_blue.png",
+        "type": "image",
+        "width": 40,
+        "height": 48,
+        "anchor": {
+          "x": 20,
+          "y": 44
+        },
+        "tags": [
+          "chair",
+          "office",
+          "blue"
+        ]
+      },
+      {
+        "id": "office_chair_violet",
+        "file": "sprites/furniture/office_chair_violet.png",
+        "type": "image",
+        "width": 40,
+        "height": 48,
+        "anchor": {
+          "x": 20,
+          "y": 44
+        },
+        "tags": [
+          "chair",
+          "office",
+          "violet"
+        ]
+      },
+      {
+        "id": "guest_chair",
+        "file": "sprites/furniture/guest_chair.png",
+        "type": "image",
+        "width": 44,
+        "height": 46,
+        "anchor": {
+          "x": 22,
+          "y": 44
+        },
+        "tags": [
+          "chair",
+          "waiting-room"
+        ]
+      },
+      {
+        "id": "coffee_table",
+        "file": "sprites/furniture/coffee_table.png",
+        "type": "image",
+        "width": 96,
+        "height": 56,
+        "anchor": {
+          "x": 48,
+          "y": 49
+        },
+        "tags": [
+          "table",
+          "lounge"
+        ]
+      },
+      {
+        "id": "meeting_table",
+        "file": "sprites/furniture/meeting_table.png",
+        "type": "image",
+        "width": 144,
+        "height": 72,
+        "anchor": {
+          "x": 72,
+          "y": 66
+        },
+        "tags": [
+          "table",
+          "meeting"
+        ]
+      },
+      {
+        "id": "waiting_bench",
+        "file": "sprites/waiting_room/waiting_bench.png",
+        "type": "image",
+        "width": 144,
+        "height": 64,
+        "anchor": {
+          "x": 72,
+          "y": 61
+        },
+        "tags": [
+          "bench",
+          "waiting-room",
+          "chair"
+        ]
+      },
+      {
+        "id": "plant_small",
+        "file": "sprites/decor/plant_small.png",
+        "type": "image",
+        "width": 40,
+        "height": 48,
+        "anchor": {
+          "x": 20,
+          "y": 43
+        },
+        "tags": [
+          "plant",
+          "decor",
+          "desk"
+        ]
+      }
+    ],
+    "waiting_room": [
+      {
+        "id": "guest_chair",
+        "file": "sprites/furniture/guest_chair.png",
+        "type": "image",
+        "width": 44,
+        "height": 46,
+        "anchor": {
+          "x": 22,
+          "y": 44
+        },
+        "tags": [
+          "chair",
+          "waiting-room"
+        ]
+      },
+      {
+        "id": "reception_counter",
+        "file": "sprites/waiting_room/reception_counter.png",
+        "type": "image",
+        "width": 160,
+        "height": 72,
+        "anchor": {
+          "x": 80,
+          "y": 70
+        },
+        "tags": [
+          "reception",
+          "counter",
+          "waiting-room"
+        ]
+      },
+      {
+        "id": "waiting_bench",
+        "file": "sprites/waiting_room/waiting_bench.png",
+        "type": "image",
+        "width": 144,
+        "height": 64,
+        "anchor": {
+          "x": 72,
+          "y": 61
+        },
+        "tags": [
+          "bench",
+          "waiting-room",
+          "chair"
+        ]
+      },
+      {
+        "id": "queue_rope",
+        "file": "sprites/waiting_room/queue_rope.png",
+        "type": "image",
+        "width": 96,
+        "height": 48,
+        "anchor": {
+          "x": 48,
+          "y": 43
+        },
+        "tags": [
+          "queue",
+          "waiting-room"
+        ]
+      },
+      {
+        "id": "lounge_rug",
+        "file": "sprites/waiting_room/lounge_rug.png",
+        "type": "image",
+        "width": 128,
+        "height": 80,
+        "anchor": {
+          "x": 64,
+          "y": 70
+        },
+        "tags": [
+          "rug",
+          "waiting-room"
+        ]
+      },
+      {
+        "id": "floor_wayfinding_arrow",
+        "file": "sprites/waiting_room/floor_wayfinding_arrow.png",
+        "type": "image",
+        "width": 80,
+        "height": 40,
+        "anchor": {
+          "x": 40,
+          "y": 32
+        },
+        "tags": [
+          "wayfinding",
+          "waiting-room",
+          "floor"
+        ]
+      }
+    ],
+    "decor": [
+      {
+        "id": "bookshelf",
+        "file": "sprites/furniture/bookshelf.png",
+        "type": "image",
+        "width": 120,
+        "height": 52,
+        "anchor": {
+          "x": 60,
+          "y": 47
+        },
+        "tags": [
+          "bookshelf",
+          "storage",
+          "decor"
+        ]
+      },
+      {
+        "id": "plant_tall",
+        "file": "sprites/decor/plant_tall.png",
+        "type": "image",
+        "width": 48,
+        "height": 72,
+        "anchor": {
+          "x": 24,
+          "y": 66
+        },
+        "tags": [
+          "plant",
+          "decor"
+        ]
+      },
+      {
+        "id": "plant_small",
+        "file": "sprites/decor/plant_small.png",
+        "type": "image",
+        "width": 40,
+        "height": 48,
+        "anchor": {
+          "x": 20,
+          "y": 43
+        },
+        "tags": [
+          "plant",
+          "decor",
+          "desk"
+        ]
+      },
+      {
+        "id": "floor_lamp",
+        "file": "sprites/decor/floor_lamp.png",
+        "type": "image",
+        "width": 48,
+        "height": 80,
+        "anchor": {
+          "x": 24,
+          "y": 73
+        },
+        "tags": [
+          "lamp",
+          "decor"
+        ]
+      },
+      {
+        "id": "wall_frame",
+        "file": "sprites/decor/wall_frame.png",
+        "type": "image",
+        "width": 56,
+        "height": 40,
+        "anchor": {
+          "x": 28,
+          "y": 34
+        },
+        "tags": [
+          "frame",
+          "wall",
+          "decor"
+        ]
+      },
+      {
+        "id": "wall_clock",
+        "file": "sprites/decor/wall_clock.png",
+        "type": "image",
+        "width": 40,
+        "height": 40,
+        "anchor": {
+          "x": 20,
+          "y": 36
+        },
+        "tags": [
+          "clock",
+          "wall",
+          "decor"
+        ]
+      },
+      {
+        "id": "whiteboard",
+        "file": "sprites/decor/whiteboard.png",
+        "type": "image",
+        "width": 96,
+        "height": 56,
+        "anchor": {
+          "x": 48,
+          "y": 48
+        },
+        "tags": [
+          "whiteboard",
+          "wall",
+          "decor"
+        ]
+      },
+      {
+        "id": "water_cooler",
+        "file": "sprites/decor/water_cooler.png",
+        "type": "image",
+        "width": 44,
+        "height": 72,
+        "anchor": {
+          "x": 22,
+          "y": 66
+        },
+        "tags": [
+          "water",
+          "decor"
+        ]
+      },
+      {
+        "id": "neon_status_panel",
+        "file": "sprites/decor/neon_status_panel.png",
+        "type": "image",
+        "width": 64,
+        "height": 48,
+        "anchor": {
+          "x": 32,
+          "y": 43
+        },
+        "tags": [
+          "panel",
+          "status",
+          "decor"
+        ]
+      },
+      {
+        "id": "wall_segment",
+        "file": "sprites/tiles/wall_segment.png",
+        "type": "image",
+        "width": 40,
+        "height": 40,
+        "anchor": {
+          "x": 20,
+          "y": 39
+        },
+        "tags": [
+          "tile",
+          "wall"
+        ]
+      },
+      {
+        "id": "glass_wall_tile",
+        "file": "sprites/tiles/glass_wall_tile.png",
+        "type": "image",
+        "width": 40,
+        "height": 40,
+        "anchor": {
+          "x": 20,
+          "y": 37
+        },
+        "tags": [
+          "tile",
+          "wall",
+          "glass"
+        ]
+      }
+    ],
+    "tiles": [
+      {
+        "id": "floor_dev_tile",
+        "file": "sprites/tiles/floor_dev_tile.png",
+        "type": "image",
+        "width": 40,
+        "height": 40,
+        "anchor": {
+          "x": 20,
+          "y": 20
+        },
+        "tags": [
+          "tile",
+          "floor",
+          "dev-room"
+        ]
+      },
+      {
+        "id": "floor_lounge_tile",
+        "file": "sprites/tiles/floor_lounge_tile.png",
+        "type": "image",
+        "width": 40,
+        "height": 40,
+        "anchor": {
+          "x": 20,
+          "y": 20
+        },
+        "tags": [
+          "tile",
+          "floor",
+          "lounge"
+        ]
+      },
+      {
+        "id": "wall_segment",
+        "file": "sprites/tiles/wall_segment.png",
+        "type": "image",
+        "width": 40,
+        "height": 40,
+        "anchor": {
+          "x": 20,
+          "y": 39
+        },
+        "tags": [
+          "tile",
+          "wall"
+        ]
+      },
+      {
+        "id": "glass_wall_tile",
+        "file": "sprites/tiles/glass_wall_tile.png",
+        "type": "image",
+        "width": 40,
+        "height": 40,
+        "anchor": {
+          "x": 20,
+          "y": 37
+        },
+        "tags": [
+          "tile",
+          "wall",
+          "glass"
+        ]
+      }
+    ],
+    "animations": [
+      {
+        "id": "monitor_glow",
+        "file": "sprites/animations/monitor_glow.png",
+        "type": "sprite_sheet",
+        "frame_width": 48,
+        "frame_height": 40,
+        "frames": 6,
+        "fps": 8,
+        "anchor": {
+          "x": 24,
+          "y": 38
+        },
+        "tags": [
+          "monitor",
+          "glow"
+        ]
+      },
+      {
+        "id": "coffee_steam",
+        "file": "sprites/animations/coffee_steam.png",
+        "type": "sprite_sheet",
+        "frame_width": 32,
+        "frame_height": 48,
+        "frames": 8,
+        "fps": 10,
+        "anchor": {
+          "x": 16,
+          "y": 46
+        },
+        "tags": [
+          "coffee",
+          "steam"
+        ]
+      },
+      {
+        "id": "plant_sway",
+        "file": "sprites/animations/plant_sway.png",
+        "type": "sprite_sheet",
+        "frame_width": 48,
+        "frame_height": 72,
+        "frames": 8,
+        "fps": 8,
+        "anchor": {
+          "x": 24,
+          "y": 70
+        },
+        "tags": [
+          "plant",
+          "sway"
+        ]
+      },
+      {
+        "id": "status_light_pulse",
+        "file": "sprites/animations/status_light_pulse.png",
+        "type": "sprite_sheet",
+        "frame_width": 24,
+        "frame_height": 24,
+        "frames": 8,
+        "fps": 12,
+        "anchor": {
+          "x": 12,
+          "y": 22
+        },
+        "tags": [
+          "status",
+          "pulse"
+        ]
+      },
+      {
+        "id": "typing_dots",
+        "file": "sprites/animations/typing_dots.png",
+        "type": "sprite_sheet",
+        "frame_width": 64,
+        "frame_height": 24,
+        "frames": 6,
+        "fps": 8,
+        "anchor": {
+          "x": 32,
+          "y": 22
+        },
+        "tags": [
+          "typing",
+          "chat"
+        ]
+      },
+      {
+        "id": "door_scan",
+        "file": "sprites/animations/door_scan.png",
+        "type": "sprite_sheet",
+        "frame_width": 64,
+        "frame_height": 48,
+        "frames": 8,
+        "fps": 10,
+        "anchor": {
+          "x": 32,
+          "y": 46
+        },
+        "tags": [
+          "door",
+          "scan"
+        ]
+      },
+      {
+        "id": "waiting_room_tv",
+        "file": "sprites/animations/waiting_room_tv.png",
+        "type": "sprite_sheet",
+        "frame_width": 80,
+        "frame_height": 56,
+        "frames": 8,
+        "fps": 8,
+        "anchor": {
+          "x": 40,
+          "y": 54
+        },
+        "tags": [
+          "waiting-room",
+          "screen"
+        ]
+      }
+    ]
+  },
+  "usage_notes": [
+    "For sprite sheets, draw source rect x = frame_index * frame_width.",
+    "Use anchor as the floor contact point when placing assets on the 40 px grid.",
+    "Static assets are available as individual PNG files and inside office_static_atlas.png."
+  ]
+}

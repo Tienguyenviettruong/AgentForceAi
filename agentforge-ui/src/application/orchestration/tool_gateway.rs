@@ -1,4 +1,5 @@
 use crate::application::orchestration::modes::OperatingMode;
+use crate::application::orchestration::role_policy;
 use crate::core::traits::database::DatabasePort;
 use crate::infrastructure::security::audit::AuditEvent;
 use sha2::{Digest, Sha256};
@@ -257,6 +258,24 @@ impl ToolExecutionGateway {
                 return PolicyDecision::Denied(reason);
             }
         };
+        let delegated_agent_role = self
+            .db
+            .get_agent(request.delegated_agent_id)
+            .ok()
+            .flatten()
+            .map(|agent| agent.routing_role())
+            .unwrap_or_default();
+        if !role_policy::tool_allowed_for_role(&delegated_agent_role, request.tool_name) {
+            let reason = role_policy::tool_denied_message(&delegated_agent_role, request.tool_name);
+            self.write_decision(request, Some(actor_id), "denied", &reason);
+            let _ = self.db.update_tool_invocation_status(
+                &invocation_id,
+                "denied",
+                None,
+                Some(&reason),
+            );
+            return PolicyDecision::Denied(reason);
+        }
         if risk == ToolRisk::ReadOnly && !file_scope_approval_required {
             self.write_decision(request, Some(actor_id), "allowed", "read-only operation");
             let _ = self
@@ -274,7 +293,8 @@ impl ToolExecutionGateway {
             == Some("true");
         let autonomous_workspace_file_mutation =
             matches!(request.tool_name, "write_file" | "edit_file")
-                && !file_scope_approval_required;
+                && !file_scope_approval_required
+                && !role_policy::is_coordinator_role(&delegated_agent_role);
         let requires_approval = match mode {
             OperatingMode::HumanInteraction => true,
             OperatingMode::Supervision => {

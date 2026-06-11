@@ -6,6 +6,7 @@ pub mod mcp_marketplace;
 pub mod monitoring;
 pub mod office_view;
 pub mod orchestration;
+pub mod profile;
 pub mod research_notebook;
 pub mod session;
 pub mod settings;

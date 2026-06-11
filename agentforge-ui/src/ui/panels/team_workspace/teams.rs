@@ -200,18 +200,8 @@ impl TeamWorkspacePanel {
             .rounded_lg()
             .cursor_pointer()
             .on_click(cx.listener(move |this, _, _, cx| {
-                // Hide the webview before switching instances to prevent
-                // the native OS window from floating over unrelated UI.
-                #[cfg(any(target_os = "windows", target_os = "macos"))]
-                {
-                    if let Some(ref webview) = this.office_webview {
-                        webview.update(cx, |wv, _| wv.hide());
-                    }
-                    // Reset so the webview gets re-initialized for the new instance
-                    this.office_webview = None;
-                    this.office_webview_init_attempted = false;
-                    this.office_webview_error = None;
-                }
+                // Reset native office state for the new instance
+                this.office_state.reset();
                 this.selected_instance_id = Some(id_str.clone());
                 this.selected_team_id = None;
                 let db = crate::AppState::global(cx).db.clone();
@@ -433,14 +423,8 @@ impl TeamWorkspacePanel {
                 theme.transparent
             })
             .on_click(cx.listener(move |this, _, _, cx| {
-                // Hide the webview when deselecting the instance (template view
-                // does not show the chat column at all).
-                #[cfg(any(target_os = "windows", target_os = "macos"))]
-                {
-                    if let Some(ref webview) = this.office_webview {
-                        webview.update(cx, |wv, _| wv.hide());
-                    }
-                }
+                // Reset office state when deselecting instance
+                this.office_state.reset();
                 this.selected_team_id = Some(id_str.clone());
                 this.selected_instance_id = None;
                 this.pending_chat_action = None;

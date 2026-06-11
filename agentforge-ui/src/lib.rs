@@ -6,9 +6,10 @@ use gpui::{
     SharedString, Styled, Window, WindowBounds, WindowKind, WindowOptions,
 };
 use gpui_component::{
+    button::Button,
     dock::register_panel,
     dock::{DockArea, DockEvent, DockItem},
-    h_flex, v_flex, ActiveTheme as _, IconName, Root,
+    h_flex, v_flex, ActiveTheme as _, Icon, IconName, Root, WindowExt,
 };
 use serde::Deserialize;
 use std::sync::Arc;
@@ -336,9 +337,7 @@ pub fn init(cx: &mut App) {
         cx.quit();
     });
 
-    cx.on_action(|_: &About, _cx: &mut App| {
-        println!("About AgentForgeAI\n\nMulti-AI Orchestration Platform\n\nVersion 0.1.0");
-    });
+    cx.on_action(|_: &About, _cx: &mut App| {});
 
     // 7. Register Theme action handlers
     cx.on_action(|switch: &SwitchTheme, cx: &mut App| {
@@ -494,9 +493,11 @@ impl MainWindow {
             let page_str: SharedString = page.into();
 
             dock_area.update(cx, |dock, cx| {
-                if let Some(state) = crate::ui::shell::dock_layout::load(&page_str) {
-                    let _ = dock.load(state, window, cx);
-                    return;
+                if page != "profile" {
+                    if let Some(state) = crate::ui::shell::dock_layout::load(&page_str) {
+                        let _ = dock.load(state, window, cx);
+                        return;
+                    }
                 }
 
                 let weak_dock = cx.entity().downgrade();
@@ -565,10 +566,9 @@ impl MainWindow {
                         );
                     }
                     "profile" => {
-                        // Use dashboard for now as profile panel is not implemented yet
                         let panel =
                             Arc::new(cx.new(|cx| {
-                                crate::ui::panels::settings::SettingsPanel::new(window, cx)
+                                crate::ui::panels::profile::ProfilePanel::new(window, cx)
                             }));
                         dock.set_center(
                             DockItem::tabs(vec![panel], &weak_dock, window, cx),
@@ -701,10 +701,98 @@ impl MainWindow {
             activity_bar,
             status_bar,
             active_page: initial_page.into(),
-            solo_mode: false,
+            solo_mode: true,
             dock_areas,
             team_workspace,
         }
+    }
+
+    fn open_about_dialog(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let db = AppState::global(cx).db.clone();
+        let provider_count = db
+            .list_providers()
+            .map(|providers| providers.len())
+            .unwrap_or(0);
+        let team_count = db.list_teams().map(|teams| teams.len()).unwrap_or(0);
+        let agent_count = db.list_agents().map(|agents| agents.len()).unwrap_or(0);
+        let mode = AppState::global(cx)
+            .mode_manager
+            .lock()
+            .map(|manager| manager.current_mode().label().to_string())
+            .unwrap_or_else(|_| "Unavailable".to_string());
+        let actor_id = AppState::global(cx).current_actor_id.clone();
+
+        window.open_dialog(cx, move |dialog, _window, cx| {
+            let theme = cx.theme().clone();
+            dialog
+                .title("About AgentForgeAI")
+                .w(px(520.))
+                .child(
+                    v_flex()
+                        .gap_4()
+                        .py_2()
+                        .child(
+                            h_flex()
+                                .items_center()
+                                .gap_3()
+                                .child(
+                                    div()
+                                        .w(px(46.))
+                                        .h(px(46.))
+                                        .rounded_md()
+                                        .bg(gpui::blue().opacity(0.12))
+                                        .text_color(gpui::blue())
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .child(Icon::new(IconName::Bot).size(px(24.))),
+                                )
+                                .child(
+                                    v_flex()
+                                        .gap_1()
+                                        .child(
+                                            div()
+                                                .text_size(px(20.))
+                                                .font_weight(gpui::FontWeight::BOLD)
+                                                .child("AgentForgeAI"),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(px(12.))
+                                                .text_color(theme.muted_foreground)
+                                                .child("Multi-agent orchestration desktop"),
+                                        ),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(13.))
+                                .line_height(gpui::relative(1.45))
+                                .child("AgentForgeAI coordinates agents, providers, iFlow automation, knowledge, monitoring, and cross-team collaboration in a local desktop workspace."),
+                        )
+                        .child(
+                            v_flex()
+                                .gap_2()
+                                .rounded_md()
+                                .border_1()
+                                .border_color(theme.border)
+                                .p_3()
+                                .child(format!("Version: {}", env!("CARGO_PKG_VERSION")))
+                                .child(format!("Actor: {}", actor_id))
+                                .child(format!("Mode: {}", mode))
+                                .child(format!(
+                                    "Workspace summary: {} teams, {} agents, {} providers",
+                                    team_count, agent_count, provider_count
+                                )),
+                        ),
+                )
+                .footer(|_, _, _, _| {
+                    vec![Button::new("about-close")
+                        .label("Close")
+                        .on_click(|_, window, cx| window.close_dialog(cx))
+                        .into_any_element()]
+                })
+        });
     }
 
     fn switch_panel(&mut self, id: SharedString, _window: &mut Window, cx: &mut Context<Self>) {
@@ -813,6 +901,9 @@ impl Render for MainWindow {
                     |_, _| {},
                 );
                 this.switch_panel("teams".into(), window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &About, window, cx| {
+                this.open_about_dialog(window, cx);
             }))
             .child(self.title_bar.clone())
             .child(if self.solo_mode {

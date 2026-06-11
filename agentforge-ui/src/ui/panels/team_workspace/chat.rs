@@ -9,7 +9,6 @@ use gpui::{
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::scroll::ScrollableElement as _;
 use gpui_component::select::{Select, SelectState};
-use gpui_component::switch::Switch;
 use gpui_component::tab::{Tab, TabBar};
 use gpui_component::IndexPath;
 use gpui_component::WindowExt;
@@ -424,7 +423,6 @@ impl TeamWorkspacePanel {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = cx.theme().clone();
-        let view = cx.entity().clone();
 
         let _active_team_id = self.selected_team_id.clone().or_else(|| {
             self.selected_instance_id.as_ref().and_then(|iid| {
@@ -481,8 +479,8 @@ impl TeamWorkspacePanel {
                                     view.update(cx, |this, cx| {
                                         this.chat_active_tab = *index;
 
-                                        // Hide/show the native webview window when switching tabs.
-                                        this.sync_office_webview(cx);
+                                        // Refresh native office state when switching tabs.
+                                        this.sync_office_agents(cx);
 
                                         cx.notify();
                                     });
@@ -927,270 +925,13 @@ impl TeamWorkspacePanel {
                                             )
                                         },
                                     )
-                                    .child(
-                                        Switch::new("debate-mode")
-                                            .checked(self.debate_mode)
-                                            // .label("Debate Mode")
-                                            .tooltip("Enable agent debate before execution")
-                                            .on_click({
-                                                let view = view.clone();
-                                                move |checked, _window, cx| {
-                                                    let _ = view.update(cx, |this, cx| {
-                                                        this.debate_mode = *checked;
-                                                        cx.notify();
-                                                    });
-                                                }
-                                            })
-                                    )
                     )
             )
             .child(
                 if self.chat_active_tab == 1 {
-                    #[cfg(any(target_os = "windows", target_os = "macos"))]
-                    {
-                        // Native Embedded Office View via WebView (macOS / Windows)
-                        if self.office_webview_disabled {
-                            div()
-                                .flex_1()
-                                .flex()
-                                .justify_center()
-                                .items_center()
-                                .child("Office WebView is disabled (AGENTFORGE_DISABLE_OFFICE_WEBVIEW=1).")
-                                .into_any_element()
-                        } else {
-                            if self.office_webview.is_none() && !self.office_webview_init_attempted {
-                                self.office_webview_init_attempted = true;
-                                self.office_webview_error = None;
-
-                                crate::ui::framework::reentrancy::set_office_webview_init_in_progress(true);
-                                struct OfficeWebviewInitGuard;
-                                impl Drop for OfficeWebviewInitGuard {
-                                    fn drop(&mut self) {
-                                        crate::ui::framework::reentrancy::set_office_webview_init_in_progress(false);
-                                    }
-                                }
-                                let _guard = OfficeWebviewInitGuard;
-
-                                let async_cx = cx.to_async();
-                                let view_clone = cx.entity().clone();
-                                let build_result =
-                                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                        let builder = wry::WebViewBuilder::new().with_ipc_handler(
-                                            move |req: wry::http::Request<String>| {
-                                                let msg = req.into_body();
-                                                let _ = async_cx.update(|cx| {
-                                                    view_clone.update(cx, |this: &mut TeamWorkspacePanel, cx| {
-                                                        let Ok(v) = serde_json::from_str::<serde_json::Value>(&msg) else { return };
-                                                        let typ = v.get("type").and_then(|v| v.as_str()).unwrap_or("");
-                                                        if typ != "office_chat_send" { return; }
-                                                        let text = v.get("text").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
-                                                        if text.is_empty() { return; }
-
-                                                        let instance_id = if let Some(id) = &this.selected_instance_id { id.clone() } else { return };
-                                                        let session_id = if let Some(sid) = &this.selected_session_id { sid.clone() } else { return };
-                                                        let db = crate::AppState::global(cx).db.clone();
-
-                                                        {
-                                                            let history = this.chat_histories.entry(session_id.clone()).or_default();
-                                                            history.push(crate::providers::ChatMessage { role: "user".into(), content: text.clone().into(), agent_name: None, thought_duration_secs: None , parts: vec![] });
-                                                        }
-                                                        this.rebuild_chat_display(&session_id);
-                                                        this.refresh_pending_chat_action(cx);
-                                                        let display_len = this.chat_display_rows.get(&session_id).map(|v| v.len()).unwrap_or(0);
-                                                        this.chat_list_state = gpui::ListState::new(display_len, gpui::ListAlignment::Bottom, gpui::px(200.));
-
-                                                        let first_agent_id = db.get_instance_agents(&instance_id).ok().and_then(|ids| ids.into_iter().next()).unwrap_or_default();
-                                                        this.push_office_chat_message(&first_agent_id, &text, true, "You", cx);
-
-                                                        let user_msg = crate::teambus::routing::TeamMessage::new_broadcast(
-                                                            instance_id.clone(),
-                                                            "user".to_string(),
-                                                            text.clone(),
-                                                        );
-                                                        let _ = db.insert_team_message(&user_msg);
-                                                        let team_bus = this.team_bus.clone();
-                                                        cx.spawn(async move |_, _| {
-                                                            let _ = team_bus.route_message(user_msg).await;
-                                                        }).detach();
-
-                                                        if let Ok(agent_ids) = db.get_instance_agents(&instance_id) {
-                                                            if let Some(agent_id) = agent_ids.first() {
-                                                                let _ = db.ensure_session(&session_id, agent_id, Some(&instance_id));
-                                                                let _ = db.append_conversation_turn(&session_id, "user", &text, None);
-                                                                let _ = db.touch_session(&session_id);
-                                                            }
-                                                        }
-                                                        cx.notify();
-                                                    });
-                                                });
-                                            },
-                                        );
-                                        let html_content =
-                                            include_str!("../../../../assets/office/index.html");
-                                        builder.with_html(html_content).build_as_child(window)
-                                    }));
-
-                                match build_result {
-                                    Ok(Ok(view)) => {
-                                        self.office_webview = Some(cx.new(|cx| {
-                                            gpui_component::webview::WebView::new(view, window, cx)
-                                        }));
-                                    }
-                                    Ok(Err(e)) => {
-                                        self.office_webview_error = Some(e.to_string());
-                                    }
-                                    Err(_) => {
-                                        self.office_webview_error =
-                                            Some("WebView initialization panicked".to_string());
-                                    }
-                                }
-                            }
-
-                            if let Some(webview) = &self.office_webview {
-                                div()
-                                    .flex_1()
-                                    .w_full()
-                                    .child(webview.clone())
-                                    .into_any_element()
-                            } else {
-                                let office_error_text =
-                                    self.office_webview_error.clone().unwrap_or_else(|| {
-                                        "Failed to initialize WebView. Try installing WebView runtime or set AGENTFORGE_DISABLE_OFFICE_WEBVIEW=1.".to_string()
-                                    });
-                                div()
-                                    .flex_1()
-                                    .flex()
-                                    .justify_center()
-                                    .items_center()
-                                    .child(office_error_text)
-                                    .into_any_element()
-                            }
-                        }
-                    }
-
-                    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-                    {
-                        // Fallback UI for Linux
-                        let mut active_agents = Vec::new();
-                        if let Some(instance_id) = &self.selected_instance_id {
-                            if let Ok(agent_ids) = crate::AppState::global(cx).db.get_instance_agents(instance_id) {
-                                for agent in &self.agents {
-                                    if agent_ids.contains(&agent.id) {
-                                        active_agents.push(agent.clone());
-                                    }
-                                }
-                            }
-                        }
-
-                        div()
-                            .flex_1()
-                            .flex()
-                            .flex_col()
-                            .bg(theme.background)
-                            .p_4()
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .justify_between()
-                                    .mb_4()
-                                    .child(
-                                        div()
-                                            .text_size(px(18.))
-                                            .font_weight(gpui::FontWeight::BOLD)
-                                            .text_color(theme.primary)
-                                            .child("Embedded Virtual Office (Fallback UI)")
-                                    )
-                                    .child(
-                                        div()
-                                            .text_color(theme.muted)
-                                            .text_size(px(14.))
-                                            .child(format!("{} Agents Active", active_agents.len()))
-                                    )
-                            )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .w_full()
-                                    .bg(theme.muted.opacity(0.1))
-                                    .rounded_lg()
-                                    .border_1()
-                                    .border_color(theme.border)
-                                    .relative()
-                                    .overflow_hidden()
-                                    .flex()
-                                    .flex_wrap()
-                                    .gap_6()
-                                    .p_6()
-                                    .justify_center()
-                                    .items_center()
-                                    .children(
-                                        active_agents.clone().into_iter().enumerate().map(|(i, agent)| {
-                                            let offset_y = if i % 2 == 0 { px(-20.) } else { px(20.) };
-                                            div()
-                                                .flex()
-                                                .flex_col()
-                                                .items_center()
-                                                .mt(offset_y)
-                                                .child(
-                                                    div()
-                                                        .w(px(64.))
-                                                        .h(px(64.))
-                                                        .rounded_full()
-                                                        .bg(theme.primary.opacity(0.1))
-                                                        .border_2()
-                                                        .border_color(theme.primary)
-                                                        .flex()
-                                                        .justify_center()
-                                                        .items_center()
-                                                        .shadow_md()
-                                                        .child(
-                                                            gpui_component::Icon::new(gpui_component::IconName::User)
-                                                                .size(px(32.))
-                                                                .text_color(theme.primary)
-                                                        )
-                                                )
-                                                .child(
-                                                    div()
-                                                        .mt_2()
-                                                        .bg(theme.background)
-                                                        .px_3()
-                                                        .py_1()
-                                                        .rounded_md()
-                                                        .border_1()
-                                                        .border_color(theme.border)
-                                                        .text_size(px(12.))
-                                                        .font_weight(gpui::FontWeight::MEDIUM)
-                                                        .text_color(theme.foreground)
-                                                        .child(agent.name.clone())
-                                                )
-                                                .child(
-                                                    div()
-                                                        .mt_1()
-                                                        .text_size(px(10.))
-                                                        .text_color(theme.muted)
-                                                        .child(format!("Provider: {}", agent.provider))
-                                                )
-                                        })
-                                    )
-                                    .child(
-                                        if active_agents.is_empty() {
-                                            div()
-                                                .absolute()
-                                                .inset_0()
-                                                .flex()
-                                                .justify_center()
-                                                .items_center()
-                                                .text_color(theme.muted)
-                                                .child("No agents currently in the office. Please select an instance or add agents.")
-                                                .into_any_element()
-                                        } else {
-                                            div().into_any_element()
-                                        }
-                                    )
-                            )
-                            .into_any_element()
-                    }
+                    // Native Office View — rendered purely in Rust/GPUI
+                    self.sync_office_agents(cx);
+                    self.render_office_view(window, cx).into_any_element()
                 } else {
                     // Chat View
                     let mut form_header = div()
@@ -1346,8 +1087,8 @@ impl TeamWorkspacePanel {
                                                         }
                                                     }
 
-                                                    // Hide/show webview if it's overlaid
-                                                    this.sync_office_webview(cx);
+                                                    // Refresh native office state after workspace menu changes.
+                                                    this.sync_office_agents(cx);
 
                                                     cx.notify();
                                                 }))
@@ -1391,8 +1132,8 @@ impl TeamWorkspacePanel {
                                                                         this.workspace_path = Some(path);
                                                                         this.is_workspace_dropdown_open = false;
 
-                                                                        // Show webview again
-                                                                        this.sync_office_webview(cx);
+                                                                        // Refresh native office state after selecting workspace.
+                                                                        this.sync_office_agents(cx);
 
                                                                         cx.notify();
                                                                     }
@@ -1843,49 +1584,16 @@ impl TeamWorkspacePanel {
             )
     }
 
-    /// Push a chat message into the Office webview's chat panel.
-    /// `agent_id`  - ID of the agent whose conversation thread to update.
-    /// `text`      - The message text.
-    /// `is_self`   - true = user/self message (right bubble), false = agent reply (left).
-    /// `agent_name` - Display name for the agent (shown above agent bubbles).
-    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    /// Push a chat message bubble onto an agent in the native office canvas.
     pub(crate) fn push_office_chat_message(
-        &self,
+        &mut self,
         agent_id: &str,
         text: &str,
-        is_self: bool,
-        agent_name: &str,
-        cx: &gpui::App,
-    ) {
-        let Some(ref webview) = self.office_webview else {
-            return;
-        };
-        // Escape quotes/newlines so the JS string is valid
-        let safe_text = text
-            .replace('\\', "\\\\")
-            .replace('"', "\\\"")
-            .replace('\n', "\\n")
-            .replace('\r', "");
-        let safe_agent_id = agent_id.replace('"', "\\\"");
-        let safe_agent_name = agent_name.replace('"', "\\\"");
-        let is_self_js = if is_self { "true" } else { "false" };
-        let script = format!(
-            r#"window.pushChatMessage && window.pushChatMessage("{}", "{}", {}, "{}");"#,
-            safe_agent_id, safe_text, is_self_js, safe_agent_name
-        );
-        let _ = webview.read(cx).evaluate_script(&script);
-    }
-
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    pub(crate) fn push_office_chat_message(
-        &self,
-        _agent_id: &str,
-        _text: &str,
         _is_self: bool,
         _agent_name: &str,
         _cx: &gpui::App,
     ) {
-        // No-op on Linux
+        self.office_state.push_message(agent_id, text);
     }
 
     fn persist_initial_iflow_for_run(
@@ -2992,7 +2700,6 @@ impl TeamWorkspacePanel {
             let session_id_for_ai = session_id.clone();
             let run_id_for_ai = run_id.clone();
 
-            let debate_mode = self.debate_mode;
             let db_clone = db.clone();
             let team_bus_for_ai = self.team_bus.clone();
             let team_bus_clone = self.team_bus.clone();
@@ -3078,7 +2785,7 @@ impl TeamWorkspacePanel {
                         .await;
                 }
 
-                let debate_steps: Vec<(String, &'static str)> = if debate_mode && agent_ids.len() > 1 {
+                let debate_steps: Vec<(String, &'static str)> = if agent_ids.len() > 1 {
                     let mut steps = vec![
                         (agent_ids[0].clone(), "PROPOSER"),
                         (agent_ids[1].clone(), "CRITIC"),
@@ -3125,7 +2832,7 @@ impl TeamWorkspacePanel {
                             let mut full_history = current_history.clone();
 
                             if let Some(mut sys) = chat_service.build_dynamic_system_prompt(&team_id_clone, &instance_id_for_ai, &agent_id) {
-                                if debate_mode && *debate_role != "SOLO" && step_ix > 0 {
+                                if *debate_role != "SOLO" {
                                     sys.push_str("\n\nDEBATE PROTOCOL\nYou are collaborating with other agents in the same team. You MUST read previous agent responses in the chat history.\n");
                                     match *debate_role {
                                         "PROPOSER" => {
@@ -3362,7 +3069,7 @@ impl TeamWorkspacePanel {
                                     agent_name: Some(gpui::SharedString::from(agent.name.clone())),
                                     thought_duration_secs: None,
                                 });
-                                if debate_mode && text.contains("[CONSENSUS_REACHED]") {
+                                if text.contains("[CONSENSUS_REACHED]") {
                                     break;
                                 }
                             }

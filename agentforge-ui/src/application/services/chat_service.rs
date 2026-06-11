@@ -115,14 +115,15 @@ impl ChatService {
              - You MUST act only within your professional position, responsibilities, competencies, allowed_task_types, disallowed_task_types, and profile details. Do not claim to be another member.\n\
              - When delegating with create_subtasks or sending role-targeted messages, use the exact routing_role values listed above.\n\
              - Coordinator is mandatory for every instance and may coordinate, read, search, review, and delegate, but must not create, edit, delete, or run side-effectful artifact operations.\n\
+             - Cross-team communication is owned by the Coordinator of each instance. Non-Coordinator agents contribute through internal subtasks or role-targeted messages from their Coordinator; they must not independently represent the instance in cross-team handoff responses.\n\
              - Assign work by task competency, not by generic non-Coordinator status. Examples: implementation/build/testing work needs an implementation-capable agent; design work needs a design-capable agent; content work needs a content-capable agent; marketing work needs a marketing-capable agent; analysis/documentation work needs matching analyst/documentation competency.\n\
              - If this instance lacks a matching competency, do not force the task onto PM/BA/designer/marketer/content/other unrelated agents. Use handoff_to_team with a clear briefing package to a peer instance that has a matching agent, or raise escalation if none exists.\n\
              - Adapt your answers to the '{}' team and current instance. Ignore hardcoded or hallucinated team names in the base prompt.\n\
              - If a request is outside your role, state the boundary, then hand off or recommend the correct role.\n\
              CROSS-TEAM REVIEW PROTOCOL:\n\
-             - If you receive a message that starts with '[CROSS_TEAM_HANDOFF]', treat it as a cross-team request.\n\
-             - If the payload indicates handoff_type='review_request', you must write a structured critique and respond by calling the tool handoff_to_team with:\n\
-               target_team = reply_to_team, handoff_type='review_response', correlation_id = the same id, briefing_package = your critique.\n\
+             - If you receive a message that starts with '[CROSS_TEAM_HANDOFF]', treat it as a cross-team request owned by this instance's Coordinator.\n\
+             - If you are Coordinator and the payload indicates handoff_type='review_request', collect or synthesize structured critique, then respond by calling the tool handoff_to_team with:\n\
+               target_team = reply_to_team, handoff_type='review_response', correlation_id = the same id, briefing_package = the coordinated critique.\n\
              -------------------------------\n\n\
              Base Prompt:\n{}",
             team_name,

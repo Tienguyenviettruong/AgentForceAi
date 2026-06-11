@@ -13,7 +13,7 @@ use gpui_component::{
     notification::NotificationType,
     select::{Select, SelectEvent, SelectState},
     theme::ActiveTheme,
-    v_flex, WindowExt,
+    v_flex, Sizable, WindowExt,
 };
 
 fn sanitize_base_url(s: &str) -> String {
@@ -80,6 +80,15 @@ fn credential_label(api_key_ref: Option<&str>) -> String {
         Some(_) => "Credential ref".to_string(),
         None => "No key".to_string(),
     }
+}
+
+fn secret_account_from_ref(api_key_ref: Option<&str>) -> Option<String> {
+    api_key_ref
+        .map(str::trim)
+        .and_then(|value| value.strip_prefix("secret://"))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
 }
 
 fn provider_status(p: &Provider) -> (&'static str, gpui::Hsla) {
@@ -325,11 +334,123 @@ impl CustomProviderSection {
             window.push_notification((NotificationType::Error, "Failed to save provider."), cx);
         }
     }
+
+    fn build_api_key_ref(
+        &self,
+        api_key: &str,
+        existing_ref: Option<&str>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<String> {
+        let api_key_trim = api_key.trim();
+        if api_key_trim.is_empty() {
+            window.push_notification(
+                (
+                    NotificationType::Error,
+                    "Enter a new API key, secret:// reference, or env:VARIABLE.",
+                ),
+                cx,
+            );
+            return None;
+        }
+        if is_credential_reference(api_key_trim) {
+            return Some(api_key_trim.to_string());
+        }
+
+        let secret_account = secret_account_from_ref(existing_ref)
+            .unwrap_or_else(|| format!("custom-provider-{}", uuid::Uuid::new_v4()));
+        let save_result = smol::block_on(async {
+            let keychain = crate::infrastructure::security::keychain::Keychain::new().await?;
+            keychain
+                .set_secret(
+                    crate::infrastructure::security::keychain::SECURE_SECRET_SERVICE,
+                    &secret_account,
+                    api_key_trim,
+                )
+                .await?;
+            Ok::<(), anyhow::Error>(())
+        });
+
+        match save_result {
+            Ok(()) => Some(format!("secret://{}", secret_account)),
+            Err(error) => {
+                window.push_notification(
+                    (
+                        NotificationType::Error,
+                        gpui::SharedString::from(format!(
+                            "Failed to store credential in OS keychain: {}",
+                            error
+                        )),
+                    ),
+                    cx,
+                );
+                None
+            }
+        }
+    }
+
+    fn update_provider_key(
+        &mut self,
+        provider_id: String,
+        key_input: Entity<InputState>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(existing_provider) = self
+            .custom_providers
+            .iter()
+            .find(|provider| provider.id == provider_id)
+            .cloned()
+        else {
+            window.push_notification((NotificationType::Error, "Provider was not found."), cx);
+            return;
+        };
+
+        let api_key = key_input.read(cx).text().to_string();
+        let Some(api_key_ref) = self.build_api_key_ref(
+            &api_key,
+            existing_provider.api_key_ref.as_deref(),
+            window,
+            cx,
+        ) else {
+            return;
+        };
+
+        let mut updated_provider = existing_provider;
+        updated_provider.api_key_ref = Some(api_key_ref);
+        updated_provider.status = "available".to_string();
+
+        let db = crate::AppState::global(cx).db.clone();
+        match db.insert_provider(&updated_provider) {
+            Ok(()) => {
+                self.custom_providers = db.list_providers().unwrap_or_default();
+                window.close_dialog(cx);
+                window.push_notification(
+                    (NotificationType::Success, "Provider API key updated."),
+                    cx,
+                );
+                cx.notify();
+            }
+            Err(error) => {
+                window.push_notification(
+                    (
+                        NotificationType::Error,
+                        gpui::SharedString::from(format!(
+                            "Failed to update provider key: {}",
+                            error
+                        )),
+                    ),
+                    cx,
+                );
+            }
+        }
+    }
 }
 
 impl Render for CustomProviderSection {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
+        let view = cx.entity().clone();
         let mut container = v_flex().gap_4().w_full();
 
         // ── Provider Table ────────────────────────────────────────────────
@@ -347,6 +468,9 @@ impl Render for CustomProviderSection {
                 let endpoint = endpoint_label(p.command.as_deref());
                 let credential = credential_label(p.api_key_ref.as_deref());
                 let (status_label, status_color) = provider_status(p);
+                let provider_for_key = p.clone();
+                let view_for_key = view.clone();
+                let dialog_muted_foreground = theme.muted_foreground;
                 provider_list = provider_list.child(
                     h_flex()
                         .w_full()
@@ -402,6 +526,114 @@ impl Render for CustomProviderSection {
                                     .text_xs()
                                     .child(status_label),
                             ),
+                        )
+                        .child(
+                            div().w(px(110.)).child(
+                                Button::new(("update-key", ix))
+                                    .small()
+                                    .label("Update Key")
+                                    .on_click(move |_ev, window, cx| {
+                                        let provider = provider_for_key.clone();
+                                        let view_save = view_for_key.clone();
+                                        let key_input = cx.new(|cx| {
+                                            InputState::new(window, cx)
+                                                .placeholder("Paste new key, secret://..., or env:...")
+                                                .masked(true)
+                                        });
+                                        if let Some(env_ref) = provider
+                                            .api_key_ref
+                                            .as_deref()
+                                            .filter(|value| value.trim().starts_with("env:"))
+                                        {
+                                            key_input.update(cx, |state, cx| {
+                                                state.set_value(env_ref.to_string(), window, cx);
+                                            });
+                                        }
+                                        let key_input_for_save = key_input.clone();
+                                        window.open_dialog(cx, move |dialog, _window, _cx| {
+                                            let provider_id = provider.id.clone();
+                                            let provider_name = provider.provider_name.clone();
+                                            let provider_model = provider.model.clone();
+                                            let current_credential =
+                                                credential_label(provider.api_key_ref.as_deref());
+                                            let view_save2 = view_save.clone();
+                                            let key_input_for_footer = key_input_for_save.clone();
+
+                                            dialog
+                                                .title("Update Provider Key")
+                                                .w(px(520.))
+                                                .child(
+                                                    v_flex()
+                                                        .gap(px(12.))
+                                                        .py(px(8.))
+                                                        .child(
+                                                            div()
+                                                                .text_sm()
+                                                                .text_color(
+                                                                    dialog_muted_foreground,
+                                                                )
+                                                                .child(format!(
+                                                                    "{} / {}",
+                                                                    provider_name, provider_model
+                                                                )),
+                                                        )
+                                                        .child(
+                                                            div()
+                                                                .text_xs()
+                                                                .text_color(
+                                                                    dialog_muted_foreground,
+                                                                )
+                                                                .child(format!(
+                                                                    "Current credential: {}",
+                                                                    current_credential
+                                                                )),
+                                                        )
+                                                        .child(
+                                                            field()
+                                                                .label("New API Key / Reference")
+                                                                .required(true)
+                                                                .child(
+                                                                    Input::new(
+                                                                        &key_input_for_save,
+                                                                    )
+                                                                    .mask_toggle(),
+                                                                ),
+                                                        ),
+                                                )
+                                                .footer(move |_, _, _, _| {
+                                                    let provider_id = provider_id.clone();
+                                                    let view_save3 = view_save2.clone();
+                                                    let key_input_for_save =
+                                                        key_input_for_footer.clone();
+                                                    vec![
+                                                        Button::new("cancel-update-provider-key")
+                                                            .label("Cancel")
+                                                            .on_click(|_, window, cx| {
+                                                                window.close_dialog(cx);
+                                                            })
+                                                            .into_any_element(),
+                                                        Button::new("save-provider-key")
+                                                            .primary()
+                                                            .label("Save Key")
+                                                            .on_click(move |_ev, window, cx| {
+                                                                view_save3.update(
+                                                                    cx,
+                                                                    |this: &mut CustomProviderSection, cx| {
+                                                                        this.update_provider_key(
+                                                                            provider_id.clone(),
+                                                                            key_input_for_save.clone(),
+                                                                            window,
+                                                                            cx,
+                                                                        )
+                                                                    },
+                                                                );
+                                                            })
+                                                            .into_any_element(),
+                                                    ]
+                                                })
+                                        });
+                                    }),
+                            ),
                         ),
                 );
             }
@@ -414,7 +646,6 @@ impl Render for CustomProviderSection {
         }
 
         // ── Add Provider Button → opens dialog ────────────────────────────
-        let view = cx.entity().clone();
         let provider_select = self.provider_select.clone();
         let model_select = self.model_select.clone();
         let provider_alias_input = self.provider_alias_input.clone();

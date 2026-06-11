@@ -5,20 +5,25 @@ use crate::application::iflow_engine::nodes::{Node, NodeType, WorkflowData};
 use crate::core::models::workflow::WorkflowRecord;
 use crate::core::traits::database::DatabasePort;
 use gpui::*;
-use gpui_component::button::Button;
+use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::dock::{Panel, PanelEvent, TitleStyle};
+use gpui_component::input::{Input, InputState};
 use gpui_component::ActiveTheme as _;
 use gpui_component::Sizable;
 use gpui_component::WindowExt;
 use gpui_component::{h_flex, v_flex};
+use gpui_component::{Icon, IconName};
 use std::collections::HashMap;
 use std::sync::Arc;
 use uuid::Uuid;
 
-const NODE_WIDTH: f32 = 200.0;
+const NODE_WIDTH: f32 = 220.0;
 const HEADER_HEIGHT: f32 = 32.0;
 const PORT_HEIGHT: f32 = 24.0;
 const PADDING: f32 = 8.0;
+const LAYOUT_X_GAP: f32 = 340.0;
+const LAYOUT_Y_GAP: f32 = 180.0;
+const LAYOUT_Y_STAGGER: f32 = 76.0;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct NodePort {
@@ -95,6 +100,9 @@ pub struct IFlowBuilderPanel {
     dragging_node: Option<(Uuid, Point<f32>)>,
     panning: Option<Point<f32>>,
     connecting: Option<(Uuid, String, Point<f32>)>,
+    selected_node_id: Option<Uuid>,
+    node_title_input: Entity<InputState>,
+    node_prompt_input: Entity<InputState>,
 
     workflow_engine: WorkflowEngine,
     workflow_id: Option<String>,
@@ -112,9 +120,16 @@ pub struct IFlowBuilderPanel {
 }
 
 impl IFlowBuilderPanel {
-    pub fn new(_window: &mut Window, cx: &mut App) -> Self {
+    pub fn new(window: &mut Window, cx: &mut App) -> Self {
         let db = crate::AppState::global(cx).db.clone();
         let team_bus = crate::AppState::global(cx).team_bus.clone();
+        let node_title_input = cx.new(|cx| InputState::new(window, cx).placeholder("Node title"));
+        let node_prompt_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .multi_line(true)
+                .auto_grow(3, 10)
+                .placeholder("Prompt, instruction, condition, or node details")
+        });
 
         let workflow_engine = WorkflowEngine::new_with_context(Arc::new(
             crate::application::iflow_engine::engine::WorkflowExecutionContext {
@@ -147,6 +162,9 @@ impl IFlowBuilderPanel {
             dragging_node: None,
             panning: None,
             connecting: None,
+            selected_node_id: None,
+            node_title_input,
+            node_prompt_input,
             workflow_engine,
             workflow_id: Some(workflow_id),
             workflow_version_id: None,
@@ -185,6 +203,7 @@ impl IFlowBuilderPanel {
             let (state, workflow_to_canvas, canvas_to_workflow) =
                 Self::build_canvas_from_workflow(&wf);
             self.state = state;
+            self.selected_node_id = None;
             self.workflow_to_canvas = workflow_to_canvas;
             self.canvas_to_workflow = canvas_to_workflow;
             self.execution_id = None;
@@ -269,6 +288,245 @@ impl IFlowBuilderPanel {
         }
     }
 
+    fn input_ports_for_node(_node_type: &NodeType) -> Vec<NodePort> {
+        vec![NodePort {
+            id: "in".to_string(),
+            name: "In".to_string(),
+        }]
+    }
+
+    fn output_ports_for_node(node_type: &NodeType) -> Vec<NodePort> {
+        match node_type {
+            NodeType::End => Vec::new(),
+            NodeType::Decision { .. } => vec![
+                NodePort {
+                    id: "true".to_string(),
+                    name: "True".to_string(),
+                },
+                NodePort {
+                    id: "false".to_string(),
+                    name: "False".to_string(),
+                },
+            ],
+            NodeType::HumanReview { .. } => vec![
+                NodePort {
+                    id: "approve".to_string(),
+                    name: "Approve".to_string(),
+                },
+                NodePort {
+                    id: "reject".to_string(),
+                    name: "Reject".to_string(),
+                },
+            ],
+            _ => vec![NodePort {
+                id: "out".to_string(),
+                name: "Out".to_string(),
+            }],
+        }
+    }
+
+    fn workflow_edges(node: &Node) -> Vec<(String, String)> {
+        let mut edges = Vec::new();
+        for next in &node.next_nodes {
+            if !next.trim().is_empty() {
+                edges.push(("out".to_string(), next.clone()));
+            }
+        }
+        match &node.node_type {
+            NodeType::Decision {
+                true_next,
+                false_next,
+                ..
+            } => {
+                if !true_next.trim().is_empty() {
+                    edges.push(("true".to_string(), true_next.clone()));
+                }
+                if !false_next.trim().is_empty() {
+                    edges.push(("false".to_string(), false_next.clone()));
+                }
+            }
+            NodeType::HumanReview {
+                approved_next,
+                rejected_next,
+                ..
+            } => {
+                if !approved_next.trim().is_empty() {
+                    edges.push(("approve".to_string(), approved_next.clone()));
+                }
+                if !rejected_next.trim().is_empty() {
+                    edges.push(("reject".to_string(), rejected_next.clone()));
+                }
+            }
+            _ => {}
+        }
+        edges
+    }
+
+    fn node_icon(node_type: &NodeType) -> IconName {
+        match node_type {
+            NodeType::Start => IconName::ArrowRight,
+            NodeType::CronTrigger { .. } => IconName::Bell,
+            NodeType::End => IconName::CircleCheck,
+            NodeType::AgentTask { .. } => IconName::Bot,
+            NodeType::SystemCommand { .. } => IconName::SquareTerminal,
+            NodeType::HttpRequest { .. } => IconName::Globe,
+            NodeType::Transform { .. } => IconName::Replace,
+            NodeType::Decision { .. } => IconName::ChartPie,
+            NodeType::HumanReview { .. } => IconName::User,
+            NodeType::Merge => IconName::GalleryVerticalEnd,
+            NodeType::Delay { .. } => IconName::Bell,
+        }
+    }
+
+    fn node_kind_label(node_type: &NodeType) -> &'static str {
+        match node_type {
+            NodeType::Start => "Start",
+            NodeType::CronTrigger { .. } => "Cron",
+            NodeType::End => "End",
+            NodeType::AgentTask { .. } => "Agent",
+            NodeType::SystemCommand { .. } => "Command",
+            NodeType::HttpRequest { .. } => "HTTP",
+            NodeType::Transform { .. } => "Transform",
+            NodeType::Decision { .. } => "Decision",
+            NodeType::HumanReview { .. } => "Review",
+            NodeType::Merge => "Merge",
+            NodeType::Delay { .. } => "Delay",
+        }
+    }
+
+    fn node_prompt_label(node_type: &NodeType) -> &'static str {
+        match node_type {
+            NodeType::AgentTask { .. } => "Agent instruction",
+            NodeType::SystemCommand { .. } => "Command",
+            NodeType::HttpRequest { .. } => "Request URL",
+            NodeType::Transform { .. } => "Input variable",
+            NodeType::Decision { .. } => "Condition variable",
+            NodeType::HumanReview { .. } => "Review prompt",
+            NodeType::CronTrigger { .. } => "Interval",
+            NodeType::Delay { .. } => "Duration",
+            NodeType::Start => "Start note",
+            NodeType::End => "End note",
+            NodeType::Merge => "Merge note",
+        }
+    }
+
+    fn node_prompt_text(node_type: &NodeType) -> String {
+        match node_type {
+            NodeType::AgentTask { instruction, .. } => instruction.clone(),
+            NodeType::SystemCommand { command, .. } => command.clone(),
+            NodeType::HttpRequest { url, .. } => url.clone(),
+            NodeType::Transform { input_var, .. } => input_var.clone(),
+            NodeType::Decision { condition_var, .. } => condition_var.clone(),
+            NodeType::HumanReview { prompt, .. } => prompt.clone(),
+            NodeType::CronTrigger { interval_ms } => interval_ms.to_string(),
+            NodeType::Delay { duration_ms } => duration_ms.to_string(),
+            NodeType::Start | NodeType::End | NodeType::Merge => String::new(),
+        }
+    }
+
+    fn set_node_prompt_text(node_type: &mut NodeType, text: String) {
+        match node_type {
+            NodeType::AgentTask { instruction, .. } => {
+                *instruction = text;
+            }
+            NodeType::SystemCommand { command, .. } => {
+                *command = text;
+            }
+            NodeType::HttpRequest { url, .. } => {
+                *url = text;
+            }
+            NodeType::Transform { input_var, .. } => {
+                *input_var = text;
+            }
+            NodeType::Decision { condition_var, .. } => {
+                *condition_var = text;
+            }
+            NodeType::HumanReview { prompt, .. } => {
+                *prompt = text;
+            }
+            NodeType::CronTrigger { interval_ms } => {
+                if let Ok(value) = text.trim().parse::<u64>() {
+                    *interval_ms = value.max(1);
+                }
+            }
+            NodeType::Delay { duration_ms } => {
+                if let Ok(value) = text.trim().parse::<u64>() {
+                    *duration_ms = value.max(1);
+                }
+            }
+            NodeType::Start | NodeType::End | NodeType::Merge => {}
+        }
+    }
+
+    fn prompt_template(node_type: &NodeType) -> &'static str {
+        match node_type {
+            NodeType::AgentTask { .. } => {
+                "Summarize the current context, identify the next action, execute only the assigned responsibility, and write outputs to the agreed artifact path."
+            }
+            NodeType::Decision { .. } => "decision_ready",
+            NodeType::HumanReview { .. } => {
+                "Review the generated artifact, list blocking issues, and approve only when the output is usable."
+            }
+            NodeType::SystemCommand { .. } => "cargo check",
+            NodeType::HttpRequest { .. } => "https://api.example.com/endpoint",
+            NodeType::Transform { .. } => "input_var",
+            NodeType::CronTrigger { .. } => "60000",
+            NodeType::Delay { .. } => "1000",
+            NodeType::Start | NodeType::End | NodeType::Merge => "",
+        }
+    }
+
+    fn select_node_for_inspector(
+        &mut self,
+        node_id: Uuid,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(node) = self.state.nodes.iter().find(|node| node.id == node_id) {
+            self.selected_node_id = Some(node_id);
+            let title = node.title.clone();
+            let prompt = Self::node_prompt_text(&node.node_data);
+            self.node_title_input.update(cx, |state, cx| {
+                state.set_value(title, window, cx);
+            });
+            self.node_prompt_input.update(cx, |state, cx| {
+                state.set_value(prompt, window, cx);
+            });
+        }
+    }
+
+    fn apply_node_inspector(&mut self, cx: &mut Context<Self>) {
+        let Some(node_id) = self.selected_node_id else {
+            return;
+        };
+        let title = self.node_title_input.read(cx).text().to_string();
+        let prompt = self.node_prompt_input.read(cx).text().to_string();
+        if self.state.nodes.iter().any(|node| node.id == node_id) {
+            self.save_state();
+        }
+        if let Some(node) = self.state.nodes.iter_mut().find(|node| node.id == node_id) {
+            let title = title.trim();
+            if !title.is_empty() {
+                node.title = title.to_string();
+            }
+            Self::set_node_prompt_text(&mut node.node_data, prompt);
+        }
+    }
+
+    fn use_node_prompt_template(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(node_id) = self.selected_node_id else {
+            return;
+        };
+        let Some(node) = self.state.nodes.iter().find(|node| node.id == node_id) else {
+            return;
+        };
+        let template = Self::prompt_template(&node.node_data);
+        self.node_prompt_input.update(cx, |state, cx| {
+            state.set_value(template, window, cx);
+        });
+        self.apply_node_inspector(cx);
+    }
+
     fn build_canvas_from_workflow(
         workflow: &crate::application::iflow_engine::engine::Workflow,
     ) -> (FlowState, HashMap<String, Uuid>, HashMap<Uuid, String>) {
@@ -276,80 +534,87 @@ impl IFlowBuilderPanel {
         let mut workflow_to_canvas: HashMap<String, Uuid> = HashMap::new();
         let mut canvas_to_workflow: HashMap<Uuid, String> = HashMap::new();
 
-        // Topologically sort nodes starting from "start" (or the first node)
-        let mut sorted = Vec::new();
-        let mut visited = std::collections::HashSet::new();
+        let mut levels: HashMap<String, usize> = HashMap::new();
         let mut queue = std::collections::VecDeque::new();
 
-        // Find start node, or just use the first available
         if let Some(start) = workflow.nodes.values().find(|n| {
             n.id == "start"
                 || n.node_type == crate::application::iflow_engine::nodes::NodeType::Start
         }) {
-            queue.push_back(start.id.clone());
+            queue.push_back((start.id.clone(), 0usize));
         } else if let Some(first) = workflow.nodes.keys().next() {
-            queue.push_back(first.clone());
+            queue.push_back((first.clone(), 0usize));
         }
 
-        while let Some(node_id) = queue.pop_front() {
-            if !visited.contains(&node_id) {
-                visited.insert(node_id.clone());
-                if let Some(node) = workflow.nodes.get(&node_id) {
-                    sorted.push(node);
-                    for next_id in &node.next_nodes {
-                        queue.push_back(next_id.clone());
-                    }
-                    // Also handle decision nodes
-                    if let crate::application::iflow_engine::nodes::NodeType::Decision {
-                        true_next,
-                        false_next,
-                        ..
-                    } = &node.node_type
-                    {
-                        queue.push_back(true_next.clone());
-                        queue.push_back(false_next.clone());
+        while let Some((node_id, level)) = queue.pop_front() {
+            let should_visit = levels
+                .get(&node_id)
+                .map(|existing| level < *existing)
+                .unwrap_or(true);
+            if !should_visit {
+                continue;
+            }
+            levels.insert(node_id.clone(), level);
+            if let Some(node) = workflow.nodes.get(&node_id) {
+                for (_, next_id) in Self::workflow_edges(node) {
+                    if workflow.nodes.contains_key(&next_id) {
+                        queue.push_back((next_id, level + 1));
                     }
                 }
             }
         }
 
-        // Add any disconnected nodes
+        let disconnected_level = levels.values().copied().max().unwrap_or(0) + 1;
         for node in workflow.nodes.values() {
-            if !visited.contains(&node.id) {
-                sorted.push(node);
-            }
+            levels.entry(node.id.clone()).or_insert(disconnected_level);
         }
 
-        for (idx, node) in sorted.iter().enumerate() {
+        let mut sorted: Vec<&Node> = workflow.nodes.values().collect();
+        sorted.sort_by(|left, right| {
+            let left_level = levels.get(&left.id).copied().unwrap_or(usize::MAX);
+            let right_level = levels.get(&right.id).copied().unwrap_or(usize::MAX);
+            left_level
+                .cmp(&right_level)
+                .then_with(|| left.name.cmp(&right.name))
+                .then_with(|| left.id.cmp(&right.id))
+        });
+
+        let mut level_counts: HashMap<usize, usize> = HashMap::new();
+        for node in sorted.iter() {
             let canvas_id = Uuid::new_v4();
             workflow_to_canvas.insert(node.id.clone(), canvas_id);
             canvas_to_workflow.insert(canvas_id, node.id.clone());
+            let level = levels.get(&node.id).copied().unwrap_or(0);
+            let lane = level_counts.entry(level).or_insert(0);
+            let y_stagger = if *lane == 0 {
+                (level % 2) as f32 * LAYOUT_Y_STAGGER
+            } else {
+                0.0
+            };
 
             let flow_node = FlowNode {
                 id: canvas_id,
                 node_data: node.node_type.clone(),
                 title: node.name.clone(),
-                position: point(100.0 + (idx as f32 * 260.0), 120.0),
-                inputs: vec![NodePort {
-                    id: "in".to_string(),
-                    name: "In".to_string(),
-                }],
-                outputs: vec![NodePort {
-                    id: "out".to_string(),
-                    name: "Out".to_string(),
-                }],
+                position: point(
+                    100.0 + (level as f32 * LAYOUT_X_GAP),
+                    96.0 + (*lane as f32 * LAYOUT_Y_GAP) + y_stagger,
+                ),
+                inputs: Self::input_ports_for_node(&node.node_type),
+                outputs: Self::output_ports_for_node(&node.node_type),
             };
             state.nodes.push(flow_node);
+            *lane += 1;
         }
 
         for node in workflow.nodes.values() {
             if let Some(&from_canvas) = workflow_to_canvas.get(&node.id) {
-                for next in &node.next_nodes {
-                    if let Some(&to_canvas) = workflow_to_canvas.get(next) {
+                for (from_port, next) in Self::workflow_edges(node) {
+                    if let Some(&to_canvas) = workflow_to_canvas.get(&next) {
                         state.connections.push(Connection {
                             id: Uuid::new_v4(),
                             from_node: from_canvas,
-                            from_port: "out".to_string(),
+                            from_port,
                             to_node: to_canvas,
                             to_port: "in".to_string(),
                         });
@@ -425,20 +690,14 @@ impl IFlowBuilderPanel {
 
         let node = FlowNode {
             id: Uuid::new_v4(),
-            node_data,
+            node_data: node_data.clone(),
             title: format!("New {}", node_type_str),
             position: point(
                 (200.0 - self.pan.x) / self.zoom,
                 (200.0 - self.pan.y) / self.zoom,
             ),
-            inputs: vec![NodePort {
-                id: "in".to_string(),
-                name: "In".to_string(),
-            }],
-            outputs: vec![NodePort {
-                id: "out".to_string(),
-                name: "Out".to_string(),
-            }],
+            inputs: Self::input_ports_for_node(&node_data),
+            outputs: Self::output_ports_for_node(&node_data),
         };
         self.state.nodes.push(node);
     }
@@ -515,6 +774,9 @@ impl IFlowBuilderPanel {
         let width = px(NODE_WIDTH * zoom);
 
         let node_id = node.id;
+        let is_selected = self.selected_node_id == Some(node_id);
+        let node_icon = Self::node_icon(&node.node_data);
+        let node_kind = Self::node_kind_label(&node.node_data);
         let node_bg = self
             .canvas_to_workflow
             .get(&node_id)
@@ -539,11 +801,17 @@ impl IFlowBuilderPanel {
             .map(|(wid, s)| {
                 if s.current_nodes.iter().any(|n| n == wid) {
                     theme.primary
+                } else if is_selected {
+                    theme.accent
                 } else {
                     theme.border
                 }
             })
-            .unwrap_or(theme.border);
+            .unwrap_or(if is_selected {
+                theme.accent
+            } else {
+                theme.border
+            });
 
         div()
             .absolute()
@@ -555,6 +823,14 @@ impl IFlowBuilderPanel {
             .border_color(border_col)
             .rounded_xl()
             .shadow_md()
+            .cursor_pointer()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _e: &MouseDownEvent, window, cx| {
+                    this.select_node_for_inspector(node_id, window, cx);
+                    cx.notify();
+                }),
+            )
             .child(
                 div()
                     .bg(theme.background)
@@ -565,15 +841,50 @@ impl IFlowBuilderPanel {
                     .border_color(theme.border)
                     .text_size(px(14.0 * zoom))
                     .font_weight(FontWeight::BOLD)
-                    .child(node.title.clone())
+                    .child(
+                        h_flex()
+                            .h_full()
+                            .items_center()
+                            .gap(px(8.0 * zoom))
+                            .child(
+                                div()
+                                    .w(px(18.0 * zoom))
+                                    .h(px(18.0 * zoom))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .text_color(theme.primary)
+                                    .child(Icon::new(node_icon).size(px(14.0 * zoom))),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w(px(0.))
+                                    .truncate()
+                                    .text_color(theme.foreground)
+                                    .child(node.title.clone()),
+                            )
+                            .child(
+                                div()
+                                    .px(px(6.0 * zoom))
+                                    .py(px(2.0 * zoom))
+                                    .rounded_sm()
+                                    .bg(theme.secondary.opacity(0.65))
+                                    .text_color(theme.muted_foreground)
+                                    .text_size(px(10.0 * zoom))
+                                    .child(node_kind),
+                            ),
+                    )
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(move |this, e: &MouseDownEvent, _window, _cx| {
+                        cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                            this.select_node_for_inspector(node_id, window, cx);
                             let ex: f32 = e.position.x.into();
                             let ey: f32 = e.position.y.into();
                             let lx: f32 = left.into();
                             let ty: f32 = top.into();
                             this.dragging_node = Some((node_id, point(ex - lx, ey - ty)));
+                            cx.notify();
                         }),
                     ),
             )
@@ -660,6 +971,184 @@ impl IFlowBuilderPanel {
                             )
                     })),
             )
+    }
+
+    fn render_node_inspector(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme().clone();
+        let selected_node = self
+            .selected_node_id
+            .and_then(|node_id| self.state.nodes.iter().find(|node| node.id == node_id))
+            .cloned();
+
+        let content = if let Some(node) = selected_node {
+            let kind = Self::node_kind_label(&node.node_data);
+            let prompt_label = Self::node_prompt_label(&node.node_data);
+            let workflow_id = self
+                .canvas_to_workflow
+                .get(&node.id)
+                .cloned()
+                .unwrap_or_else(|| node.id.to_string());
+            let input_ports = node
+                .inputs
+                .iter()
+                .map(|port| port.name.clone())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let output_ports = if node.outputs.is_empty() {
+                "-".to_string()
+            } else {
+                node.outputs
+                    .iter()
+                    .map(|port| port.name.clone())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+
+            v_flex()
+                .gap_3()
+                .child(
+                    h_flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .w(px(28.))
+                                .h(px(28.))
+                                .rounded_md()
+                                .bg(theme.primary.opacity(0.12))
+                                .text_color(theme.primary)
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .child(Icon::new(Self::node_icon(&node.node_data)).size(px(16.))),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w(px(0.))
+                                .child(
+                                    div()
+                                        .text_size(px(13.))
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(theme.foreground)
+                                        .truncate()
+                                        .child(node.title),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(11.))
+                                        .text_color(theme.muted_foreground)
+                                        .child(kind),
+                                ),
+                        ),
+                )
+                .child(
+                    v_flex()
+                        .gap_1()
+                        .child(
+                            div()
+                                .text_size(px(11.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(theme.muted_foreground)
+                                .child("Title"),
+                        )
+                        .child(Input::new(&self.node_title_input)),
+                )
+                .child(
+                    v_flex()
+                        .gap_1()
+                        .child(
+                            div()
+                                .text_size(px(11.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(theme.muted_foreground)
+                                .child(prompt_label),
+                        )
+                        .child(Input::new(&self.node_prompt_input)),
+                )
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .child(
+                            Button::new("iflow-node-apply")
+                                .small()
+                                .primary()
+                                .label("Apply")
+                                .on_click(cx.listener(|this, _, _window, cx| {
+                                    this.apply_node_inspector(cx);
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            Button::new("iflow-node-template")
+                                .small()
+                                .label("Template")
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.use_node_prompt_template(window, cx);
+                                    cx.notify();
+                                })),
+                        ),
+                )
+                .child(
+                    div()
+                        .rounded_md()
+                        .border_1()
+                        .border_color(theme.border.opacity(0.6))
+                        .bg(theme.secondary.opacity(0.25))
+                        .p_2()
+                        .text_size(px(11.))
+                        .text_color(theme.muted_foreground)
+                        .child(format!(
+                            "id: {}\nin: {}\nout: {}",
+                            workflow_id, input_ports, output_ports
+                        )),
+                )
+                .into_any_element()
+        } else {
+            v_flex()
+                .gap_2()
+                .child(
+                    h_flex()
+                        .items_center()
+                        .gap_2()
+                        .text_color(theme.muted_foreground)
+                        .child(Icon::new(IconName::Inspector).size(px(16.)))
+                        .child(
+                            div()
+                                .text_size(px(13.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child("Select a node"),
+                        ),
+                )
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(theme.muted_foreground)
+                        .child(
+                        "Click a card to edit title, prompt, instruction, condition, or endpoint.",
+                    ),
+                )
+                .into_any_element()
+        };
+
+        div()
+            .w_full()
+            .bg(theme.background)
+            .border_1()
+            .border_color(theme.border)
+            .rounded_md()
+            .p_3()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(
+                div()
+                    .text_size(px(14.))
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(theme.foreground)
+                    .child("Node Inspector"),
+            )
+            .child(content)
     }
 
     fn render_dashboard(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1477,7 +1966,7 @@ impl Render for IFlowBuilderPanel {
         let view = cx.entity().clone();
 
         let mut lines = vec![];
-        for conn in &self.state.connections {
+        for (line_index, conn) in self.state.connections.iter().enumerate() {
             let from_node = nodes.iter().find(|n| n.id == conn.from_node);
             let to_node = nodes.iter().find(|n| n.id == conn.to_node);
 
@@ -1486,7 +1975,7 @@ impl Render for IFlowBuilderPanel {
                     f.output_port_pos(&conn.from_port),
                     t.input_port_pos(&conn.to_port),
                 ) {
-                    lines.push((p1, p2, false));
+                    lines.push((p1, p2, false, conn.from_port != "out", line_index));
                 }
             }
         }
@@ -1494,7 +1983,7 @@ impl Render for IFlowBuilderPanel {
         if let Some((from_node, from_port, current_pos)) = &self.connecting {
             if let Some(f) = nodes.iter().find(|n| n.id == *from_node) {
                 if let Some(p1) = f.output_port_pos(from_port) {
-                    lines.push((p1, *current_pos, true));
+                    lines.push((p1, *current_pos, true, false, self.state.connections.len()));
                 }
             }
         }
@@ -1576,35 +2065,88 @@ impl Render for IFlowBuilderPanel {
             .child({
                 let active_color = theme.foreground.opacity(0.8);
                 let inactive_color = theme.foreground.opacity(0.3);
+                let branch_color = theme.primary.opacity(0.5);
                 canvas(
                     move |_bounds, _window, _cx| {},
                     move |bounds, _, window, _cx| {
-                        for (p1, p2, is_active) in lines {
-                            let start_x = px(p1.x * zoom + pan.x) + bounds.origin.x;
-                            let start_y = px(p1.y * zoom + pan.y) + bounds.origin.y;
-                            let end_x = px(p2.x * zoom + pan.x) + bounds.origin.x;
-                            let end_y = px(p2.y * zoom + pan.y) + bounds.origin.y;
+                        for (p1, p2, is_active, is_dashed, line_index) in lines {
+                            let origin_x: f32 = bounds.origin.x.into();
+                            let origin_y: f32 = bounds.origin.y.into();
+                            let start = point(
+                                p1.x * zoom + pan.x + origin_x,
+                                p1.y * zoom + pan.y + origin_y,
+                            );
+                            let end = point(
+                                p2.x * zoom + pan.x + origin_x,
+                                p2.y * zoom + pan.y + origin_y,
+                            );
 
-                            let dx: f32 = end_x.into();
-                            let sx: f32 = start_x.into();
-                            let d_width = px((dx - sx).abs() * 0.5);
+                            let horizontal = (end.x - start.x).abs();
+                            let lane_offset = ((line_index % 7) as f32 - 3.0) * 18.0 * zoom;
+                            let bend_span = (horizontal * 0.5).clamp(70.0 * zoom, 210.0 * zoom);
+                            let bend_x = if end.x >= start.x {
+                                start.x + bend_span + lane_offset
+                            } else {
+                                start.x + (120.0 * zoom) + lane_offset
+                            };
+                            let route = [start, point(bend_x, start.y), point(bend_x, end.y), end];
                             let color = if is_active {
                                 active_color
+                            } else if is_dashed {
+                                branch_color
                             } else {
                                 inactive_color
                             };
+                            let stroke_width = if is_active { 2.25 } else { 1.5 };
 
-                            let mut builder = gpui::PathBuilder::stroke(px(2.0)).with_style(
-                                gpui::PathStyle::Stroke(gpui::StrokeOptions::default()),
-                            );
-                            builder.move_to(point(start_x, start_y));
-                            builder.cubic_bezier_to(
-                                point(end_x, end_y),
-                                point(start_x + d_width, start_y),
-                                point(end_x - d_width, end_y),
-                            );
-                            if let Ok(path) = builder.build() {
-                                window.paint_path(path, color);
+                            let mut paint_segment = |from: Point<f32>, to: Point<f32>| {
+                                let mut builder = gpui::PathBuilder::stroke(px(stroke_width))
+                                    .with_style(gpui::PathStyle::Stroke(
+                                        gpui::StrokeOptions::default(),
+                                    ));
+                                builder.move_to(point(px(from.x), px(from.y)));
+                                builder.line_to(point(px(to.x), px(to.y)));
+                                if let Ok(path) = builder.build() {
+                                    window.paint_path(path, color);
+                                }
+                            };
+
+                            if is_dashed && !is_active {
+                                let dash = 11.0 * zoom;
+                                let gap = 7.0 * zoom;
+                                for pair in route.windows(2) {
+                                    let from = pair[0];
+                                    let to = pair[1];
+                                    let dx = to.x - from.x;
+                                    let dy = to.y - from.y;
+                                    let length = (dx * dx + dy * dy).sqrt();
+                                    if length <= 0.1 {
+                                        continue;
+                                    }
+                                    let mut cursor = 0.0;
+                                    while cursor < length {
+                                        let dash_end = (cursor + dash).min(length);
+                                        let a_t = cursor / length;
+                                        let b_t = dash_end / length;
+                                        paint_segment(
+                                            point(from.x + dx * a_t, from.y + dy * a_t),
+                                            point(from.x + dx * b_t, from.y + dy * b_t),
+                                        );
+                                        cursor += dash + gap;
+                                    }
+                                }
+                            } else {
+                                let mut builder = gpui::PathBuilder::stroke(px(stroke_width))
+                                    .with_style(gpui::PathStyle::Stroke(
+                                        gpui::StrokeOptions::default(),
+                                    ));
+                                builder.move_to(point(px(route[0].x), px(route[0].y)));
+                                for point in route.iter().skip(1) {
+                                    builder.line_to(gpui::point(px(point.x), px(point.y)));
+                                }
+                                if let Ok(path) = builder.build() {
+                                    window.paint_path(path, color);
+                                }
                             }
                         }
                     },
@@ -1720,6 +2262,7 @@ impl Render for IFlowBuilderPanel {
                     .text_color(theme.foreground)
                     .child("Node Library"),
             )
+            .child(self.render_node_inspector(cx))
             .child(self.render_logs(cx))
             .child(self.render_workflow_list(cx));
 

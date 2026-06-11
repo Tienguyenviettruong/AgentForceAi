@@ -16,6 +16,7 @@ use crate::db::{Agent, SessionRecord, Team};
 
 mod chat;
 mod members;
+pub(crate) mod office_canvas;
 mod teams;
 
 pub struct TeamWorkspacePanel {
@@ -59,15 +60,9 @@ pub struct TeamWorkspacePanel {
     pub(crate) is_generating: bool,
     pub(crate) generation_cancel_flag: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     pub(crate) recent_workspaces: Vec<String>,
-    pub(crate) debate_mode: bool,
-    #[cfg(any(target_os = "windows", target_os = "macos"))]
-    pub(crate) office_webview: Option<Entity<gpui_component::webview::WebView>>,
-    #[cfg(any(target_os = "windows", target_os = "macos"))]
-    pub(crate) office_webview_error: Option<String>,
-    #[cfg(any(target_os = "windows", target_os = "macos"))]
-    pub(crate) office_webview_init_attempted: bool,
-    #[cfg(any(target_os = "windows", target_os = "macos"))]
-    pub(crate) office_webview_disabled: bool,
+    pub(crate) office_state: office_canvas::OfficeState,
+    pub(crate) office_canvas_bounds_cache: Option<gpui::Bounds<gpui::Pixels>>,
+    pub(crate) office_animation_queued: bool,
 }
 
 impl TeamWorkspacePanel {
@@ -123,21 +118,9 @@ impl TeamWorkspacePanel {
             is_generating: false,
             generation_cancel_flag: None,
             recent_workspaces: Vec::new(),
-            debate_mode: false,
-            #[cfg(any(target_os = "windows", target_os = "macos"))]
-            office_webview: None,
-            #[cfg(any(target_os = "windows", target_os = "macos"))]
-            office_webview_error: None,
-            #[cfg(any(target_os = "windows", target_os = "macos"))]
-            office_webview_init_attempted: false,
-            #[cfg(any(target_os = "windows", target_os = "macos"))]
-            office_webview_disabled: std::env::var("AGENTFORGE_DISABLE_OFFICE_WEBVIEW")
-                .ok()
-                .map(|v| {
-                    let v = v.to_ascii_lowercase();
-                    v == "1" || v == "true" || v == "yes"
-                })
-                .unwrap_or(false),
+            office_state: office_canvas::OfficeState::new(),
+            office_canvas_bounds_cache: None,
+            office_animation_queued: false,
         };
 
         panel.reload(cx);
@@ -166,64 +149,37 @@ impl TeamWorkspacePanel {
         serde_json::from_str::<serde_json::Value>(payload_str).ok()
     }
 
-    pub fn set_active(&mut self, active: bool, cx: &mut Context<Self>) {
-        #[cfg(any(target_os = "windows", target_os = "macos"))]
-        {
-            if let Some(ref webview) = self.office_webview {
-                if active {
-                    if self.chat_active_tab == 1 {
-                        webview.update(cx, |wv, _| wv.show());
-                    }
-                } else {
-                    webview.update(cx, |wv, _| wv.hide());
-                }
-            }
-        }
+    pub fn set_active(&mut self, _active: bool, _cx: &mut Context<Self>) {
+        // No-op: native canvas doesn't need show/hide management
     }
 
-    pub(crate) fn sync_office_webview(&mut self, cx: &mut Context<Self>) {
-        #[cfg(any(target_os = "windows", target_os = "macos"))]
-        {
-            if let Some(webview) = &self.office_webview {
-                // 1. Sync Visibility
-                let should_be_visible =
-                    self.chat_active_tab == 1 && !self.is_workspace_dropdown_open;
-                webview.update(cx, |w, _| {
-                    if should_be_visible {
-                        w.show();
-                    } else {
-                        w.hide();
-                    }
-                });
-
-                // 2. Sync Agents if visible
-                if should_be_visible {
-                    if let Some(instance_id) = &self.selected_instance_id {
-                        let db = crate::AppState::global(cx).db.clone();
-                        if let Ok(agent_ids) = db.get_instance_agents(instance_id) {
-                            let mut active_agents = Vec::new();
-                            for agent in &self.agents {
-                                if agent_ids.contains(&agent.id) {
-                                    active_agents.push(serde_json::json!({
-                                        "id": agent.id.clone(),
-                                        "name": agent.name.clone(),
-                                        "provider": agent.provider.clone(),
-                                        "status": agent.status.clone(),
-                                        "message": None::<String>
-                                    }));
-                                }
-                            }
-                            if let Ok(json) = serde_json::to_string(&active_agents) {
-                                let script = format!(
-                                    "window.updateAgents && window.updateAgents({});",
-                                    json
-                                );
-                                let _ = webview.read(cx).evaluate_script(&script);
-                            }
-                        }
+    pub(crate) fn sync_office_agents(&mut self, cx: &mut Context<Self>) {
+        if let Some(instance_id) = &self.selected_instance_id {
+            let db = crate::AppState::global(cx).db.clone();
+            if let Ok(agent_ids) = db.get_instance_agents(instance_id) {
+                let tasks = db.list_tasks_for_instance(instance_id).unwrap_or_default();
+                let mut agent_data = Vec::new();
+                for agent in &self.agents {
+                    if agent_ids.contains(&agent.id) {
+                        let active_task_count = tasks
+                            .iter()
+                            .filter(|task| {
+                                task.assignee_id.as_deref() == Some(agent.id.as_str())
+                                    && !matches!(task.status.as_str(), "completed" | "failed")
+                            })
+                            .count();
+                        agent_data.push((
+                            agent.id.clone(),
+                            agent.name.clone(),
+                            agent.status.clone(),
+                            active_task_count,
+                        ));
                     }
                 }
+                self.office_state.sync_agents(agent_data);
             }
+        } else {
+            self.office_state.reset();
         }
     }
 
@@ -428,6 +384,12 @@ impl TeamWorkspacePanel {
                                             });
                                     }
                                 }
+                                let has_visible_content =
+                                    office_canvas::office_visible_message_text(&msg.content, 1)
+                                        .is_some();
+                                if msg.delivery_status == "typing" && !has_visible_content {
+                                    return;
+                                }
                                 let session_id = this
                                     .instance_active_session
                                     .get(&instance_id)
@@ -471,8 +433,9 @@ impl TeamWorkspacePanel {
                                             is_new_message = true;
                                         }
                                     }
-                                    #[cfg(any(target_os = "windows", target_os = "macos"))]
-                                    if is_new_message {
+                                    if has_visible_content
+                                        && (is_new_message || msg.delivery_status != "typing")
+                                    {
                                         this.push_office_chat_message(
                                             &msg.sender_member_id,
                                             &msg.content,
@@ -620,7 +583,7 @@ impl TeamWorkspacePanel {
         }
 
         self.refresh_pending_chat_action(cx);
-        self.sync_office_webview(cx);
+        self.sync_office_agents(cx);
         cx.notify();
     }
 }

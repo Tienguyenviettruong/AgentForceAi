@@ -12,6 +12,8 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use urlencoding::encode;
 
+const GRAPH_LABEL_MIN_ZOOM: f32 = 0.82;
+
 pub struct KnowledgePanel {
     focus_handle: gpui::FocusHandle,
     knowledge_service: Arc<crate::application::services::knowledge_service::KnowledgeService>,
@@ -103,6 +105,14 @@ impl TreeNode {
 }
 
 impl KnowledgePanel {
+    fn graph_label_text(value: impl AsRef<str>) -> String {
+        value
+            .as_ref()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
     fn preprocess_obsidian_markdown(input: &str) -> String {
         let normalized = input
             .replace("0\u{fe0f}\u{20e3}", "0.")
@@ -222,9 +232,7 @@ impl KnowledgePanel {
             cx.background_executor()
                 .timer(std::time::Duration::from_secs(3))
                 .await;
-            if crate::ui::framework::reentrancy::office_webview_init_in_progress() {
-                continue;
-            }
+
             if cx
                 .update(|cx| {
                     let _ = view.update(cx, |this: &mut Self, cx| {
@@ -244,9 +252,7 @@ impl KnowledgePanel {
                 cx.background_executor()
                     .timer(std::time::Duration::from_millis(16))
                     .await;
-                if crate::ui::framework::reentrancy::office_webview_init_in_progress() {
-                    continue;
-                }
+
                 if cx
                     .update(|cx| {
                         let _ = view.update(cx, |this: &mut Self, cx| {
@@ -1030,8 +1036,14 @@ impl KnowledgePanel {
                     })
                     .children({
                         let mut nodes_ui = Vec::new();
+                        let label_min_zoom = if self.selected_item.is_some() {
+                            1.05
+                        } else {
+                            GRAPH_LABEL_MIN_ZOOM
+                        };
+                        let show_graph_labels = zoom >= label_min_zoom;
                         for i in 0..n {
-                            let title = nodes[i].1.clone();
+                            let title = Self::graph_label_text(&nodes[i].1);
                             let item_id = nodes[i].0;
                             let p_rel = node_positions[i];
                             let is_hovered = hovered_idx == Some(i);
@@ -1097,19 +1109,22 @@ impl KnowledgePanel {
                                             // we can just use `on_mouse_down` or leave edges static.
                                             // Wait, `on_mouse_move` can capture the event.
                                     )
-                                    .child(
-                                        div()
-                                            .absolute()
-                                            .top(px(node_size * 2.0 + 4.0))
-                                            // Move text left to center it relative to the node
-                                            .left(px(node_size - 50.0))
-                                            .w(px(100.0))
-                                            .flex()
-                                            .justify_center()
-                                            .text_size(px(12.))
-                                            .text_color(current_text_color)
-                                            .child(title)
-                                    )
+                                    .when(show_graph_labels || is_selected || is_hovered, |node| {
+                                        node.child(
+                                            div()
+                                                .absolute()
+                                                .top(px(node_size * 2.0 + 4.0))
+                                                // Move text left to center it relative to the node
+                                                .left(px(node_size - 50.0))
+                                                .w(px(100.0))
+                                                .flex()
+                                                .justify_center()
+                                                .truncate()
+                                                .text_size(px(12.))
+                                                .text_color(current_text_color)
+                                                .child(title),
+                                        )
+                                    })
                             );
                         }
                         nodes_ui
@@ -1555,6 +1570,7 @@ impl KnowledgePanel {
                         )
                         .w_full()
                         .p_6()
+                        .pb(px(96.))
                         .selectable(true),
                     ),
             )

@@ -9,6 +9,28 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
+const STREAM_DISPLAY_MARKERS: [&str; 6] = [
+    "<|channel>thought<channel|>",
+    "<|channel>final<channel|>",
+    "<|channel>analysis<channel|>",
+    "<|start|>",
+    "<|end|>",
+    "<|message|>",
+];
+
+fn normalize_stream_update_text(raw: &str) -> Option<String> {
+    let cleaned = STREAM_DISPLAY_MARKERS
+        .iter()
+        .fold(raw.replace('\r', ""), |text, marker| {
+            text.replace(marker, "")
+        });
+    if cleaned.trim().is_empty() {
+        None
+    } else {
+        Some(cleaned)
+    }
+}
+
 pub struct AgentWorker {
     pub agent_id: String,
     pub team_instance_id: String,
@@ -259,55 +281,34 @@ impl AgentWorker {
         }
     }
 
-    async fn select_review_handler_agent_id(&self, case_id: Option<&str>) -> Option<String> {
+    async fn select_cross_team_coordinator_agent_id(&self) -> Option<String> {
         let agent_ids = self.db.get_instance_agents(&self.team_instance_id).ok()?;
         if agent_ids.is_empty() {
             return None;
         }
-        if let Some(case_id) = case_id {
-            let service =
-                crate::application::orchestration::collaboration::CollaborationService::new(
-                    self.db.clone(),
-                );
-            if let Ok(Some(agent_id)) =
-                service.route_by_competency(case_id, "delivery_quality", &agent_ids)
-            {
-                return Some(agent_id);
-            }
-        }
-        let mut resolved = Vec::new();
+
         for id in agent_ids.iter() {
-            let name = self
+            let role = self
                 .db
                 .get_agent(id)
                 .ok()
                 .flatten()
-                .map(|a| a.name)
-                .unwrap_or_else(|| id.clone());
-            resolved.push((id.clone(), name.to_lowercase()));
-        }
-        for key in ["critic", "qa", "reviewer"] {
-            if let Some((id, _)) = resolved.iter().find(|(_, name)| name.contains(key)) {
+                .map(|agent| agent.routing_role())
+                .unwrap_or_default();
+            if role_policy::is_coordinator_role(&role) {
                 return Some(id.clone());
             }
         }
-        Some(resolved[0].0.clone())
+
+        agent_ids.into_iter().next()
     }
 
-    async fn select_message_handler_agent_id(&self, case_id: Option<&str>) -> Option<String> {
-        let agent_ids = self.db.get_instance_agents(&self.team_instance_id).ok()?;
-        if let Some(case_id) = case_id {
-            let service =
-                crate::application::orchestration::collaboration::CollaborationService::new(
-                    self.db.clone(),
-                );
-            if let Ok(Some(agent_id)) =
-                service.route_by_competency(case_id, "delivery_quality", &agent_ids)
-            {
-                return Some(agent_id);
-            }
-        }
-        agent_ids.into_iter().next()
+    async fn select_review_handler_agent_id(&self, _case_id: Option<&str>) -> Option<String> {
+        self.select_cross_team_coordinator_agent_id().await
+    }
+
+    async fn select_message_handler_agent_id(&self, _case_id: Option<&str>) -> Option<String> {
+        self.select_cross_team_coordinator_agent_id().await
     }
 
     async fn handle_message(&self, msg: TeamMessage) {
@@ -315,10 +316,14 @@ impl AgentWorker {
             return;
         }
 
-        println!(
-            "AgentWorker {} received message: {}",
-            self.agent_id, msg.content
-        );
+        if msg.delivery_status != "typing" {
+            if let Some(content) = normalize_stream_update_text(&msg.content) {
+                println!(
+                    "AgentWorker {} received message: {}",
+                    self.agent_id, content
+                );
+            }
+        }
 
         // Process iFlow task dispatch
         if let Some(metadata) = &msg.metadata {
@@ -623,7 +628,9 @@ impl AgentWorker {
         stream_msg.delivery_status = "typing".to_string();
         let stream_message_id = stream_msg.id.clone();
         let _ = self.db.insert_team_message(&stream_msg);
-        let _ = self.team_bus.route_message(stream_msg.clone()).await;
+        if normalize_stream_update_text(&stream_msg.content).is_some() {
+            let _ = self.team_bus.route_message(stream_msg.clone()).await;
+        }
 
         let db_for_stream = self.db.clone();
         let team_bus_for_stream = self.team_bus.clone();
@@ -632,7 +639,9 @@ impl AgentWorker {
         let sender_id_for_stream = self.agent_id.clone();
         let stream_metadata_for_callback = stream_msg.metadata.clone();
         let callback = Arc::new(move |text: String| {
-            let content = text;
+            let Some(content) = normalize_stream_update_text(&text) else {
+                return;
+            };
             let _ = db_for_stream
                 .update_team_message_content(&stream_message_id_for_callback, &content);
             let team_bus = team_bus_for_stream.clone();
@@ -1025,7 +1034,9 @@ impl AgentWorker {
         stream_msg.delivery_status = "typing".to_string();
         let stream_message_id = stream_msg.id.clone();
         let _ = self.db.insert_team_message(&stream_msg);
-        let _ = self.team_bus.route_message(stream_msg.clone()).await;
+        if normalize_stream_update_text(&stream_msg.content).is_some() {
+            let _ = self.team_bus.route_message(stream_msg.clone()).await;
+        }
 
         let db_for_stream = self.db.clone();
         let team_bus_for_stream = self.team_bus.clone();
@@ -1034,7 +1045,9 @@ impl AgentWorker {
         let sender_id_for_stream = agent.id.clone();
         let stream_metadata_for_callback = stream_msg.metadata.clone();
         let callback = Arc::new(move |text: String| {
-            let content = text;
+            let Some(content) = normalize_stream_update_text(&text) else {
+                return;
+            };
             let _ = db_for_stream
                 .update_team_message_content(&stream_message_id_for_callback, &content);
             let team_bus = team_bus_for_stream.clone();
@@ -1223,7 +1236,8 @@ impl AgentWorker {
             .build_dynamic_system_prompt(&self.team_id, &self.team_instance_id, &self.agent_id)
             .unwrap_or_default();
 
-        sys.push_str("\n\nCROSS-TEAM HANDOFF\nYou received a governed cross-team handoff. A readback has been submitted for human or policy acceptance. You MUST NOT delegate, modify artifacts, or send a completion handoff until the case context reports an accepted readback. If acceptance is absent, report that work is awaiting readback acceptance.\n");
+        sys.push_str("\n\nCROSS-TEAM HANDOFF\nYou are the receiving instance's cross-team coordinator. You received a governed cross-team handoff. A readback has been submitted for human or policy acceptance. You MUST NOT delegate, modify artifacts, or send a completion handoff until the case context reports an accepted readback. If acceptance is absent, report that work is awaiting readback acceptance.\n");
+        sys.push_str("\n\nCROSS-TEAM DEBATE PROTOCOL\nCross-team work always goes through each instance Coordinator so both teams retain shared context. Before readback acceptance, state the pending acceptance status and list the assumptions, risks, and open questions that must be challenged. After the case context reports an accepted readback, do not execute as a single-agent monologue: as Coordinator, propose the plan, collect critique through internal subtasks or role-targeted messages, then resolve that critique into a revised execution plan. Use create_subtasks to assign implementation, analysis, testing, review, or documentation work to matching roles in this instance. If this instance lacks a matching role, use handoff_to_team instead of forcing the work onto Coordinator or an unrelated agent.\n");
         let role_mapping = self
             .db
             .get_instance_agent_name_mapping(&self.team_instance_id)
@@ -1295,7 +1309,9 @@ impl AgentWorker {
         stream_msg.delivery_status = "typing".to_string();
         let stream_message_id = stream_msg.id.clone();
         let _ = self.db.insert_team_message(&stream_msg);
-        let _ = self.team_bus.route_message(stream_msg.clone()).await;
+        if normalize_stream_update_text(&stream_msg.content).is_some() {
+            let _ = self.team_bus.route_message(stream_msg.clone()).await;
+        }
 
         let db_for_stream = self.db.clone();
         let team_bus_for_stream = self.team_bus.clone();
@@ -1304,7 +1320,9 @@ impl AgentWorker {
         let sender_id_for_stream = agent.id.clone();
         let stream_metadata_for_callback = stream_msg.metadata.clone();
         let callback = Arc::new(move |text: String| {
-            let content = text;
+            let Some(content) = normalize_stream_update_text(&text) else {
+                return;
+            };
             let _ = db_for_stream
                 .update_team_message_content(&stream_message_id_for_callback, &content);
             let team_bus = team_bus_for_stream.clone();
@@ -1504,7 +1522,9 @@ impl AgentWorker {
             created_at: chrono::Utc::now().to_rfc3339(),
         };
         let _ = self.db.insert_team_message(&stream_msg);
-        let _ = self.team_bus.route_message(stream_msg.clone()).await;
+        if normalize_stream_update_text(&stream_msg.content).is_some() {
+            let _ = self.team_bus.route_message(stream_msg.clone()).await;
+        }
 
         let response_started_at = std::time::Instant::now();
         let output_text = if run_id.is_none() {
@@ -1527,7 +1547,9 @@ impl AgentWorker {
                 let sender_id_for_stream = self.agent_id.clone();
                 let stream_metadata = stream_msg.metadata.clone();
                 let callback = Arc::new(move |text: String| {
-                    let content = text;
+                    let Some(content) = normalize_stream_update_text(&text) else {
+                        return;
+                    };
                     let _ =
                         db_for_stream.update_team_message_content(&message_id_for_stream, &content);
                     let team_bus = team_bus_for_stream.clone();

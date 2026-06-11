@@ -17,6 +17,19 @@ pub struct AgentsPanel {
     agents: Vec<Agent>,
 }
 
+fn single_line_display(value: impl AsRef<str>, fallback: &str) -> String {
+    let text = value
+        .as_ref()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if text.is_empty() {
+        fallback.to_string()
+    } else {
+        text
+    }
+}
+
 impl AgentsPanel {
     pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
         let db = crate::AppState::global(cx).db.clone();
@@ -210,10 +223,13 @@ impl Render for AgentsPanel {
                         .gap(px(16.))
                         .children(self.agents.iter().map(|agent| {
 
-                            let role = agent.profile_position();
-                            let details = agent
+                            let agent_name = single_line_display(&agent.name, "Unnamed agent");
+                            let status_label = single_line_display(&agent.status, "offline");
+                            let provider = single_line_display(&agent.provider, "unconfigured");
+                            let role = single_line_display(agent.profile_position(), "No role");
+                            let details = single_line_display(agent
                                 .profile_details()
-                                .unwrap_or_else(|| "No profile details".to_string());
+                                .unwrap_or_else(|| "No profile details".to_string()), "No profile details");
                             let is_offline = agent.status.to_lowercase() == "offline";
                             let is_online = !is_offline;
                             let status_color = if is_offline { gpui::red() } else { gpui::green() };
@@ -268,7 +284,7 @@ impl Render for AgentsPanel {
                                                                         .font_weight(gpui::FontWeight::BOLD)
                                                                         .text_size(px(15.))
                                                                         .text_color(theme.foreground)
-                                                                        .child(agent.name.clone())
+                                                                        .child(agent_name)
                                                                 )
                                                                 .child(
                                                                     div()
@@ -279,7 +295,7 @@ impl Render for AgentsPanel {
                                                                         .bg(status_color.opacity(0.12))
                                                                         .text_color(status_color)
                                                                         .text_size(px(11.))
-                                                                        .child(agent.status.clone())
+                                                                        .child(status_label)
                                                                 )
                                                         )
                                                         .child(
@@ -373,7 +389,7 @@ impl Render for AgentsPanel {
                                                         .truncate()
                                                         .text_size(px(12.))
                                                         .text_color(theme.foreground)
-                                                        .child(agent.provider.clone())
+                                                        .child(provider)
                                                 )
                                         )
                                         .child(div().w_full().h(px(1.)).bg(theme.border.opacity(0.65)))

@@ -39,7 +39,7 @@ impl AssetSource for CombinedAssets {
 }
 
 fn run_app() {
-    // Required for Windows to render the WebView.
+    // Keep Windows composition behavior stable for GPUI rendering.
     #[cfg(target_os = "windows")]
     unsafe {
         std::env::set_var("GPUI_DISABLE_DIRECT_COMPOSITION", "true");
