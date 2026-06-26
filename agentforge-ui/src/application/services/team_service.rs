@@ -48,6 +48,16 @@ impl TeamService {
             .map_err(|e| crate::core::errors::CoreError::Database(e.to_string()))
     }
 
+    pub fn update_instance_state(
+        &self,
+        instance_id: &str,
+        state: &str,
+    ) -> Result<(), crate::core::errors::CoreError> {
+        self.db
+            .update_instance_state(instance_id, state)
+            .map_err(|e| crate::core::errors::CoreError::Database(e.to_string()))
+    }
+
     pub fn list_sessions_for_instance(
         &self,
         instance_id: &str,

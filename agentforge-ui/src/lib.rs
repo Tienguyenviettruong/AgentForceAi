@@ -2,7 +2,7 @@ use crate::core::traits::database::DatabasePort;
 use crate::infrastructure::database::sqlite_adapter::Database;
 use gpui::{
     actions, div, px, size, Action, Animation, AnimationExt, App, AppContext, Bounds, Context,
-    Entity, Global, InteractiveElement, IntoElement, KeyBinding, ParentElement, Render,
+    Entity, Global, InteractiveElement, IntoElement, KeyBinding, NoAction, ParentElement, Render,
     SharedString, Styled, Window, WindowBounds, WindowKind, WindowOptions,
 };
 use gpui_component::{
@@ -61,6 +61,9 @@ actions!(
         NewAgent,
         NewWorkflow,
         ToggleMonitoring,
+        ChatComposerConfirm,
+        SlashCommandPrevious,
+        SlashCommandNext,
     ]
 );
 
@@ -262,6 +265,16 @@ pub fn init(cx: &mut App) {
             loop {
                 if let Ok(instances) = wm_clone.db.list_instances() {
                     for instance in instances {
+                        let should_start = instance
+                            .state
+                            .as_deref()
+                            .map(str::trim)
+                            .filter(|state| !state.is_empty())
+                            .map(|state| state.eq_ignore_ascii_case("running"))
+                            .unwrap_or(true);
+                        if !should_start {
+                            continue;
+                        }
                         wm_clone
                             .start_workers_for_instance(&instance.id, &instance.team_id)
                             .await;
@@ -323,6 +336,34 @@ pub fn init(cx: &mut App) {
             "shift-enter",
             gpui_component::input::Enter { secondary: true },
             Some("Input"),
+        ),
+        KeyBinding::new("enter", NoAction, Some("TeamWorkspaceChatComposer > Input")),
+        KeyBinding::new(
+            "enter",
+            ChatComposerConfirm,
+            Some("TeamWorkspaceChatComposer > Input"),
+        ),
+        KeyBinding::new(
+            "enter",
+            NoAction,
+            Some("TeamWorkspaceSlashCommands > Input"),
+        ),
+        KeyBinding::new(
+            "enter",
+            ChatComposerConfirm,
+            Some("TeamWorkspaceSlashCommands > Input"),
+        ),
+        KeyBinding::new("up", NoAction, Some("TeamWorkspaceSlashCommands > Input")),
+        KeyBinding::new(
+            "up",
+            SlashCommandPrevious,
+            Some("TeamWorkspaceSlashCommands > Input"),
+        ),
+        KeyBinding::new("down", NoAction, Some("TeamWorkspaceSlashCommands > Input")),
+        KeyBinding::new(
+            "down",
+            SlashCommandNext,
+            Some("TeamWorkspaceSlashCommands > Input"),
         ),
         KeyBinding::new("cmd-n", NewTeam, None),
         KeyBinding::new("cmd-shift-n", NewAgent, None),
@@ -445,6 +486,9 @@ pub struct MainWindow {
     dock_areas: std::collections::HashMap<SharedString, Entity<DockArea>>,
     team_workspace: Entity<crate::ui::panels::team_workspace::TeamWorkspacePanel>,
 }
+
+const SOLO_MODE_TRANSITION_SECS: f64 = 0.24;
+const SOLO_MODE_SLIDE_OFFSET: f32 = 220.0;
 
 impl MainWindow {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -866,8 +910,68 @@ impl MainWindow {
                     .child(div().flex_1().h_full().bg(theme.background))
                     .with_animation(
                         "solo-mode-slide-in",
-                        Animation::new(Duration::from_secs_f64(0.24)),
-                        |this, delta| this.ml(px((1.0 - delta) * 220.0)),
+                        Animation::new(Duration::from_secs_f64(SOLO_MODE_TRANSITION_SECS)),
+                        |this, delta| this.ml(px((1.0 - delta) * SOLO_MODE_SLIDE_OFFSET)),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    fn render_workspace_mode(&self, cx: &Context<Self>) -> gpui::AnyElement {
+        let theme = cx.theme().clone();
+
+        div()
+            .flex_1()
+            .min_h(px(0.))
+            .overflow_hidden()
+            .bg(theme.background)
+            .child(
+                v_flex()
+                    .size_full()
+                    .min_h(px(0.))
+                    .bg(theme.background)
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .flex_1()
+                            .min_h(px(0.))
+                            .overflow_hidden()
+                            .child(self.activity_bar.clone())
+                            .child(
+                                div()
+                                    .h_full()
+                                    .flex_1()
+                                    .min_h(px(0.))
+                                    .overflow_hidden()
+                                    .child(if self.active_page == "teams" {
+                                        self.team_workspace.clone().into_any_element()
+                                    } else if let Some(dock) =
+                                        self.dock_areas.get(&self.active_page)
+                                    {
+                                        div()
+                                            .size_full()
+                                            .relative()
+                                            .child(
+                                                div()
+                                                    .absolute()
+                                                    .top(px(-30.))
+                                                    .left(px(0.))
+                                                    .right(px(0.))
+                                                    .bottom(px(0.))
+                                                    .child(dock.clone()),
+                                            )
+                                            .into_any_element()
+                                    } else {
+                                        div().into_any_element()
+                                    }),
+                            ),
+                    )
+                    .child(self.status_bar.clone())
+                    .with_animation(
+                        "solo-mode-slide-back",
+                        Animation::new(Duration::from_secs_f64(SOLO_MODE_TRANSITION_SECS)),
+                        |this, delta| this.ml(px((delta - 1.0) * SOLO_MODE_SLIDE_OFFSET)),
                     ),
             )
             .into_any_element()
@@ -909,45 +1013,7 @@ impl Render for MainWindow {
             .child(if self.solo_mode {
                 self.render_solo_mode(cx)
             } else {
-                div()
-                    .flex()
-                    .flex_row()
-                    .flex_1()
-                    .min_h(px(0.))
-                    .overflow_hidden()
-                    .child(self.activity_bar.clone())
-                    .child(
-                        div()
-                            .h_full()
-                            .flex_1()
-                            .min_h(px(0.))
-                            .overflow_hidden()
-                            .child(if self.active_page == "teams" {
-                                self.team_workspace.clone().into_any_element()
-                            } else if let Some(dock) = self.dock_areas.get(&self.active_page) {
-                                div()
-                                    .size_full()
-                                    .relative()
-                                    .child(
-                                        div()
-                                            .absolute()
-                                            .top(px(-30.))
-                                            .left(px(0.))
-                                            .right(px(0.))
-                                            .bottom(px(0.))
-                                            .child(dock.clone()),
-                                    )
-                                    .into_any_element()
-                            } else {
-                                div().into_any_element()
-                            }),
-                    )
-                    .into_any_element()
-            })
-            .child(if self.solo_mode {
-                div().into_any_element()
-            } else {
-                self.status_bar.clone().into_any_element()
+                self.render_workspace_mode(cx)
             })
             .children(dialog_layer)
             .children(notification_layer)

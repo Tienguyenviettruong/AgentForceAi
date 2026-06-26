@@ -466,10 +466,12 @@ impl TeamWorkspacePanel {
                     .border_color(theme.border)
                     .child(
                         h_flex()
+                            .w_full()
                             .justify_between()
                             .items_center()
                             .child(
                                 h_flex()
+                                    .min_w_0()
                                     .gap(px(8.))
                                     .items_center()
                                     .child(
@@ -497,6 +499,7 @@ impl TeamWorkspacePanel {
                             )
                             .child(
                                 h_flex()
+                                    .flex_none()
                                     .gap(px(8.))
                                     .when(self.selected_instance_id.is_none(), |d| {
                                         d.child(
@@ -508,7 +511,13 @@ impl TeamWorkspacePanel {
                                                     if let Some(team_id) = this.selected_team_id.clone() {
                                                         let db = crate::AppState::global(cx).db.clone();
                                                         let new_id = format!("inst-{}", uuid::Uuid::new_v4().simple());
-                                                        if db.create_instance(&new_id, "New Instance", &team_id, None, Some("running")).is_ok() {
+                                                        if db.create_instance(&new_id, "New Instance", &team_id, None, Some("initializing")).is_ok() {
+                                                            let initialized = db
+                                                                .get_instance_agents(&new_id)
+                                                                .map(|agents| !agents.is_empty())
+                                                                .unwrap_or(false);
+                                                            let next_state = if initialized { "running" } else { "failed" };
+                                                            let _ = db.update_instance_state(&new_id, next_state);
                                                             this.selected_instance_id = Some(new_id.clone());
                                                             this.selected_team_id = None;
                                                             this.start_team_bus_subscription(new_id.clone(), cx);

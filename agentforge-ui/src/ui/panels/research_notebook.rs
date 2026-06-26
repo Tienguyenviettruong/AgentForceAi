@@ -2,7 +2,7 @@ use crate::application::orchestration::tool_gateway::ToolExecutionGateway;
 use crate::infrastructure::mcp::ActionRecorder;
 use gpui::EventEmitter;
 use gpui::{
-    div, App, AppContext, Context, Entity, Focusable, InteractiveElement, IntoElement,
+    div, px, App, AppContext, Context, Entity, Focusable, InteractiveElement, IntoElement,
     ParentElement, Render, Styled, Window,
 };
 use gpui_component::dock::PanelEvent;
@@ -128,9 +128,12 @@ impl Render for ResearchNotebookPanel {
 
         let header = h_flex()
             .w_full()
+            .h(px(64.))
+            .flex_none()
             .justify_between()
             .items_center()
-            .p_4()
+            .gap_3()
+            .px_4()
             .border_b_1()
             .border_color(theme.border)
             .child(
@@ -407,12 +410,16 @@ impl Render for ResearchNotebookPanel {
         let left_pane = v_flex()
             .w_1_3()
             .h_full()
+            .min_h_0()
             .border_r_1()
             .border_color(theme.border)
             .bg(theme.background)
             .child(
-                v_flex()
-                    .p_3()
+                h_flex()
+                    .h(px(56.))
+                    .flex_none()
+                    .px_4()
+                    .items_center()
                     .border_b_1()
                     .border_color(theme.border)
                     .bg(theme.secondary)
@@ -427,6 +434,7 @@ impl Render for ResearchNotebookPanel {
             .child(
                 div()
                     .flex_1()
+                    .min_h_0()
                     .overflow_y_scrollbar()
                     .p_4()
                     .child(results_list),
@@ -435,22 +443,43 @@ impl Render for ResearchNotebookPanel {
         let right_pane = v_flex()
             .w_2_3()
             .h_full()
+            .min_h_0()
             .bg(theme.background)
             .child(
                 h_flex()
+                    .h(px(56.))
+                    .flex_none()
                     .justify_between()
-                    .p_3()
+                    .items_center()
+                    .gap_3()
+                    .px_4()
                     .border_b_1()
                     .border_color(theme.border)
                     .bg(theme.secondary)
-                    .child(div().text_sm().font_bold().text_color(theme.foreground).child("Scratchpad (Synthesis)"))
                     .child(
-                        h_flex().gap_3().items_center()
-                            .child(div().text_xs().text_color(gpui::green()).child(self.save_status.clone().unwrap_or_default()))
+                        div()
+                            .flex_none()
+                            .text_sm()
+                            .font_bold()
+                            .text_color(theme.foreground)
+                            .child("Scratchpad (Synthesis)"),
+                    )
+                    .child(
+                        h_flex().flex_1().min_w_0().justify_end().gap_3().items_center()
                             .child(
-                                Button::new("btn-save-obsidian")
-                                    .label("Save to Obsidian")
-                                    .on_click(cx.listener(|this, _, _, cx| {
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_xs()
+                                    .text_color(gpui::green())
+                                    .child(self.save_status.clone().unwrap_or_default()),
+                            )
+                            .child(
+                                div().flex_none().child(
+                                    Button::new("btn-save-obsidian")
+                                        .label("Save to Obsidian")
+                                        .on_click(cx.listener(|this, _, _, cx| {
                                         let state = crate::AppState::global(cx);
                                         let db = state.db.clone();
                                         let actor_id = state.current_actor_id.clone();
@@ -540,13 +569,19 @@ impl Render for ResearchNotebookPanel {
                                             });
                                         })
                                         .detach();
-                                    }))
+                                    })),
+                                )
                             )
                     )
             )
             .child(
-                div().flex_1().overflow_y_scrollbar().p_4().child(
-                    div().text_sm().text_color(theme.foreground).child(self.scratchpad.clone())
+                div().flex_1().min_h_0().overflow_y_scrollbar().p_4().pb(px(48.)).child(
+                    div()
+                        .text_sm()
+                        .line_height(gpui::relative(1.45))
+                        .whitespace_normal()
+                        .text_color(theme.foreground)
+                        .child(self.scratchpad.clone())
                 )
             );
 
@@ -558,6 +593,7 @@ impl Render for ResearchNotebookPanel {
                 h_flex()
                     .w_full()
                     .flex_1()
+                    .min_h_0()
                     .child(left_pane)
                     .child(right_pane),
             )

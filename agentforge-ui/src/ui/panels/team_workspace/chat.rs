@@ -17,6 +17,10 @@ use std::ops::Range;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
+use super::slash_commands::{
+    build_slash_prompt, filter_slash_commands, parse_slash_invocation, slash_help_text,
+    slash_query_from_input, SlashCommandId, SlashCommandParseError, SlashCommandTone,
+};
 use super::{PendingChatAction, TeamWorkspacePanel};
 use crate::ui::components::markdown::render_markdown_message;
 
@@ -42,6 +46,18 @@ const AI_THINKING_LABEL: &str = "AI thinking";
 const CHAT_COLLAPSE_LINE_LIMIT: usize = 80;
 const CHAT_COLLAPSE_CHAR_LIMIT: usize = 4_000;
 const CHAT_RENDER_CHAR_LIMIT: usize = 30_000;
+
+fn agent_avatar_color(seed: &str) -> gpui::Hsla {
+    let mut hash = 0u32;
+    for byte in seed.bytes() {
+        hash = hash.wrapping_mul(31).wrapping_add(byte as u32);
+    }
+    let palette = [
+        0xDBEAFEFF, 0xDCFCE7FF, 0xFEF3C7FF, 0xFCE7F3FF, 0xE0E7FFFF, 0xCCFBF1FF, 0xFAE8FFFF,
+        0xFFE4E6FF, 0xEDE9FEFF, 0xECFCCBFF,
+    ];
+    gpui::Hsla::from(gpui::rgba(palette[(hash as usize) % palette.len()]))
+}
 
 fn chat_message_metadata(agent_name: &str, thought_duration_secs: Option<f64>) -> String {
     let mut metadata = serde_json::json!({ "agent_name": agent_name });
@@ -895,7 +911,8 @@ impl TeamWorkspacePanel {
                                                 Button::new("view-iflow-run")
                                                     .ghost()
                                                     .small()
-                                                    .icon(IconName::GalleryVerticalEnd)
+                                                    // .icon(IconName::GalleryVerticalEnd)
+                                                    .icon(Icon::empty().path("icons/flow.svg").size_4())
                                                     .label("iFlow")
                                                     .tooltip("View the validated flow for this run")
                                                     .on_click(move |_, _, cx| {
@@ -1227,8 +1244,13 @@ impl TeamWorkspacePanel {
                                         .cursor_pointer()
                                         .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
                                             this.is_slash_dropdown_open = !this.is_slash_dropdown_open;
+                                            this.slash_command_selection_index = 0;
+                                            this.slash_command_active_query =
+                                                this.active_slash_command_query(cx);
                                             if this.is_slash_dropdown_open {
                                                 this.is_workspace_dropdown_open = false;
+                                            } else {
+                                                this.slash_command_active_query = None;
                                             }
                                             cx.notify();
                                         }))
@@ -1264,6 +1286,24 @@ impl TeamWorkspacePanel {
                                 }))
                         );
 
+                    let active_slash_query = self.active_slash_command_query(cx);
+                    let show_slash_dropdown = active_slash_query.is_some();
+                    let slash_query = active_slash_query.unwrap_or_default();
+                    let composer_key_context = if show_slash_dropdown {
+                        "TeamWorkspaceSlashCommands"
+                    } else {
+                        "TeamWorkspaceChatComposer"
+                    };
+                    let slash_dropdown = if show_slash_dropdown {
+                        div()
+                            .w_full()
+                            .mb(px(8.))
+                            .child(self.render_slash_command_dropdown(&slash_query, cx))
+                            .into_any_element()
+                    } else {
+                        div().into_any_element()
+                    };
+
                     let form = div()
                         .relative()
                         .flex()
@@ -1276,163 +1316,17 @@ impl TeamWorkspacePanel {
                         .h(px(220.))
                         .shadow_lg()
                         .w_full()
-                        .child({
-                            let text = self.chat_input_state.read(cx).text().to_string();
-                            let show_dropdown = self.is_slash_dropdown_open || text.starts_with("/");
-                            if show_dropdown {
-                                div()
-                                    .absolute()
-                                    .bottom(px(228.))
-                                    .left(px(0.))
-                                    .w_full()
-                                    .bg(theme.background)
-                                    .border_1()
-                                    .border_color(theme.border)
-                                    .rounded_xl()
-                                    .shadow_lg()
-                                    .p_3()
-                                    .flex_col()
-                                    .gap_1()
-                                    .child(div().text_sm().font_weight(gpui::FontWeight::MEDIUM).text_color(theme.muted_foreground).mb_2().child("Commands"))
-                                    .child(
-                                        div()
-                                            .id("slash-item-spec")
-                                            .w_full()
-                                            .px_2()
-                                            .py_2()
-                                            .rounded_md()
-                                            .hover(|s| s.bg(theme.secondary))
-                                            .cursor_pointer()
-                                            .on_click(cx.listener(|this, _, window, cx| {
-                                                this.selected_slash_command = Some("spec".to_string());
-                                                this.chat_input_state.update(cx, |state, cx| {
-                                                    state.set_value("", window, cx);
-                                                });
-                                                this.is_slash_dropdown_open = false;
-                                                cx.notify();
-                                            }))
-                                            .flex()
-                                            .items_center()
-                                            .gap_3()
-                                            .child(
-                                                div()
-                                                    .w(px(20.))
-                                                    .h(px(20.))
-                                                    .flex()
-                                                    .items_center()
-                                                    .justify_center()
-                                                    .text_color(theme.accent)
-                                                    .child(Icon::new(IconName::SquareTerminal).size(px(14.)))
-                                            )
-                                            .child(div().text_sm().font_weight(gpui::FontWeight::MEDIUM).text_color(theme.foreground).child("Spec"))
-                                            .child(
-                                                div()
-                                                    .flex_1()
-                                                    .text_sm()
-                                                    .text_color(theme.muted_foreground)
-                                                    .overflow_hidden()
-                                                    .whitespace_nowrap()
-                                                    .child("Tạo đặc tả")
-                                            )
-                                    )
-                                    .child(
-                                        div()
-                                            .id("slash-item-plan")
-                                            .w_full()
-                                            .px_2()
-                                            .py_2()
-                                            .rounded_md()
-                                            .hover(|s| s.bg(theme.secondary))
-                                            .cursor_pointer()
-                                            .on_click(cx.listener(|this, _, window, cx| {
-                                                this.selected_slash_command = Some("plan".to_string());
-                                                this.chat_input_state.update(cx, |state, cx| {
-                                                    state.set_value("", window, cx);
-                                                });
-                                                this.is_slash_dropdown_open = false;
-                                                cx.notify();
-                                            }))
-                                            .flex()
-                                            .items_center()
-                                            .gap_3()
-                                            .child(
-                                                div()
-                                                    .w(px(20.))
-                                                    .h(px(20.))
-                                                    .flex()
-                                                    .items_center()
-                                                    .justify_center()
-                                                    .text_color(theme.accent)
-                                                    .child(Icon::new(IconName::ChartPie).size(px(14.)))
-                                            )
-                                            .child(div().text_sm().font_weight(gpui::FontWeight::MEDIUM).text_color(theme.foreground).child("Plan"))
-                                            .child(
-                                                div()
-                                                    .flex_1()
-                                                    .text_sm()
-                                                    .text_color(theme.muted_foreground)
-                                                    .overflow_hidden()
-                                                    .whitespace_nowrap()
-                                                    .child("Tạo kế hoạch")
-                                            )
-                                    )
-                                    .child(
-                                        div()
-                                            .id("slash-item-run")
-                                            .w_full()
-                                            .px_2()
-                                            .py_2()
-                                            .rounded_md()
-                                            .hover(|s| s.bg(theme.secondary))
-                                            .cursor_pointer()
-                                            .on_click(cx.listener(|this, _, window, cx| {
-                                                this.selected_slash_command = Some("run".to_string());
-                                                this.chat_input_state.update(cx, |state, cx| {
-                                                    state.set_value("", window, cx);
-                                                });
-                                                this.is_slash_dropdown_open = false;
-                                                cx.notify();
-                                            }))
-                                            .flex()
-                                            .items_center()
-                                            .gap_3()
-                                            .child(
-                                                div()
-                                                    .w(px(20.))
-                                                    .h(px(20.))
-                                                    .flex()
-                                                    .items_center()
-                                                    .justify_center()
-                                                    .text_color(theme.accent)
-                                                    .child(Icon::new(IconName::ArrowRight).size(px(14.)))
-                                            )
-                                            .child(div().text_sm().font_weight(gpui::FontWeight::MEDIUM).text_color(theme.foreground).child("Run"))
-                                            .child(
-                                                div()
-                                                    .flex_1()
-                                                    .text_sm()
-                                                    .text_color(theme.muted_foreground)
-                                                    .overflow_hidden()
-                                                    .whitespace_nowrap()
-                                                    .child("Chạy task pending")
-                                            )
-                                    )
-                                    .into_any_element()
-                            } else {
-                                div().into_any_element()
-                            }
-                        })
                         .child(
                             div().flex().flex_col().child(form_header)
                             .child(
                                 h_flex().w_full().items_center().px_2().py_1()
-                                    .children(self.selected_slash_command.as_ref().map(|cmd| {
-                                        let (label, bg, icon) = match cmd.as_str() {
-                                            "spec" => ("Spec", gpui::blue(), IconName::SquareTerminal),
-                                            "plan" => ("Plan", gpui::blue(), IconName::ChartPie),
-                                            "run" => ("Run", gpui::green(), IconName::ArrowRight),
-                                            _ => ("Cmd", gpui::black(), IconName::SquareTerminal),
-                                        };
+                                    .children(self.selected_slash_command.map(|cmd| {
+                                        let definition = cmd.definition();
+                                        let bg = Self::slash_command_color(
+                                            definition.tone,
+                                            theme.accent,
+                                        );
+                                        let icon = definition.icon.clone();
                                         div().flex().items_center().gap_1()
                                             .id("active-slash-cmd-pill")
                                             .bg(bg.opacity(0.2))
@@ -1442,10 +1336,12 @@ impl TeamWorkspacePanel {
                                             .cursor_pointer()
                                             .on_click(cx.listener(|this, _, _, cx| {
                                                 this.selected_slash_command = None;
+                                                this.slash_command_selection_index = 0;
+                                                this.slash_command_active_query = None;
                                                 cx.notify();
                                             }))
                                             .child(Icon::new(icon).size(px(14.)))
-                                            .child(div().text_sm().font_weight(gpui::FontWeight::MEDIUM).child(label))
+                                            .child(div().text_sm().font_weight(gpui::FontWeight::MEDIUM).child(definition.label))
                                     }))
                                     .child(
                                         {
@@ -1457,6 +1353,10 @@ impl TeamWorkspacePanel {
                                                 .relative()
                                                 .flex_1()
                                                 .min_w_0()
+                                                .key_context(composer_key_context)
+                                                .on_action(cx.listener(Self::on_chat_composer_confirm))
+                                                .on_action(cx.listener(Self::on_slash_command_previous))
+                                                .on_action(cx.listener(Self::on_slash_command_next))
                                                 .child(
                                                     gpui_component::input::Input::new(
                                                         &self.chat_input_state,
@@ -1507,6 +1407,7 @@ impl TeamWorkspacePanel {
                                             ),
                                         )
                                         .child(self.render_cached_pending_action_summary(cx))
+                                        .child(slash_dropdown)
                                         .child(form)
                                 )
                         )
@@ -1582,6 +1483,237 @@ impl TeamWorkspacePanel {
                         .into_any_element()
                 }
             )
+    }
+
+    fn slash_command_color(tone: SlashCommandTone, accent: gpui::Hsla) -> gpui::Hsla {
+        match tone {
+            SlashCommandTone::Accent => accent,
+            SlashCommandTone::Blue => gpui::blue(),
+            SlashCommandTone::Green => gpui::green(),
+            SlashCommandTone::Yellow => gpui::yellow(),
+            SlashCommandTone::Red => gpui::red(),
+        }
+    }
+
+    fn render_slash_command_dropdown(&self, query: &str, cx: &Context<Self>) -> gpui::AnyElement {
+        let theme = cx.theme().clone();
+        let commands = filter_slash_commands(query);
+        let selected_index = self
+            .slash_command_selection_index
+            .min(commands.len().saturating_sub(1));
+
+        let mut list = div()
+            .w_full()
+            .bg(theme.background)
+            .border_1()
+            .border_color(theme.border)
+            .rounded_xl()
+            .shadow_lg()
+            .p_3()
+            .flex_col()
+            .gap_1()
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .text_color(theme.muted_foreground)
+                    .mb_2()
+                    .child("Commands"),
+            );
+
+        if commands.is_empty() {
+            list = list.child(
+                div()
+                    .id("slash-no-match")
+                    .w_full()
+                    .px_2()
+                    .py_2()
+                    .rounded_md()
+                    .text_sm()
+                    .text_color(theme.muted_foreground)
+                    .child("Không tìm thấy command"),
+            );
+        } else {
+            for (index, command) in commands.into_iter().enumerate() {
+                let command_id = command.id;
+                let color = Self::slash_command_color(command.tone, theme.accent);
+                let icon = command.icon.clone();
+                let row_id =
+                    gpui::ElementId::Name(format!("slash-item-{}", command.trigger).into());
+                list = list.child(
+                    div()
+                        .id(row_id)
+                        .w_full()
+                        .px_2()
+                        .py_2()
+                        .rounded_md()
+                        .when(index == selected_index, |s| {
+                            s.bg(theme.secondary.opacity(0.55))
+                        })
+                        .hover(|s| s.bg(theme.secondary))
+                        .cursor_pointer()
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.selected_slash_command = Some(command_id);
+                            this.slash_command_selection_index = 0;
+                            this.slash_command_active_query = None;
+                            this.chat_input_state.update(cx, |state, cx| {
+                                state.set_value("", window, cx);
+                            });
+                            this.is_slash_dropdown_open = false;
+                            cx.notify();
+                        }))
+                        .flex()
+                        .items_center()
+                        .gap_3()
+                        .child(
+                            div()
+                                .w(px(20.))
+                                .h(px(20.))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .text_color(color)
+                                .child(Icon::new(icon).size(px(14.))),
+                        )
+                        .child(
+                            div()
+                                .w(px(76.))
+                                .text_sm()
+                                .font_weight(gpui::FontWeight::MEDIUM)
+                                .text_color(theme.foreground)
+                                .child(format!("/{}", command.trigger)),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .text_sm()
+                                .text_color(theme.muted_foreground)
+                                .child(command.description),
+                        ),
+                );
+            }
+        }
+
+        list.into_any_element()
+    }
+
+    fn active_slash_command_query(&self, cx: &Context<Self>) -> Option<String> {
+        let input_text = self.chat_input_state.read(cx).text().to_string();
+        let trimmed = input_text.trim();
+        slash_query_from_input(&input_text).or_else(|| {
+            if self.is_slash_dropdown_open && trimmed.is_empty() {
+                Some(String::new())
+            } else {
+                None
+            }
+        })
+    }
+
+    pub(crate) fn sync_slash_command_query(&mut self, cx: &mut Context<Self>) {
+        let active_query = self.active_slash_command_query(cx);
+        let input_text = self.chat_input_state.read(cx).text().to_string();
+        if active_query.is_none() && !input_text.trim().is_empty() && self.is_slash_dropdown_open {
+            self.is_slash_dropdown_open = false;
+        }
+        if active_query != self.slash_command_active_query {
+            self.slash_command_active_query = active_query;
+            self.slash_command_selection_index = 0;
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn move_slash_command_selection(
+        &mut self,
+        direction: isize,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(query) = self.active_slash_command_query(cx) else {
+            return;
+        };
+        let commands = filter_slash_commands(&query);
+        if commands.is_empty() {
+            self.slash_command_selection_index = 0;
+            cx.notify();
+            return;
+        }
+
+        let len = commands.len();
+        let current = self.slash_command_selection_index.min(len - 1);
+        self.slash_command_selection_index = if direction < 0 {
+            if current == 0 {
+                len - 1
+            } else {
+                current - 1
+            }
+        } else {
+            (current + 1) % len
+        };
+        cx.notify();
+    }
+
+    pub(crate) fn confirm_slash_command_from_input(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.selected_slash_command.is_some() {
+            return false;
+        }
+
+        let Some(query) = self.active_slash_command_query(cx) else {
+            return false;
+        };
+
+        let commands = filter_slash_commands(&query);
+        let selected_index = self
+            .slash_command_selection_index
+            .min(commands.len().saturating_sub(1));
+        let Some(command) = commands.get(selected_index).cloned() else {
+            self.is_slash_dropdown_open = true;
+            self.slash_command_selection_index = 0;
+            window.push_notification(
+                (
+                    gpui_component::notification::NotificationType::Info,
+                    gpui::SharedString::from(
+                        "Không tìm thấy slash command. Gõ /help để xem danh sách command.",
+                    ),
+                ),
+                cx,
+            );
+            cx.notify();
+            return true;
+        };
+
+        let exact_match = !query.is_empty()
+            && (command.trigger == query
+                || command.label.eq_ignore_ascii_case(&query)
+                || command.aliases.iter().any(|alias| *alias == query));
+
+        if exact_match && !command.requires_argument {
+            self.selected_slash_command = None;
+            self.is_slash_dropdown_open = false;
+            self.slash_command_selection_index = 0;
+            self.slash_command_active_query = None;
+            let command_text = format!("/{}", command.trigger);
+            self.chat_input_state.update(cx, |state, cx| {
+                state.set_value(&command_text, window, cx);
+            });
+            cx.notify();
+            self.handle_send_chat(window, cx);
+            return true;
+        }
+
+        self.selected_slash_command = Some(command.id);
+        self.is_slash_dropdown_open = false;
+        self.slash_command_selection_index = 0;
+        self.slash_command_active_query = None;
+        self.chat_input_state.update(cx, |state, cx| {
+            state.set_value("", window, cx);
+        });
+        cx.notify();
+        true
     }
 
     /// Push a chat message bubble onto an agent in the native office canvas.
@@ -1769,21 +1901,53 @@ impl TeamWorkspacePanel {
 
         let mut raw_text = self.chat_input_state.read(cx).text().to_string();
         raw_text = raw_text.trim().to_string();
-        if let Some(cmd) = self.selected_slash_command.take() {
-            if !raw_text.starts_with('/') {
-                raw_text = if raw_text.is_empty() && cmd == "run" {
-                    "/run".to_string()
-                } else if raw_text.is_empty() {
-                    format!("/{}", cmd)
-                } else {
-                    format!("/{} {}", cmd, raw_text)
-                };
+        let slash_invocation = match parse_slash_invocation(&raw_text, self.selected_slash_command)
+        {
+            Ok(invocation) => invocation,
+            Err(error) => {
+                if matches!(error, SlashCommandParseError::EmptyCommand) {
+                    self.is_slash_dropdown_open = true;
+                    self.slash_command_selection_index = 0;
+                    self.slash_command_active_query = Some(String::new());
+                }
+                window.push_notification(
+                    (
+                        gpui_component::notification::NotificationType::Info,
+                        gpui::SharedString::from(error.message()),
+                    ),
+                    cx,
+                );
+                cx.notify();
+                return;
             }
+        };
+        if let Some(invocation) = &slash_invocation {
+            raw_text = invocation.normalized_input.clone();
+            if invocation.command == SlashCommandId::Help {
+                self.selected_slash_command = None;
+                self.is_slash_dropdown_open = true;
+                self.slash_command_selection_index = 0;
+                self.slash_command_active_query = Some(String::new());
+                window.push_notification(
+                    (
+                        gpui_component::notification::NotificationType::Info,
+                        gpui::SharedString::from(slash_help_text()),
+                    ),
+                    cx,
+                );
+                cx.notify();
+                return;
+            }
+            self.selected_slash_command = None;
+            self.slash_command_selection_index = 0;
+            self.slash_command_active_query = None;
         }
         if raw_text.is_empty() && self.attached_files.is_empty() {
             return;
         }
         self.is_slash_dropdown_open = false;
+        self.slash_command_selection_index = 0;
+        self.slash_command_active_query = None;
         cx.notify();
 
         let instance_id = if let Some(id) = &self.selected_instance_id {
@@ -1831,57 +1995,15 @@ impl TeamWorkspacePanel {
         };
 
         let attached_files_for_ai = self.attached_files.clone();
-        let mut text = if raw_text.is_empty() {
+        let mut text = if let Some(invocation) = &slash_invocation {
+            let ts = Utc::now().format("%Y%m%d_%H%M%S").to_string();
+            build_slash_prompt(invocation, &ts)
+                .unwrap_or_else(|| invocation.normalized_input.clone())
+        } else if raw_text.is_empty() {
             "Please analyze the attached file(s).".to_string()
         } else {
             raw_text.clone()
         };
-        if raw_text == "/" {
-            window.push_notification(
-                (
-                    gpui_component::notification::NotificationType::Info,
-                    "Commands: /plan <goal>, /spec <goal>, /run",
-                ),
-                cx,
-            );
-            return;
-        }
-        if let Some(rest) = raw_text.strip_prefix("/plan") {
-            let goal = rest.trim();
-            if goal.is_empty() {
-                window.push_notification(
-                    (
-                        gpui_component::notification::NotificationType::Info,
-                        "Dùng: /plan <mục tiêu>",
-                    ),
-                    cx,
-                );
-                return;
-            }
-            let ts = Utc::now().format("%Y%m%d_%H%M%S").to_string();
-            text = format!(
-                "Tạo kế hoạch thực thi cho mục tiêu sau:\n{}\n\nYêu cầu:\n- Trả về checklist các bước + rủi ro + tiêu chí hoàn thành.\n- Nếu phù hợp, tạo subtasks theo vai trò bằng create_subtasks.\n- Dùng tool write_file để lưu plan vào docs/plans/plan_{}.md; không xuất thao tác file dưới dạng code block.\n\nNội dung plan phải gồm Goal, Plan, Risks và Done cho mục tiêu:\n{}\n",
-                goal, ts, goal
-            );
-        } else if let Some(rest) = raw_text.strip_prefix("/spec") {
-            let goal = rest.trim();
-            if goal.is_empty() {
-                window.push_notification(
-                    (
-                        gpui_component::notification::NotificationType::Info,
-                        "Dùng: /spec <mục tiêu>",
-                    ),
-                    cx,
-                );
-                return;
-            }
-            let ts = Utc::now().format("%Y%m%d_%H%M%S").to_string();
-            text = format!(
-                "Tạo đặc tả (spec) cho mục tiêu sau:\n{}\n\nYêu cầu:\n- Spec rõ scope/in-scope/out-of-scope, API/behavior, dữ liệu, edge cases.\n- Nêu open_questions nếu thiếu thông tin.\n- Dùng tool write_file để lưu spec vào docs/specs/spec_{}.md; không xuất thao tác file dưới dạng code block.\n\nSpec phải gồm Objective, Scope, Requirements, API, Data Model, Edge Cases và Open Questions cho mục tiêu:\n{}\n",
-                goal, ts, goal
-            );
-        }
-
         if !attached_files_for_ai.is_empty() {
             text.push_str("\n\nAttached files:\n");
             for file in &attached_files_for_ai {
@@ -1930,7 +2052,10 @@ impl TeamWorkspacePanel {
             created_at: run_created_at,
         });
         let mut initial_workflow_id = None;
-        if raw_text != "/run" {
+        if slash_invocation
+            .as_ref()
+            .map_or(true, |invocation| invocation.command != SlashCommandId::Run)
+        {
             if let Some(agent_id) = db
                 .get_instance_agents(&instance_id)
                 .ok()
@@ -2143,7 +2268,9 @@ impl TeamWorkspacePanel {
             }
         }
 
-        let is_run_command = raw_text == "/run";
+        let is_run_command = slash_invocation.as_ref().map_or(false, |invocation| {
+            invocation.command == SlashCommandId::Run
+        });
         let mode_clone = mode;
         let db_clone = db.clone();
         let _text_clone = text.clone();
@@ -4368,16 +4495,16 @@ impl TeamWorkspacePanel {
             display_content = truncated;
         }
 
+        let avatar_bg = agent_avatar_color(&display_name);
         let agent_avatar = div()
             .w(px(28.))
             .h(px(28.))
             .rounded_full()
-            .bg(gpui::blue().opacity(0.2))
-            .text_color(gpui::blue())
+            .bg(avatar_bg)
             .flex()
             .items_center()
             .justify_center()
-            .child(IconName::Bot);
+            .child(Icon::empty().path("icons/bot.svg").size(px(16.)));
 
         let text_element = if is_user {
             let mut user_theme = theme.clone();

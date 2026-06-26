@@ -135,7 +135,7 @@ impl Render for ActivityBar {
                     ))
                     .child(self.render_icon(
                         "iflow_builder",
-                        IconName::GalleryVerticalEnd,
+                        Icon::empty().path("icons/flow.svg").size_4(),
                         self.active_item == "iflow_builder",
                         cx,
                     ))

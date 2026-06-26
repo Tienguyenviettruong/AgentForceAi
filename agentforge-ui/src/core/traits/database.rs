@@ -18,6 +18,7 @@ pub trait DatabasePort: Send + Sync {
         state: Option<&str>,
     ) -> anyhow::Result<()>;
     fn update_instance_name(&self, instance_id: &str, name: &str) -> anyhow::Result<()>;
+    fn update_instance_state(&self, instance_id: &str, state: &str) -> anyhow::Result<()>;
     fn list_instances(&self) -> anyhow::Result<Vec<crate::core::models::Instance>>;
     fn list_teams(&self) -> anyhow::Result<Vec<crate::core::models::Team>>;
     fn insert_agent(&self, agent: &crate::core::models::Agent) -> anyhow::Result<()>;

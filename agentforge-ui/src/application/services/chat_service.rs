@@ -26,9 +26,18 @@ impl ChatService {
         }
 
         let mut instance_name = "Unknown Instance".to_string();
+        let mut instance_context = "No instance-specific context configured.".to_string();
         if let Ok(instances) = self.db.list_instances() {
             if let Some(i) = instances.iter().find(|i| i.id == instance_id) {
                 instance_name = i.name.clone();
+                if let Some(config) = i
+                    .config
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|config| !config.is_empty())
+                {
+                    instance_context = config.to_string();
+                }
             }
         }
 
@@ -104,6 +113,7 @@ impl ChatService {
             "--- SYSTEM CONTEXT OVERRIDE ---\n\
              Current Team: {}\n\
              Current Instance: {}\n\
+             Instance Context: {}\n\
              Your Agent Name: {}\n\
              Your Routing Role: {}\n\
              Your Professional Position: {}\n\
@@ -128,6 +138,7 @@ impl ChatService {
              Base Prompt:\n{}",
             team_name,
             instance_name,
+            instance_context,
             my_name,
             my_role,
             my_position,

@@ -17,6 +17,7 @@ use crate::db::{Agent, SessionRecord, Team};
 mod chat;
 mod members;
 pub(crate) mod office_canvas;
+pub(crate) mod slash_commands;
 mod teams;
 
 pub struct TeamWorkspacePanel {
@@ -55,7 +56,9 @@ pub struct TeamWorkspacePanel {
     pub(crate) attached_files: Vec<String>,
     pub(crate) is_workspace_dropdown_open: bool,
     pub(crate) is_slash_dropdown_open: bool,
-    pub(crate) selected_slash_command: Option<String>,
+    pub(crate) selected_slash_command: Option<slash_commands::SlashCommandId>,
+    pub(crate) slash_command_selection_index: usize,
+    pub(crate) slash_command_active_query: Option<String>,
     pub(crate) available_iflow_run_id: Option<String>,
     pub(crate) is_generating: bool,
     pub(crate) generation_cancel_flag: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
@@ -114,6 +117,8 @@ impl TeamWorkspacePanel {
             is_workspace_dropdown_open: false,
             is_slash_dropdown_open: false,
             selected_slash_command: None,
+            slash_command_selection_index: 0,
+            slash_command_active_query: None,
             available_iflow_run_id: db.get_setting("iflow_selected_run_id").ok().flatten(),
             is_generating: false,
             generation_cancel_flag: None,
@@ -128,17 +133,54 @@ impl TeamWorkspacePanel {
         cx.subscribe_in(
             &panel.chat_input_state,
             window,
-            |this, _, event: &gpui_component::input::InputEvent, window, cx| {
-                if let gpui_component::input::InputEvent::PressEnter { secondary } = event {
+            |this, _, event: &gpui_component::input::InputEvent, window, cx| match event {
+                gpui_component::input::InputEvent::Change => {
+                    this.sync_slash_command_query(cx);
+                }
+                gpui_component::input::InputEvent::PressEnter { secondary } => {
                     if !secondary {
+                        if this.confirm_slash_command_from_input(window, cx) {
+                            return;
+                        }
                         this.handle_send_chat(window, cx);
                     }
                 }
+                _ => {}
             },
         )
         .detach();
 
         panel
+    }
+
+    pub(crate) fn on_chat_composer_confirm(
+        &mut self,
+        _: &crate::ChatComposerConfirm,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.confirm_slash_command_from_input(window, cx) {
+            return;
+        }
+        self.handle_send_chat(window, cx);
+    }
+
+    pub(crate) fn on_slash_command_previous(
+        &mut self,
+        _: &crate::SlashCommandPrevious,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.move_slash_command_selection(-1, cx);
+    }
+
+    pub(crate) fn on_slash_command_next(
+        &mut self,
+        _: &crate::SlashCommandNext,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.move_slash_command_selection(1, cx);
     }
 
     fn parse_cross_team_payload(content: &str) -> Option<serde_json::Value> {

@@ -469,8 +469,12 @@ pub fn open_new_instance_dialog<V: 'static>(
 
     let name_input =
         cx.new(|cx| InputState::new(window, cx).placeholder("Instance name (e.g. Test Run)"));
-    let config_input =
-        cx.new(|cx| InputState::new(window, cx).placeholder("Configuration / Context"));
+    let config_input = cx.new(|cx| {
+        InputState::new(window, cx)
+            .placeholder("Instance context, goals, constraints")
+            .multi_line(true)
+            .auto_grow(2, 6)
+    });
 
     window.open_dialog(cx, move |dialog, _window, _cx| {
         let view_save = view.clone();
@@ -498,7 +502,7 @@ pub fn open_new_instance_dialog<V: 'static>(
                     )
                     .child(
                         field()
-                            .label("Configuration")
+                            .label("Instance Context")
                             .child(Input::new(&config_input)),
                     ),
             )
@@ -542,20 +546,18 @@ pub fn open_new_instance_dialog<V: 'static>(
                                 move |_ev, window, cx| {
                                     let selected_template_name =
                                         template_select3.read(cx).selected_value();
-                                    let team_id = selected_template_name.and_then(|name| {
+                                    let Some(team_id) = selected_template_name.and_then(|name| {
                                         teams_save3
                                             .iter()
                                             .find(|t| t.name == *name)
                                             .map(|t| t.id.clone())
-                                    });
-
-                                    if team_id.is_none() {
+                                    }) else {
                                         window.push_notification(
                                             (NotificationType::Error, "Please select a template."),
                                             cx,
                                         );
                                         return;
-                                    }
+                                    };
 
                                     let name = name_input3.read(cx).text().to_string();
                                     let name = name.trim().to_string();
@@ -589,21 +591,39 @@ pub fn open_new_instance_dialog<V: 'static>(
                                         .create_instance(
                                             &instance_id,
                                             &name,
-                                            &team_id.unwrap(),
+                                            &team_id,
                                             config_opt,
-                                            Some("running"),
+                                            Some("initializing"),
                                         )
                                         .is_ok()
                                     {
+                                        let initialized = db_save3
+                                            .get_instance_agents(&instance_id)
+                                            .map(|agents| !agents.is_empty())
+                                            .unwrap_or(false);
+                                        let next_state =
+                                            if initialized { "running" } else { "failed" };
+                                        let _ = db_save3
+                                            .update_instance_state(&instance_id, next_state);
                                         view_save3.update(cx, on_success_save3.clone());
                                         window.close_dialog(cx);
-                                        window.push_notification(
-                                            (
-                                                NotificationType::Success,
-                                                "Instance created successfully.",
-                                            ),
-                                            cx,
-                                        );
+                                        if initialized {
+                                            window.push_notification(
+                                                (
+                                                    NotificationType::Success,
+                                                    "Instance created successfully.",
+                                                ),
+                                                cx,
+                                            );
+                                        } else {
+                                            window.push_notification(
+                                                (
+                                                    NotificationType::Error,
+                                                    "Instance created but has no available agents.",
+                                                ),
+                                                cx,
+                                            );
+                                        }
                                     } else {
                                         window.push_notification(
                                             (NotificationType::Error, "Failed to create instance."),

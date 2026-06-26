@@ -166,10 +166,16 @@ impl TeamWorkspacePanel {
     ) -> impl IntoElement {
         let id_str = instance.id.clone();
 
+        let lifecycle_state = instance
+            .state
+            .as_deref()
+            .map(str::trim)
+            .filter(|state| !state.is_empty());
+        let lifecycle_key = lifecycle_state.map(str::to_ascii_lowercase);
         // Use a generic dot color based on state, defaulting to blue
-        let dot_color = match instance.state.as_deref() {
+        let dot_color = match lifecycle_key.as_deref() {
             Some("failed") | Some("error") => gpui::red(),
-            Some("running") => gpui::green(),
+            Some("running") | None => gpui::green(),
             Some("paused") => gpui::Hsla::from(gpui::rgb(0xffa500)),
             _ => gpui::blue(),
         };
@@ -188,7 +194,7 @@ impl TeamWorkspacePanel {
                 })
                 .unwrap_or_else(|_| raw.clone())
         };
-        let status = instance.state.as_deref().unwrap_or("Initializing");
+        let status = lifecycle_state.unwrap_or("running");
 
         div()
             .id(SharedString::from(id_str.clone()))
