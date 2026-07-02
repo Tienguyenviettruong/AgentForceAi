@@ -1,8 +1,8 @@
 # System Requirements Specification (SRS)
 # AgentForge AI — Multi-Agent Desktop Platform
 
-> **Phiên bản:** 2.0 (Từ mã nguồn thực tế)
-> **Cập nhật:** 2026-06-12
+> **Phiên bản:** 2.1 (Từ mã nguồn thực tế)
+> **Cập nhật:** 2026-06-26
 
 ---
 
@@ -43,7 +43,7 @@ AgentForge AI là một **desktop application** cho phép:
 ### 2.2. Các boundary chính
 
 ```
-[Desktop User] ↔ [UI (egui)] ↔ [AppState] ↔ [Services/Orchestration]
+[Desktop User] ↔ [UI (GPUI)] ↔ [AppState] ↔ [Services/Orchestration]
                                                     ↕
                                     [SQLite DB] ↔ [DatabasePort]
                                                     ↕
@@ -480,7 +480,7 @@ Workflow phải thỏa mãn:
 
 ### NFR-6: Memory và Resource
 
-- Tokio runtime stack size: **32MB** (override vì recursive async)
+- GPUI app thread stack size: **64MB** (giảm rủi ro stack overflow khi render UI sâu trên Windows debug)
 - `ProviderAdapterCache`: shared `Arc` across workers — tránh init redundant
 - Smart context pruning: summarize messages khi history > 20 messages
 

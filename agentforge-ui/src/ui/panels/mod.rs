@@ -10,4 +10,5 @@ pub mod profile;
 pub mod research_notebook;
 pub mod session;
 pub mod settings;
+pub mod solo_workspace;
 pub mod team_workspace;

@@ -1,8 +1,8 @@
 # README — Agent Design Documents
 # AgentForge AI — Tài liệu thiết kế kỹ thuật
 
-> **Phiên bản:** 2.0 — Phân tích sâu từ mã nguồn Rust thực tế
-> **Cập nhật:** 2026-06-12
+> **Phiên bản:** 2.1 — Phân tích sâu từ mã nguồn Rust thực tế
+> **Cập nhật:** 2026-06-26
 
 ---
 
@@ -22,13 +22,15 @@ Thư mục này chứa tài liệu thiết kế đầy đủ cho **AgentForge AI
 | [TECHNICAL_SPEC.md](./TECHNICAL_SPEC.md) | Đặc tả kỹ thuật chi tiết từ code | ⭐⭐⭐⭐ Deep Tech |
 | [DATABASE_DESIGN.md](./DATABASE_DESIGN.md) | Schema + SQL patterns + DatabasePort | ⭐⭐⭐⭐ Deep Tech |
 | [DIAGRAMS.md](./DIAGRAMS.md) | Mermaid diagrams: architecture, flows, ERD | ⭐⭐⭐ Visual |
+| [UI_DESIGN.md](./UI_DESIGN.md) | Nguyên tắc và cấu trúc UI desktop | ⭐⭐⭐ UX |
+| [ROADMAP.md](./ROADMAP.md) | Kế hoạch phát triển, milestone và checklist | ⭐⭐⭐ Product + Engineering |
 
 ---
 
 ## Kiến trúc tóm tắt
 
 ```
-AgentForge AI (Rust / egui / wgpu)
+AgentForge AI (Rust / GPUI)
 │
 ├── Core Layer (domain models + DatabasePort trait)
 │   ├── models/: Agent, Orchestration, Workflow, Task, ...
@@ -46,9 +48,9 @@ AgentForge AI (Rust / egui / wgpu)
 │   ├── mcp/: MCP tool registry
 │   └── security/: Audit logger, AEAD keychain
 │
-└── UI Layer (egui immediate mode)
+└── UI Layer (GPUI + gpui-component)
     ├── shell/: TitleBar, ActivityBar, StatusBar, DockLayout
-    └── panels/: Session, Agents, Teams, Orchestration, Workflow, ...
+    └── panels/: Session, Agents, Team Workspace, Orchestration, iFlow, Monitoring, ...
 ```
 
 ---
@@ -76,6 +78,11 @@ State machine với 9 node types. State được persist sau mỗi step. AgentTa
 ### 5. Cross-Team Collaboration
 Governed protocol: Handoff → CollaborationCase → Readback → DelegatedGrant → Execute → Status Events
 
+### 6. Workspace-First Execution
+- Slash commands là điểm vào nhanh cho goal, spec, plan, review, test và verify
+- Orchestration run, workflow execution, run event, tool approval và artifact đều có persistence
+- Virtual Office cung cấp bề mặt quan sát cho agent team trong Team Workspace
+
 ---
 
 ## Công nghệ chính
@@ -83,10 +90,9 @@ Governed protocol: Handoff → CollaborationCase → Readback → DelegatedGrant
 | Công nghệ | Mục đích |
 |---|---|
 | Rust | Application code |
-| egui/eframe | Immediate mode GUI |
-| wgpu | GPU rendering |
+| GPUI + gpui-component | Native desktop UI, dock panels, input và component system |
 | rusqlite | SQLite storage (WAL mode) |
-| tokio | Async runtime (32MB stack) |
+| tokio | Async runtime cho background services; app thread GPUI dùng stack 64MB |
 | serde_json | JSON serialization |
 | sha2 | SHA256 payload hashing |
 | AEAD | Tool payload encryption |
@@ -102,3 +108,12 @@ Governed protocol: Handoff → CollaborationCase → Readback → DelegatedGrant
 4. **Tham khảo TECHNICAL_SPEC.md** — khi cần hiểu implementation chi tiết (structs, algorithms, flows)
 5. **Xem DIAGRAMS.md** — khi cần visualize kiến trúc hoặc data flows
 6. **Tham khảo DATABASE_DESIGN.md** — khi cần làm việc với DB (schema, SQL patterns, indexes)
+7. **Xem ROADMAP.md** — trước khi bắt đầu feature mới để biết phạm vi, dependency và Definition of Done
+
+---
+
+## Phạm vi tài liệu
+
+- Các tài liệu đặc tả mô tả năng lực đã kiểm chứng từ code tại thời điểm cập nhật.
+- `ROADMAP.md` mô tả kế hoạch; một hạng mục trong roadmap không được hiểu là đã triển khai.
+- Khi feature thay đổi schema, policy hoặc workflow contract, tài liệu liên quan phải được cập nhật cùng pull request.

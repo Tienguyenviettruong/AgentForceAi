@@ -13,6 +13,7 @@ use gpui_component::{
     form::{field, v_form},
     h_flex,
     input::{Input, InputState},
+    scroll::ScrollableElement,
     theme::ActiveTheme,
     v_flex, Sizable, StyledExt, WindowExt,
 };
@@ -628,6 +629,7 @@ impl Render for McpMarketplacePanel {
             .bg(theme.background)
             .p_6()
             .gap_4()
+            .overflow_y_scrollbar()
             .child(
                 h_flex()
                     .justify_between()

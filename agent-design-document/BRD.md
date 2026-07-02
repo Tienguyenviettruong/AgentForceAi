@@ -105,11 +105,11 @@ Các team instances có thể giao tiếp, handoff work, và request review từ
 
 | Ràng buộc | Lý do |
 |---|---|
-| Rust/egui stack | Performance, memory safety cho desktop |
+| Rust/GPUI stack | Performance, memory safety va native desktop UI |
 | SQLite (không phải server DB) | Desktop app, no server dependency |
 | AEAD encryption cho tool payloads | Security: sensitive data không rõ ràng trong DB |
 | WAL mode SQLite | Concurrent reads không block |
-| 32MB stack size | Recursive async functions trong Rust |
+| 64MB app thread stack | Render tree sâu và background execution trong desktop app |
 
 ### 6.2. Ràng buộc governance
 

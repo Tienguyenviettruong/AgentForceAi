@@ -88,6 +88,7 @@ pub struct NotificationEntry {
 pub struct AppState {
     pub active_panel: Entity<String>,
     pub selected_iflow_run_id: Entity<Option<String>>,
+    pub selected_orchestration_run_id: Entity<Option<String>>,
     pub notifications: Entity<Vec<NotificationEntry>>,
     pub current_actor_id: String,
     pub db: Arc<dyn DatabasePort>,
@@ -118,6 +119,13 @@ impl AppState {
             .expect("Failed to initialize local security principal");
         let selected_iflow_run_id = {
             let selected = db.get_setting("iflow_selected_run_id").ok().flatten();
+            cx.new(|_| selected)
+        };
+        let selected_orchestration_run_id = {
+            let selected = db
+                .get_setting("orchestration_selected_run_id")
+                .ok()
+                .flatten();
             cx.new(|_| selected)
         };
         {
@@ -164,6 +172,7 @@ impl AppState {
         cx.set_global::<AppState>(Self {
             active_panel,
             selected_iflow_run_id,
+            selected_orchestration_run_id,
             notifications,
             current_actor_id,
             db,
@@ -343,6 +352,12 @@ pub fn init(cx: &mut App) {
             ChatComposerConfirm,
             Some("TeamWorkspaceChatComposer > Input"),
         ),
+        KeyBinding::new("enter", NoAction, Some("SoloChatComposer > Input")),
+        KeyBinding::new(
+            "enter",
+            ChatComposerConfirm,
+            Some("SoloChatComposer > Input"),
+        ),
         KeyBinding::new(
             "enter",
             NoAction,
@@ -485,6 +500,7 @@ pub struct MainWindow {
     solo_mode: bool,
     dock_areas: std::collections::HashMap<SharedString, Entity<DockArea>>,
     team_workspace: Entity<crate::ui::panels::team_workspace::TeamWorkspacePanel>,
+    solo_workspace: Entity<crate::ui::panels::solo_workspace::SoloWorkspacePanel>,
 }
 
 const SOLO_MODE_TRANSITION_SECS: f64 = 0.24;
@@ -494,6 +510,8 @@ impl MainWindow {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let team_workspace =
             cx.new(|cx| crate::ui::panels::team_workspace::TeamWorkspacePanel::new(window, cx));
+        let solo_workspace =
+            cx.new(|cx| crate::ui::panels::solo_workspace::SoloWorkspacePanel::new(window, cx));
         let initial_page = std::env::var("AGENTFORGE_START_PAGE")
             .ok()
             .map(|page| page.trim().to_string())
@@ -748,6 +766,7 @@ impl MainWindow {
             solo_mode: true,
             dock_areas,
             team_workspace,
+            solo_workspace,
         }
     }
 
@@ -861,62 +880,19 @@ impl MainWindow {
         }
     }
 
-    fn render_solo_mode(&self, cx: &Context<Self>) -> gpui::AnyElement {
-        let theme = cx.theme().clone();
-
+    fn render_solo_mode(&self, _cx: &Context<Self>) -> gpui::AnyElement {
         div()
             .flex_1()
             .min_h(px(0.))
             .overflow_hidden()
-            .bg(theme.background)
-            .child(
-                div()
-                    .size_full()
-                    .flex()
-                    .flex_row()
-                    .bg(theme.background)
-                    .child(
-                        div()
-                            .w(px(160.))
-                            .h_full()
-                            .flex()
-                            .flex_col()
-                            .border_r(px(1.))
-                            .border_color(theme.border)
-                            .bg(theme.secondary.opacity(0.45))
-                            .p(px(10.))
-                            .gap(px(8.))
-                            .child(
-                                h_flex()
-                                    .id("solo-sidebar-automation")
-                                    .w_full()
-                                    .h(px(36.))
-                                    .px(px(10.))
-                                    .gap(px(8.))
-                                    .rounded_md()
-                                    .bg(theme.primary.opacity(0.12))
-                                    .text_color(theme.foreground)
-                                    .child(div().text_color(theme.primary).child(IconName::Bot))
-                                    .child(
-                                        div()
-                                            .min_w_0()
-                                            .truncate()
-                                            .text_size(px(13.))
-                                            .font_weight(gpui::FontWeight::MEDIUM)
-                                            .child("Automation"),
-                                    ),
-                            ),
-                    )
-                    .child(div().flex_1().h_full().bg(theme.background))
-                    .with_animation(
-                        "solo-mode-slide-in",
-                        Animation::new(Duration::from_secs_f64(SOLO_MODE_TRANSITION_SECS)),
-                        |this, delta| this.ml(px((1.0 - delta) * SOLO_MODE_SLIDE_OFFSET)),
-                    ),
+            .child(self.solo_workspace.clone())
+            .with_animation(
+                "solo-mode-slide-in",
+                Animation::new(Duration::from_secs_f64(SOLO_MODE_TRANSITION_SECS)),
+                |this, delta| this.ml(px((1.0 - delta) * SOLO_MODE_SLIDE_OFFSET)),
             )
             .into_any_element()
     }
-
     fn render_workspace_mode(&self, cx: &Context<Self>) -> gpui::AnyElement {
         let theme = cx.theme().clone();
 

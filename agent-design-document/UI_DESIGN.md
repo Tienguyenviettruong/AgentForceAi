@@ -1,14 +1,14 @@
 # UI Design Document — AgentForge AI
 
-> **Phiên bản:** 2.0 (Dựa trên mã nguồn UI thực tế)
-> **Cập nhật:** 2026-06-12
-> **Framework:** egui (immediate mode GUI) + wgpu (GPU rendering)
+> **Phiên bản:** 2.1 (Dựa trên mã nguồn UI thực tế)
+> **Cập nhật:** 2026-06-26
+> **Framework:** GPUI + gpui-component
 
 ---
 
 ## 1. Tổng quan kiến trúc UI
 
-AgentForge AI sử dụng **egui** — một immediate mode GUI framework cho Rust. Không có component tree hay state management framework; thay vào đó, mỗi frame render lại toàn bộ UI dựa trên `AppState`.
+AgentForge AI sử dụng **GPUI** và `gpui-component` cho native desktop UI. Trạng thái ứng dụng được quản lý qua `AppState`, `Entity<T>` và `Context<T>`; shell và các panel render bằng component tree của GPUI, với focus, action và event handler được gắn theo từng element.
 
 ### 1.1. Shell Layout
 
@@ -70,7 +70,7 @@ ui/
   - Color-coded theo mode (green/yellow/red)
 - **Application Title**: "AgentForge AI"
 - **Menu Bar**: File | Edit | View | Agents | Teams | Help
-- **Window Controls**: Minimize, Maximize, Close (native OS controls via eframe)
+- **Window Controls**: Minimize, Maximize, Close qua native window integration của GPUI
 
 **Mode Switcher behavior:**
 ```
@@ -219,6 +219,20 @@ Timeline:
 
 Token Usage: 4,521 / 1,000,000
 ```
+
+---
+
+### 4.3. Run Workspace va Artifact Hub
+
+Da implement:
+
+- Tab `Run` trong Orchestration mo theo `selected_orchestration_run_id`, co header goal/status, metrics, timeline, artifact column va pending approvals.
+- Deep-link vao Run Workspace tu Dashboard, Team Chat va Virtual Office Agent Inspector.
+- Artifact list hien kind, path, created_at, hash short va file state: `Available`, `Missing`, `Unreadable`, `Hash changed`.
+- Preview panel hien noi dung text/markdown/code nho; binary/docx/pdf hoac file lon hien metadata thay vi viewer native.
+- Timeline co segmented filter theo event category; artifact list co segmented filter theo artifact kind.
+- Artifact actions: `Preview`, `Reveal`, `Copy path`, `Copy hash`, `Add to Knowledge`; Artifact Hub tong quat co them `View run`.
+- Approval card trong Run Workspace hien tool, mode, path/command, risk badge, requested_by va nut `Approve`/`Reject`.
 
 ---
 
@@ -394,11 +408,11 @@ Configuration (JSON):
 
 ## 10. Design Principles
 
-### 10.1. Immediate Mode (egui)
+### 10.1. GPUI Component Model
 
-- **Không có React-style state lifting**: AppState là single source of truth
-- **Mỗi frame**: UI được rebuild hoàn toàn từ current state
-- **Response time**: ~16ms render cycle (60fps target)
+- **AppState cho trạng thái dùng chung**: database, runtime, TeamBus, selected run và application mode.
+- **Entity state cho panel**: mỗi panel giữ trạng thái cục bộ trong `Entity<T>` và cập nhật qua `Context<T>`.
+- **Event-driven rendering**: `cx.notify()` yêu cầu render lại khi state thay đổi; action, focus và listener nằm trên component phù hợp.
 
 ### 10.2. Streaming Updates
 
@@ -432,8 +446,8 @@ Configuration (JSON):
 ## 11. Accessibility và UX
 
 - **Keyboard shortcuts**: Đăng ký qua keybindings trong lib.rs init
-- **Font**: egui default fonts, có thể override qua FontDefinitions
-- **Theme**: Light/Dark toggle (egui built-in visuals)
+- **Font**: kế thừa text style và font system của GPUI; component có thể override theo theme.
+- **Theme**: Light/Dark mode qua GPUI component theme system.
 - **Panel resize**: Drag-to-resize giữa các panels
 - **Scroll**: Tất cả panels có scroll support
 
@@ -461,25 +475,25 @@ Thứ tự khởi tạo trong `init()`:
 
 ```rust
 fn main() {
-    // Override stack size: 32MB (needed for recursive async functions)
-    let builder = std::thread::Builder::new().stack_size(32 * 1024 * 1024);
-    builder.spawn(|| {
-        // Create tokio runtime
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()?;
-        
-        // Init eframe window
-        eframe::run_native(
-            "AgentForge AI",
-            NativeOptions {
-                viewport: ViewportBuilder::default()
-                    .with_inner_size([1400.0, 900.0]),
-                renderer: eframe::Renderer::Wgpu,  // GPU renderer
-                ..Default::default()
-            },
-            Box::new(|cc| Box::new(App::new(cc, runtime))),
-        )
-    }).unwrap().join().unwrap();
+    let handle = std::thread::Builder::new()
+        .name("agentforge-main".to_string())
+        .stack_size(64 * 1024 * 1024)
+        .spawn(run_app)
+        .expect("Failed to spawn main app thread");
+
+    handle.join().expect("Main app thread panicked");
+}
+
+fn run_app() {
+    let app = gpui::Application::new().with_assets(CombinedAssets);
+    app.run(move |cx| {
+        init(cx);
+        cx.activate(true);
+        create_main_window(
+            "AgentForgeAI",
+            |window, cx| cx.new(|cx| MainWindow::new(window, cx)),
+            cx,
+        );
+    });
 }
 ```

@@ -1,22 +1,21 @@
 # Technical Specification — AgentForge AI
 
-> **Phiên bản:** 2.0 (Deep Dive từ mã nguồn thực tế)
-> **Cập nhật lần cuối:** 2026-06-12
+> **Phiên bản:** 2.1 (Deep Dive từ mã nguồn thực tế)
+> **Cập nhật lần cuối:** 2026-06-26
 
 ---
 
 ## 1. Tổng quan kiến trúc
 
-AgentForge AI là một desktop application multi-agent được viết bằng **Rust** sử dụng framework **egui/eframe**. Hệ thống tuân theo **Clean Architecture** với ba tầng chính: `core` (domain models + traits), `application` (use cases + orchestration), và `infrastructure` (DB, LLM providers, message bus). Nội dung hiển thị ứng dụng được render bằng GPU thông qua **wgpu**.
+AgentForge AI là một desktop application multi-agent được viết bằng **Rust** sử dụng **GPUI** và `gpui-component` cho desktop UI. Hệ thống tuân theo ba tầng chính: `core` (domain models + traits), `application` (use cases + orchestration), và `infrastructure` (DB, LLM providers, message bus). UI được tổ chức thành shell, panels, reusable components và framework helpers.
 
 ### 1.1. Stack kỹ thuật
 
 | Thành phần | Công nghệ | Chi tiết |
 |---|---|---|
-| UI Framework | `egui` + `eframe` | Immediate mode GUI |
-| GPU Renderer | `wgpu` | WebGPU-based renderer cho egui |
+| UI Framework | `gpui` + `gpui-component` | Native desktop UI, dock panels, input, focus và component system |
 | Persistence | `rusqlite` (SQLite) | WAL mode, ATTACH multi-db |
-| Async Runtime | `tokio` | Multi-threaded, custom stack 32MB |
+| Async Runtime | `tokio` | Multi-threaded background runtime; GPUI app thread dùng stack 64MB |
 | LLM Streaming | SSE / HTTP streaming | `reqwest` async client |
 | MCP | Custom registry | JSON-RPC tool proxy |
 | Serialization | `serde_json` | JSON payload exchange |
@@ -50,10 +49,11 @@ agentforge-ui/src/
 ├── ui/
 │   ├── shell/            # TitleBar, ActivityBar, StatusBar, DockLayout, AppMenus
 │   ├── panels/           # Session, Agents, Orchestration, Workflow, ... panels
+│   │   └── team_workspace/# Chat, Teams, Members, Slash Commands, Virtual Office
 │   ├── components/       # Reusable UI components
 │   └── framework/        # Panel registry, dock layout engine
 ├── lib.rs                # App init, AppState, register_panel calls
-└── main.rs               # Entry point: stack size 32MB, tokio runtime
+└── main.rs               # Entry point: GPUI application trên thread stack 64MB
 ```
 
 ---
@@ -134,6 +134,20 @@ pub struct ApprovalRequestRecord {
     pub resolved_at: Option<String>,
 }
 ```
+
+### 2.2.1. Run Workspace va Artifact Hub UI contract
+
+Da implement trong `ui/panels/orchestration.rs`:
+
+- `AppState.selected_orchestration_run_id` la global `Entity<Option<String>>`, persist vao `settings["orchestration_selected_run_id"]`.
+- Orchestration tab `Run` lazy-load run bang `DatabasePort::get_orchestration_run`, events bang `list_recent_run_events(Some(run_id), 200)`, artifacts bang `list_artifacts_for_run`, approvals bang `list_pending_approval_requests`.
+- Artifact preview resolve relative path bang `settings["workspace_{instance_id}"]`, doc text/markdown/code toi da 256KB va fallback metadata cho binary/missing file.
+- Artifact file state: `Available`, `Missing`, `Unreadable`, `Hash changed`; hash check dung SHA256 khi artifact hash co dang 64 hex chars.
+- Timeline filter nhom event theo category suy ra tu `event_type`: Approvals, Artifacts, Completed, Created, Failures, Progress, Other.
+- Artifact kind filter dung truc tiep `ArtifactRecord.artifact_kind` trong Run Workspace va tab Artifact Hub.
+- `Reveal` resolve artifact path roi mo file explorer cua OS; neu path mat thi hien notification loi va khong crash panel.
+- `Add to Knowledge` tao `KnowledgeItem` voi `source_kind="generated_artifact"` va `source_uri_normalized=file:///...`; `upsert_knowledge_item` dung source URI de tranh duplicate cung artifact.
+- Approval action trong Run Workspace dung cung contract voi Governance: resolve approval, update waiting tasks, update run status, insert `RunEventRecord`, insert audit log, roi resume/reject iFlow automation.
 
 ### 2.3. `ToolInvocationRecord` — `core/models/orchestration.rs`
 

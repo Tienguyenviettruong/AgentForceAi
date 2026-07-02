@@ -501,8 +501,8 @@ impl TeamWorkspacePanel {
                                         cx.notify();
                                     });
                                 }
-                            })
-                    )
+                            }),
+                    ),
             )
             .child(
                 // Top Header
@@ -903,6 +903,40 @@ impl TeamWorkspacePanel {
                                                 this.show_history_sheet = !this.show_history_sheet;
                                                 cx.notify();
                                             }))
+                                    )
+                                    .when_some(
+                                        self.available_iflow_run_id.clone(),
+                                        |header, run_id| {
+                                            header.child(
+                                                Button::new("view-run-workspace")
+                                                    .ghost()
+                                                    .small()
+                                                    .label("Run")
+                                                    .tooltip("Open the workspace for this run")
+                                                    .on_click(move |_, _, cx| {
+                                                        let db = crate::AppState::global(cx).db.clone();
+                                                        let selected = crate::AppState::global(cx)
+                                                            .selected_orchestration_run_id
+                                                            .clone();
+                                                        let active_panel = crate::AppState::global(cx)
+                                                            .active_panel
+                                                            .clone();
+                                                        let _ = db.set_setting(
+                                                            "orchestration_selected_run_id",
+                                                            &run_id,
+                                                        );
+                                                        let selected_run_id = run_id.clone();
+                                                        selected.update(cx, move |current, cx| {
+                                                            *current = Some(selected_run_id);
+                                                            cx.notify();
+                                                        });
+                                                        active_panel.update(cx, |page, cx| {
+                                                            *page = "orchestration".to_string();
+                                                            cx.notify();
+                                                        });
+                                                    }),
+                                            )
+                                        },
                                     )
                                     .when_some(
                                         self.available_iflow_run_id.clone(),

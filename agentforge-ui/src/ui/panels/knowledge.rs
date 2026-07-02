@@ -13,6 +13,12 @@ use std::sync::Arc;
 use urlencoding::encode;
 
 const GRAPH_LABEL_MIN_ZOOM: f32 = 0.82;
+const GRAPH_MIN_ZOOM: f32 = 0.4;
+const GRAPH_MAX_ZOOM: f32 = 2.0;
+const GRAPH_LAYOUT_MAX_RADIUS: f32 = 460.0;
+const GRAPH_MAX_FORCE: f32 = 280.0;
+const GRAPH_MAX_VELOCITY: f32 = 160.0;
+const GRAPH_MAX_STEP: f32 = 8.0;
 
 pub struct KnowledgePanel {
     focus_handle: gpui::FocusHandle,
@@ -264,14 +270,7 @@ impl KnowledgePanel {
                             if this.node_positions.len() != n || this.node_velocities.len() != n {
                                 return; // Length mismatch, wait for render to re-initialize
                             }
-                            let mut edges = Vec::new();
-                            for (i, item) in this.items.iter().enumerate() {
-                                for (j, other_item) in this.items.iter().enumerate() {
-                                    if Self::items_are_related_for_graph(i, item, j, other_item) {
-                                        edges.push((i, j));
-                                    }
-                                }
-                            }
+                            let edges = Self::graph_edges_for_items(&this.items);
 
                             let k = 100.0; // Optimal distance
                             let c = 0.1; // Repulsion constant
@@ -304,6 +303,11 @@ impl KnowledgePanel {
                                 fx -= p1.x * 0.05;
                                 fy -= p1.y * 0.05;
 
+                                let force =
+                                    Self::clamp_graph_vector(gpui::point(fx, fy), GRAPH_MAX_FORCE);
+                                fx = force.x;
+                                fy = force.y;
+
                                 this.node_velocities[i].x += fx * dt;
                                 this.node_velocities[i].y += fy * dt;
                             }
@@ -317,8 +321,15 @@ impl KnowledgePanel {
                                 let dist = (dx * dx + dy * dy).sqrt().max(1.0);
 
                                 let force = (dist * dist) / k;
-                                let fx = force * (dx / dist) * 0.05;
-                                let fy = force * (dy / dist) * 0.05;
+                                let clamped_force = Self::clamp_graph_vector(
+                                    gpui::point(
+                                        force * (dx / dist) * 0.05,
+                                        force * (dy / dist) * 0.05,
+                                    ),
+                                    GRAPH_MAX_FORCE,
+                                );
+                                let fx = clamped_force.x;
+                                let fy = clamped_force.y;
 
                                 this.node_velocities[i].x += fx * dt;
                                 this.node_velocities[i].y += fy * dt;
@@ -330,6 +341,10 @@ impl KnowledgePanel {
                             for i in 0..n {
                                 this.node_velocities[i].x *= damping;
                                 this.node_velocities[i].y *= damping;
+                                this.node_velocities[i] = Self::clamp_graph_vector(
+                                    this.node_velocities[i],
+                                    GRAPH_MAX_VELOCITY,
+                                );
 
                                 if this.node_velocities[i].x.abs() > 0.1
                                     || this.node_velocities[i].y.abs() > 0.1
@@ -337,8 +352,31 @@ impl KnowledgePanel {
                                     moved = true;
                                 }
 
-                                this.node_positions[i].x += this.node_velocities[i].x * dt;
-                                this.node_positions[i].y += this.node_velocities[i].y * dt;
+                                let step = Self::clamp_graph_vector(
+                                    gpui::point(
+                                        this.node_velocities[i].x * dt,
+                                        this.node_velocities[i].y * dt,
+                                    ),
+                                    GRAPH_MAX_STEP,
+                                );
+                                this.node_positions[i].x += step.x;
+                                this.node_positions[i].y += step.y;
+
+                                let radius = (this.node_positions[i].x * this.node_positions[i].x
+                                    + this.node_positions[i].y * this.node_positions[i].y)
+                                    .sqrt();
+                                if radius.is_finite() && radius > GRAPH_LAYOUT_MAX_RADIUS {
+                                    let scale = GRAPH_LAYOUT_MAX_RADIUS / radius;
+                                    this.node_positions[i].x *= scale;
+                                    this.node_positions[i].y *= scale;
+                                    this.node_velocities[i].x *= 0.2;
+                                    this.node_velocities[i].y *= 0.2;
+                                    moved = true;
+                                } else if !radius.is_finite() {
+                                    this.node_positions[i] = gpui::point(0.0, 0.0);
+                                    this.node_velocities[i] = gpui::point(0.0, 0.0);
+                                    moved = true;
+                                }
                             }
 
                             if moved {
@@ -551,6 +589,34 @@ impl KnowledgePanel {
                 (&left.origin_instance_id, &right.origin_instance_id),
                 (Some(left_instance), Some(right_instance)) if left_instance == right_instance
             )
+    }
+
+    fn graph_edges_for_items(
+        items: &[crate::knowledge::core::KnowledgeItem],
+    ) -> Vec<(usize, usize)> {
+        let mut edges = Vec::new();
+        for i in 0..items.len() {
+            for j in (i + 1)..items.len() {
+                if Self::items_are_related_for_graph(i, &items[i], j, &items[j])
+                    || Self::items_are_related_for_graph(j, &items[j], i, &items[i])
+                {
+                    edges.push((i, j));
+                }
+            }
+        }
+        edges
+    }
+
+    fn clamp_graph_vector(vector: gpui::Point<f32>, max_len: f32) -> gpui::Point<f32> {
+        let len = (vector.x * vector.x + vector.y * vector.y).sqrt();
+        if len.is_finite() && len > max_len && len > 0.0 {
+            let scale = max_len / len;
+            gpui::point(vector.x * scale, vector.y * scale)
+        } else if vector.x.is_finite() && vector.y.is_finite() {
+            vector
+        } else {
+            gpui::point(0.0, 0.0)
+        }
     }
 
     fn related_items_for_instance(
@@ -849,6 +915,15 @@ impl KnowledgePanel {
     fn render_graph_visualization(&mut self, cx: &Context<Self>) -> impl IntoElement {
         use gpui::{canvas, point};
 
+        if self.graph_zoom.is_finite() {
+            self.graph_zoom = self.graph_zoom.clamp(GRAPH_MIN_ZOOM, GRAPH_MAX_ZOOM);
+        } else {
+            self.graph_zoom = 1.0;
+        }
+        if !self.graph_pan.x.is_finite() || !self.graph_pan.y.is_finite() {
+            self.graph_pan = point(0.0, 0.0);
+        }
+
         let theme = cx.theme();
         let border_color = theme.border;
         let base_node_color = gpui::hsla(0.0, 0.0, 0.5, 1.0); // Gray color
@@ -858,7 +933,6 @@ impl KnowledgePanel {
 
         // Build graph data
         let mut nodes = Vec::new();
-        let mut edges = Vec::new();
 
         for item in &self.items {
             nodes.push((item.id, item.title.clone()));
@@ -867,13 +941,7 @@ impl KnowledgePanel {
         let n = nodes.len();
 
         // Link explicit [[wiki-links]] and memories/artifacts from the same instance.
-        for (i, item) in self.items.iter().enumerate() {
-            for (j, other_item) in self.items.iter().enumerate() {
-                if Self::items_are_related_for_graph(i, item, j, other_item) {
-                    edges.push((i, j));
-                }
-            }
-        }
+        let edges = Self::graph_edges_for_items(&self.items);
 
         let pan = self.graph_pan;
         let zoom = self.graph_zoom;
@@ -883,7 +951,7 @@ impl KnowledgePanel {
         if self.node_positions.len() != n {
             let mut pos = Vec::with_capacity(n);
             let mut vel = Vec::with_capacity(n);
-            let radius_base = 200.0;
+            let radius_base = (140.0 + (n as f32 * 4.0)).clamp(180.0, 360.0);
             for i in 0..n {
                 let angle = (i as f32 / n.max(1) as f32) * std::f32::consts::PI * 2.0;
                 pos.push(point(radius_base * angle.cos(), radius_base * angle.sin()));
@@ -987,7 +1055,8 @@ impl KnowledgePanel {
                             gpui::ScrollDelta::Lines(l) => l.y * 20.0,
                         };
 
-                        let new_zoom = (this.graph_zoom + (delta / 500.0)).clamp(0.1, 5.0);
+                        let new_zoom = (this.graph_zoom + (delta / 500.0))
+                            .clamp(GRAPH_MIN_ZOOM, GRAPH_MAX_ZOOM);
                         this.graph_zoom = new_zoom;
 
                         let mouse_x: f32 = event.position.x.into();

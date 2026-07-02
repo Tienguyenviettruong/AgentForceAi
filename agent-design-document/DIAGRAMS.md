@@ -1,6 +1,6 @@
 # System Diagrams — AgentForge AI
-> **Phiên bản:** 2.0 (Từ mã nguồn thực tế)
-> **Cập nhật:** 2026-06-12
+> **Phiên bản:** 2.1 (Từ mã nguồn thực tế)
+> **Cập nhật:** 2026-06-26
 
 ---
 
@@ -8,7 +8,7 @@
 
 ```mermaid
 graph TB
-    subgraph Desktop["🖥️ Desktop Application (egui/wgpu)"]
+    subgraph Desktop["🖥️ Desktop Application (GPUI)"]
         UI["UI Layer\n(Shell + Panels + Components)"]
         AppState["AppState\n(lib.rs)"]
     end

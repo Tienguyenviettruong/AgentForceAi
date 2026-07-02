@@ -64,6 +64,10 @@ pub struct TeamWorkspacePanel {
     pub(crate) generation_cancel_flag: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     pub(crate) recent_workspaces: Vec<String>,
     pub(crate) office_state: office_canvas::OfficeState,
+    pub(crate) selected_office_agent_id: Option<String>,
+    pub(crate) office_quick_chat_agent_id: Option<String>,
+    pub(crate) office_quick_chat_input_state: Entity<gpui_component::input::InputState>,
+    pub(crate) office_chat_target_agent_id: Option<String>,
     pub(crate) office_canvas_bounds_cache: Option<gpui::Bounds<gpui::Pixels>>,
     pub(crate) office_animation_queued: bool,
 }
@@ -79,6 +83,13 @@ impl TeamWorkspacePanel {
                 .multi_line(true)
                 .auto_grow(1, 5)
                 .placeholder("Describe new goal... (Enter to send, Ctrl+Enter for new line)")
+        });
+        let office_quick_chat_input_state = cx.new(|cx| {
+            gpui_component::input::InputState::new(window, cx)
+                .multi_line(true)
+                .rows(3)
+                .soft_wrap(false)
+                .placeholder("Message this agent...")
         });
 
         let mut panel = Self {
@@ -124,6 +135,10 @@ impl TeamWorkspacePanel {
             generation_cancel_flag: None,
             recent_workspaces: Vec::new(),
             office_state: office_canvas::OfficeState::new(),
+            selected_office_agent_id: None,
+            office_quick_chat_agent_id: None,
+            office_quick_chat_input_state,
+            office_chat_target_agent_id: None,
             office_canvas_bounds_cache: None,
             office_animation_queued: false,
         };

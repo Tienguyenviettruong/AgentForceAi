@@ -1,8 +1,8 @@
 use crate::application::orchestration::modes::OperatingMode;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    div, px, App, AppContext, Context, EventEmitter, Focusable, IntoElement, ParentElement, Render,
-    Styled, Window,
+    div, px, AnyElement, App, AppContext, ClipboardItem, Context, EventEmitter, Focusable,
+    IntoElement, ParentElement, Render, Styled, Window,
 };
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::dock::{Panel, PanelEvent, TitleStyle};
@@ -14,10 +14,34 @@ use gpui_component::{
     form::{field, v_form},
     h_flex, v_flex, Sizable, WindowExt,
 };
+use sha2::{Digest, Sha256};
+use std::path::{Path, PathBuf};
 
 pub struct OrchestrationPanel {
     focus_handle: gpui::FocusHandle,
     active_tab: String,
+    last_requested_run_id: Option<String>,
+    selected_run_artifact_id: Option<String>,
+    run_timeline_filter: String,
+    run_artifact_kind_filter: String,
+    artifact_hub_kind_filter: String,
+}
+
+#[derive(Default)]
+struct ApprovalOperationDetails {
+    tool_name: String,
+    command: Option<String>,
+    path: Option<String>,
+    mode: Option<String>,
+}
+
+struct ArtifactPreview {
+    resolved_path: PathBuf,
+    status_label: String,
+    status_color: gpui::Hsla,
+    metadata: String,
+    content: Option<String>,
+    hash_note: Option<String>,
 }
 
 impl OrchestrationPanel {
@@ -25,6 +49,11 @@ impl OrchestrationPanel {
         Self {
             focus_handle: cx.focus_handle(),
             active_tab: "Dashboard".to_string(),
+            last_requested_run_id: None,
+            selected_run_artifact_id: None,
+            run_timeline_filter: "All".to_string(),
+            run_artifact_kind_filter: "All".to_string(),
+            artifact_hub_kind_filter: "All".to_string(),
         }
     }
 }
@@ -50,7 +79,9 @@ impl Focusable for OrchestrationPanel {
 }
 
 impl Render for OrchestrationPanel {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.sync_run_workspace_request(cx);
+
         v_flex()
             .size_full()
             .gap_4()
@@ -59,6 +90,7 @@ impl Render for OrchestrationPanel {
                 h_flex()
                     .gap_2()
                     .child(self.render_tab("Dashboard", cx))
+                    .child(self.render_tab("Run", cx))
                     .child(self.render_tab("Tracking", cx))
                     .child(self.render_tab("Logs", cx))
                     .child(self.render_tab("Governance", cx))
@@ -73,6 +105,7 @@ impl Render for OrchestrationPanel {
                     div().size_full().overflow_y_scrollbar().child(
                         match self.active_tab.as_str() {
                             "Dashboard" => self.render_dashboard(cx).into_any_element(),
+                            "Run" => self.render_run_workspace(window, cx),
                             "Tracking" => self.render_tracking(cx).into_any_element(),
                             "Logs" => self.render_logs(cx).into_any_element(),
                             "Governance" => self.render_governance(cx).into_any_element(),
@@ -90,6 +123,17 @@ impl Render for OrchestrationPanel {
 }
 
 impl OrchestrationPanel {
+    fn sync_run_workspace_request(&mut self, cx: &mut Context<Self>) {
+        let requested = crate::AppState::global(cx)
+            .selected_orchestration_run_id
+            .read(cx)
+            .clone();
+        if requested.is_some() && requested != self.last_requested_run_id {
+            self.active_tab = "Run".to_string();
+            self.last_requested_run_id = requested;
+        }
+    }
+
     fn render_tab(&self, name: &'static str, cx: &mut Context<Self>) -> impl IntoElement {
         let is_active = self.active_tab == name;
         let tab_name = name.to_string();
@@ -99,6 +143,16 @@ impl OrchestrationPanel {
             .when(is_active, |b| b.primary())
             .when(!is_active, |b| b.ghost())
             .on_click(cx.listener(move |this, _, _, cx| {
+                if tab_name != "Run" {
+                    let selected = crate::AppState::global(cx)
+                        .selected_orchestration_run_id
+                        .clone();
+                    selected.update(cx, |current, cx| {
+                        *current = None;
+                        cx.notify();
+                    });
+                    this.last_requested_run_id = None;
+                }
                 this.active_tab = tab_name.clone();
                 cx.notify();
             }))
@@ -340,6 +394,7 @@ impl OrchestrationPanel {
                     })
                     .children(recent_runs.into_iter().map(|run| {
                         let run_id = run.id.clone();
+                        let run_for_workspace = run_id.clone();
                         let has_workflow = run.workflow_id.is_some();
                         let goal = run.goal;
                         let scope = format!(
@@ -378,6 +433,39 @@ impl OrchestrationPanel {
                                             .text_color(theme.muted_foreground)
                                             .child(time),
                                     )
+                                    .child(
+                                        Button::new(gpui::SharedString::from(format!(
+                                            "open-run-workspace-{}",
+                                            run_id
+                                        )))
+                                        .small()
+                                        .ghost()
+                                        .label("View run")
+                                        .on_click(
+                                            cx.listener(move |_this, _, _, cx| {
+                                                let db = crate::AppState::global(cx).db.clone();
+                                                let selected = crate::AppState::global(cx)
+                                                    .selected_orchestration_run_id
+                                                    .clone();
+                                                let active_panel = crate::AppState::global(cx)
+                                                    .active_panel
+                                                    .clone();
+                                                let _ = db.set_setting(
+                                                    "orchestration_selected_run_id",
+                                                    &run_for_workspace,
+                                                );
+                                                let selected_run_id = run_for_workspace.clone();
+                                                selected.update(cx, move |current, cx| {
+                                                    *current = Some(selected_run_id);
+                                                    cx.notify();
+                                                });
+                                                active_panel.update(cx, |page, cx| {
+                                                    *page = "orchestration".to_string();
+                                                    cx.notify();
+                                                });
+                                            }),
+                                        ),
+                                    )
                                     .when(has_workflow, |actions| {
                                         let selected_run = run_id.clone();
                                         actions.child(
@@ -415,6 +503,1418 @@ impl OrchestrationPanel {
                             .into_any_element()
                     })),
             )
+    }
+
+    fn render_run_workspace(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme().clone();
+        let db = crate::AppState::global(cx).db.clone();
+        let selected_run_id = crate::AppState::global(cx)
+            .selected_orchestration_run_id
+            .read(cx)
+            .clone();
+        let Some(run_id) = selected_run_id else {
+            return v_flex()
+                .size_full()
+                .items_center()
+                .justify_center()
+                .gap_2()
+                .child(
+                    div()
+                        .text_lg()
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .child("Select a run"),
+                )
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(theme.muted_foreground)
+                        .child("Open a recent run from Dashboard to inspect its workflow, events, artifacts, and approvals."),
+                )
+                .into_any_element();
+        };
+
+        let run = match db.get_orchestration_run(&run_id) {
+            Ok(Some(run)) => run,
+            Ok(None) => {
+                return v_flex()
+                    .size_full()
+                    .items_center()
+                    .justify_center()
+                    .gap_2()
+                    .child(div().text_lg().child("Run is unavailable"))
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(theme.muted_foreground)
+                            .child("The selected run no longer exists in local storage."),
+                    )
+                    .into_any_element();
+            }
+            Err(error) => {
+                return v_flex()
+                    .size_full()
+                    .items_center()
+                    .justify_center()
+                    .gap_2()
+                    .child(div().text_lg().child("Unable to load run"))
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(theme.danger)
+                            .child(error.to_string()),
+                    )
+                    .into_any_element();
+            }
+        };
+
+        let events = db
+            .list_recent_run_events(Some(&run_id), 200)
+            .unwrap_or_default();
+        let artifacts = db.list_artifacts_for_run(&run_id).unwrap_or_default();
+        let event_filter_options = Self::run_event_filter_options(&events);
+        let timeline_filter = self.run_timeline_filter.clone();
+        let filtered_events: Vec<_> = events
+            .iter()
+            .filter(|event| Self::matches_run_event_filter(&event.event_type, &timeline_filter))
+            .collect();
+        let artifact_filter_options = Self::artifact_kind_filter_options(&artifacts);
+        let artifact_kind_filter = self.run_artifact_kind_filter.clone();
+        let filtered_artifacts: Vec<_> = artifacts
+            .iter()
+            .filter(|artifact| {
+                Self::matches_artifact_kind_filter(&artifact.artifact_kind, &artifact_kind_filter)
+            })
+            .collect();
+        let approvals: Vec<_> = db
+            .list_pending_approval_requests(1_000)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|request| request.run_id == run_id)
+            .collect();
+        let task_count = db
+            .list_recent_tasks(300)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|task| task.run_id.as_deref() == Some(run_id.as_str()))
+            .count();
+        let token_count = db.get_total_tokens_for_run(&run_id).unwrap_or_default();
+        let event_count = events.len();
+        let artifact_count = artifacts.len();
+        let approval_count = approvals.len();
+        let (status_label, status_color) = Self::run_status_presentation(&run.status, &theme);
+        let workflow_id = run.workflow_id.clone();
+        let run_for_workflow = run_id.clone();
+        let run_for_dashboard = run_id.clone();
+        if !filtered_artifacts.iter().any(|artifact| {
+            self.selected_run_artifact_id
+                .as_deref()
+                .is_some_and(|selected| selected == artifact.id)
+        }) {
+            self.selected_run_artifact_id = filtered_artifacts
+                .first()
+                .map(|artifact| artifact.id.clone());
+        }
+        let selected_artifact = self
+            .selected_run_artifact_id
+            .as_ref()
+            .and_then(|artifact_id| {
+                filtered_artifacts
+                    .iter()
+                    .copied()
+                    .find(|artifact| artifact.id == *artifact_id)
+            });
+
+        let mut timeline = v_flex().w_full().gap_1();
+        if events.is_empty() {
+            timeline = timeline.child(
+                div()
+                    .py_3()
+                    .text_sm()
+                    .text_color(theme.muted_foreground)
+                    .child("No persisted events for this run yet."),
+            );
+        } else if filtered_events.is_empty() {
+            timeline = timeline.child(
+                div()
+                    .py_3()
+                    .text_sm()
+                    .text_color(theme.muted_foreground)
+                    .child("No events match the selected filter."),
+            );
+        } else {
+            for event in filtered_events {
+                let (label, color) = Self::run_event_presentation(&event.event_type, &theme);
+                let actor = event
+                    .actor_id
+                    .clone()
+                    .unwrap_or_else(|| event.actor_type.clone());
+                let details = event
+                    .payload
+                    .as_deref()
+                    .map(Self::truncate_run_text)
+                    .unwrap_or_else(|| "No additional details.".to_string());
+                timeline = timeline.child(
+                    h_flex()
+                        .items_start()
+                        .gap_3()
+                        .py_2()
+                        .border_b_1()
+                        .border_color(theme.border.opacity(0.55))
+                        .child(div().mt_1().w_2().h_2().rounded_full().bg(color))
+                        .child(
+                            v_flex()
+                                .flex_1()
+                                .min_w_0()
+                                .gap_1()
+                                .child(
+                                    h_flex()
+                                        .justify_between()
+                                        .gap_3()
+                                        .child(
+                                            div()
+                                                .text_sm()
+                                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                .text_color(color)
+                                                .child(label),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(theme.muted_foreground)
+                                                .child(event.created_at.clone()),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(theme.muted_foreground)
+                                        .child(format!("Actor: {}", actor)),
+                                )
+                                .child(div().text_sm().child(details)),
+                        ),
+                );
+            }
+        }
+
+        let mut artifact_list = v_flex().w_full().gap_2();
+        if artifacts.is_empty() {
+            artifact_list = artifact_list.child(
+                div()
+                    .py_3()
+                    .text_sm()
+                    .text_color(theme.muted_foreground)
+                    .child("This run has not produced persisted artifacts."),
+            );
+        } else if filtered_artifacts.is_empty() {
+            artifact_list = artifact_list.child(
+                div()
+                    .py_3()
+                    .text_sm()
+                    .text_color(theme.muted_foreground)
+                    .child("No artifacts match the selected kind."),
+            );
+        } else {
+            for (index, artifact) in filtered_artifacts.into_iter().enumerate() {
+                let path = artifact.path.clone();
+                let path_for_copy = path.clone();
+                let hash_for_copy = artifact.content_hash.clone();
+                let import_artifact: crate::core::models::ArtifactRecord = (*artifact).clone();
+                let reveal_artifact: crate::core::models::ArtifactRecord = (*artifact).clone();
+                let selected_artifact_id = artifact.id.clone();
+                let is_selected =
+                    self.selected_run_artifact_id.as_deref() == Some(artifact.id.as_str());
+                let hash = artifact.content_hash.chars().take(12).collect::<String>();
+                let (file_label, file_color) =
+                    Self::artifact_file_state(db.as_ref(), artifact, &theme);
+                artifact_list = artifact_list.child(
+                    v_flex()
+                        .gap_3()
+                        .p_3()
+                        .rounded_md()
+                        .border_1()
+                        .border_color(if is_selected {
+                            theme.primary.opacity(0.65)
+                        } else {
+                            theme.border
+                        })
+                        .child(
+                            h_flex().items_center().justify_between().gap_3().child(
+                                v_flex()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .gap_1()
+                                    .child(
+                                        h_flex()
+                                            .gap_2()
+                                            .items_center()
+                                            .child(
+                                                div()
+                                                    .text_sm()
+                                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                    .child(artifact.artifact_kind.clone()),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .px_2()
+                                                    .py_1()
+                                                    .rounded_sm()
+                                                    .bg(file_color.opacity(0.12))
+                                                    .text_color(file_color)
+                                                    .child(file_label),
+                                            ),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(theme.muted_foreground)
+                                            .child(path.clone()),
+                                    )
+                                    .child(
+                                        div().text_xs().text_color(theme.muted_foreground).child(
+                                            format!("{} | hash {}", artifact.created_at, hash),
+                                        ),
+                                    ),
+                            ),
+                        )
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .child(
+                                    Button::new(gpui::SharedString::from(format!(
+                                        "preview-artifact-{}-{}",
+                                        run_id, index
+                                    )))
+                                    .small()
+                                    .when(is_selected, |button| button.primary())
+                                    .when(!is_selected, |button| button.ghost())
+                                    .label("Preview")
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.selected_run_artifact_id =
+                                            Some(selected_artifact_id.clone());
+                                        cx.notify();
+                                    })),
+                                )
+                                .child(
+                                    Button::new(gpui::SharedString::from(format!(
+                                        "reveal-artifact-{}-{}",
+                                        run_id, index
+                                    )))
+                                    .small()
+                                    .ghost()
+                                    .label("Reveal")
+                                    .on_click(cx.listener(move |_this, _, window, cx| {
+                                        let db = crate::AppState::global(cx).db.clone();
+                                        match Self::reveal_artifact_path(
+                                            db.as_ref(),
+                                            &reveal_artifact,
+                                        ) {
+                                            Ok(()) => window.push_notification(
+                                                (
+                                                    NotificationType::Success,
+                                                    "Artifact opened in file explorer.",
+                                                ),
+                                                cx,
+                                            ),
+                                            Err(error) => window.push_notification(
+                                                (
+                                                    NotificationType::Error,
+                                                    gpui::SharedString::from(error),
+                                                ),
+                                                cx,
+                                            ),
+                                        }
+                                    })),
+                                )
+                                .child(
+                                    Button::new(gpui::SharedString::from(format!(
+                                        "copy-artifact-path-{}-{}",
+                                        run_id, index
+                                    )))
+                                    .small()
+                                    .ghost()
+                                    .label("Copy path")
+                                    .on_click(cx.listener(move |_this, _, _, cx| {
+                                        cx.write_to_clipboard(ClipboardItem::new_string(
+                                            path_for_copy.clone(),
+                                        ));
+                                    })),
+                                )
+                                .child(
+                                    Button::new(gpui::SharedString::from(format!(
+                                        "copy-artifact-hash-{}-{}",
+                                        run_id, index
+                                    )))
+                                    .small()
+                                    .ghost()
+                                    .label("Copy hash")
+                                    .on_click(cx.listener(move |_this, _, _, cx| {
+                                        cx.write_to_clipboard(ClipboardItem::new_string(
+                                            hash_for_copy.clone(),
+                                        ));
+                                    })),
+                                )
+                                .child(
+                                    Button::new(gpui::SharedString::from(format!(
+                                        "knowledge-artifact-{}-{}",
+                                        run_id, index
+                                    )))
+                                    .small()
+                                    .label("Add to Knowledge")
+                                    .on_click(cx.listener(move |_this, _, window, cx| {
+                                        let db = crate::AppState::global(cx).db.clone();
+                                        match Self::add_artifact_to_knowledge(
+                                            db.as_ref(),
+                                            &import_artifact,
+                                        ) {
+                                            Ok(()) => window.push_notification(
+                                                (
+                                                    NotificationType::Success,
+                                                    "Artifact added to Knowledge.",
+                                                ),
+                                                cx,
+                                            ),
+                                            Err(error) => window.push_notification(
+                                                (
+                                                    NotificationType::Error,
+                                                    gpui::SharedString::from(error),
+                                                ),
+                                                cx,
+                                            ),
+                                        }
+                                        cx.notify();
+                                    })),
+                                ),
+                        ),
+                );
+            }
+        }
+        let artifact_preview = self.render_artifact_preview(selected_artifact, db.as_ref(), cx);
+
+        let mut approval_list = v_flex().w_full().gap_1();
+        if approvals.is_empty() {
+            approval_list = approval_list.child(
+                div()
+                    .py_3()
+                    .text_sm()
+                    .text_color(theme.muted_foreground)
+                    .child("No pending approvals for this run."),
+            );
+        } else {
+            for approval in &approvals {
+                let details = Self::approval_operation_details(&approval.operation);
+                let tool_name = if details.tool_name.is_empty() {
+                    "tool".to_string()
+                } else {
+                    details.tool_name.clone()
+                };
+                let risk_label = Self::approval_risk_label(&tool_name, details.path.as_deref());
+                let approve_id = approval.id.clone();
+                let approve_run_id = approval.run_id.clone();
+                let reject_id = approval.id.clone();
+                let reject_run_id = approval.run_id.clone();
+                approval_list = approval_list.child(
+                    v_flex()
+                        .gap_2()
+                        .p_3()
+                        .rounded_md()
+                        .border_1()
+                        .border_color(theme.warning.opacity(0.45))
+                        .bg(theme.warning.opacity(0.07))
+                        .child(
+                            h_flex()
+                                .justify_between()
+                                .items_center()
+                                .gap_3()
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                                        .text_color(theme.warning)
+                                        .child("Approval required"),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .px_2()
+                                        .py_1()
+                                        .rounded_sm()
+                                        .bg(theme.warning.opacity(0.14))
+                                        .text_color(theme.warning)
+                                        .child(risk_label),
+                                ),
+                        )
+                        .child(
+                            v_flex()
+                                .gap_1()
+                                .text_xs()
+                                .text_color(theme.muted_foreground)
+                                .child(format!("Tool: {}", tool_name))
+                                .when_some(details.mode, |this, mode| {
+                                    this.child(format!("Mode: {}", mode))
+                                })
+                                .child(format!("Requested: {}", approval.created_at))
+                                .child(format!(
+                                    "Requested by {}",
+                                    approval.requested_by.as_deref().unwrap_or("unknown actor")
+                                ))
+                                .when_some(details.path, |this, path| {
+                                    this.child(format!("Path: {}", path))
+                                })
+                                .when_some(details.command, |this, command| {
+                                    this.child(format!(
+                                        "Command: {}",
+                                        Self::truncate_run_text(&command)
+                                    ))
+                                }),
+                        )
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .child(
+                                    Button::new(gpui::SharedString::from(format!(
+                                        "run-workspace-approve-{}",
+                                        approve_id
+                                    )))
+                                    .small()
+                                    .primary()
+                                    .label("Approve")
+                                    .on_click(cx.listener(move |_this, _, window, cx| {
+                                        match Self::resolve_run_approval(
+                                            &approve_id,
+                                            &approve_run_id,
+                                            true,
+                                            "Run Workspace",
+                                            cx,
+                                        ) {
+                                            Ok(()) => window.push_notification(
+                                                (
+                                                    NotificationType::Success,
+                                                    "Approval accepted and run resumed.",
+                                                ),
+                                                cx,
+                                            ),
+                                            Err(error) => window.push_notification(
+                                                (
+                                                    NotificationType::Error,
+                                                    gpui::SharedString::from(error),
+                                                ),
+                                                cx,
+                                            ),
+                                        }
+                                        cx.notify();
+                                    })),
+                                )
+                                .child(
+                                    Button::new(gpui::SharedString::from(format!(
+                                        "run-workspace-reject-{}",
+                                        reject_id
+                                    )))
+                                    .small()
+                                    .label("Reject")
+                                    .on_click(cx.listener(move |_this, _, window, cx| {
+                                        match Self::resolve_run_approval(
+                                            &reject_id,
+                                            &reject_run_id,
+                                            false,
+                                            "Run Workspace",
+                                            cx,
+                                        ) {
+                                            Ok(()) => window.push_notification(
+                                                (
+                                                    NotificationType::Success,
+                                                    "Approval rejected and run stopped.",
+                                                ),
+                                                cx,
+                                            ),
+                                            Err(error) => window.push_notification(
+                                                (
+                                                    NotificationType::Error,
+                                                    gpui::SharedString::from(error),
+                                                ),
+                                                cx,
+                                            ),
+                                        }
+                                        cx.notify();
+                                    })),
+                                ),
+                        ),
+                );
+            }
+        }
+
+        v_flex()
+            .size_full()
+            .gap_5()
+            .child(
+                h_flex()
+                    .justify_between()
+                    .items_start()
+                    .gap_4()
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .gap_2()
+                            .child(
+                                h_flex()
+                                    .gap_2()
+                                    .items_center()
+                                    .child(
+                                        div()
+                                            .text_xl()
+                                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                                            .child("Run Workspace"),
+                                    )
+                                    .child(
+                                        div()
+                                            .px_2()
+                                            .py_1()
+                                            .rounded_sm()
+                                            .bg(status_color.opacity(0.12))
+                                            .text_color(status_color)
+                                            .text_xs()
+                                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                                            .child(status_label),
+                                    ),
+                            )
+                            .child(div().text_sm().child(run.goal.clone()))
+                            .child(div().text_xs().text_color(theme.muted_foreground).child(
+                                format!(
+                                    "Run {} | Instance {} | {}",
+                                    Self::short_run_id(&run.id),
+                                    run.instance_id,
+                                    run.mode
+                                ),
+                            )),
+                    )
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .when(workflow_id.is_some(), |actions| {
+                                actions.child(
+                                    Button::new(gpui::SharedString::from(format!(
+                                        "run-workspace-iflow-{}",
+                                        run_for_workflow
+                                    )))
+                                    .small()
+                                    .label("Open iFlow")
+                                    .on_click(cx.listener(move |_this, _, _, cx| {
+                                        let db = crate::AppState::global(cx).db.clone();
+                                        let selected = crate::AppState::global(cx)
+                                            .selected_iflow_run_id
+                                            .clone();
+                                        let active_panel =
+                                            crate::AppState::global(cx).active_panel.clone();
+                                        let _ = db.set_setting(
+                                            "iflow_selected_run_id",
+                                            &run_for_workflow,
+                                        );
+                                        let selected_run_id = run_for_workflow.clone();
+                                        selected.update(cx, move |current, cx| {
+                                            *current = Some(selected_run_id);
+                                            cx.notify();
+                                        });
+                                        active_panel.update(cx, |page, cx| {
+                                            *page = "iflow_builder".to_string();
+                                            cx.notify();
+                                        });
+                                    })),
+                                )
+                            })
+                            .child(
+                                Button::new(gpui::SharedString::from(format!(
+                                    "run-workspace-dashboard-{}",
+                                    run_for_dashboard
+                                )))
+                                .small()
+                                .ghost()
+                                .label("Dashboard")
+                                .on_click(cx.listener(
+                                    move |this, _, _, cx| {
+                                        let selected = crate::AppState::global(cx)
+                                            .selected_orchestration_run_id
+                                            .clone();
+                                        selected.update(cx, |current, cx| {
+                                            *current = None;
+                                            cx.notify();
+                                        });
+                                        this.last_requested_run_id = None;
+                                        this.active_tab = "Dashboard".to_string();
+                                        cx.notify();
+                                    },
+                                )),
+                            ),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .w_full()
+                    .gap_3()
+                    .child(self.render_run_metric("Events", event_count.to_string(), cx))
+                    .child(self.render_run_metric("Tasks", task_count.to_string(), cx))
+                    .child(self.render_run_metric("Artifacts", artifact_count.to_string(), cx))
+                    .child(self.render_run_metric(
+                        "Pending approvals",
+                        approval_count.to_string(),
+                        cx,
+                    ))
+                    .child(self.render_run_metric("Tokens", token_count.to_string(), cx)),
+            )
+            .child(
+                h_flex()
+                    .items_start()
+                    .gap_6()
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .text_lg()
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .child("Timeline"),
+                            )
+                            .child(h_flex().gap_2().flex_wrap().children(
+                                event_filter_options.into_iter().map(|(label, count)| {
+                                    self.render_run_timeline_filter_button(label, count, cx)
+                                }),
+                            ))
+                            .child(timeline),
+                    )
+                    .child(
+                        v_flex()
+                            .w(px(360.))
+                            .flex_shrink_0()
+                            .gap_5()
+                            .child(
+                                v_flex()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .text_lg()
+                                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                                            .child("Artifacts"),
+                                    )
+                                    .child(h_flex().gap_2().flex_wrap().children(
+                                        artifact_filter_options.into_iter().map(
+                                            |(label, count)| {
+                                                self.render_run_artifact_kind_filter_button(
+                                                    label, count, cx,
+                                                )
+                                            },
+                                        ),
+                                    ))
+                                    .child(artifact_list)
+                                    .child(artifact_preview),
+                            )
+                            .child(
+                                v_flex()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .text_lg()
+                                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                                            .child("Approvals"),
+                                    )
+                                    .child(approval_list),
+                            ),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    fn render_run_metric(
+        &self,
+        label: &str,
+        value: String,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        let theme = cx.theme().clone();
+        v_flex()
+            .flex_1()
+            .min_w_0()
+            .gap_1()
+            .py_2()
+            .border_b_1()
+            .border_color(theme.border)
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(label.to_string()),
+            )
+            .child(
+                div()
+                    .text_lg()
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .child(value),
+            )
+    }
+
+    fn render_run_timeline_filter_button(
+        &self,
+        label: String,
+        count: usize,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let is_active = self.run_timeline_filter == label;
+        let next_filter = label.clone();
+        Button::new(gpui::SharedString::from(format!(
+            "run-timeline-filter-{}",
+            label
+        )))
+        .small()
+        .label(format!("{} ({})", label, count))
+        .when(is_active, |button| button.primary())
+        .when(!is_active, |button| button.ghost())
+        .on_click(cx.listener(move |this, _, _, cx| {
+            this.run_timeline_filter = next_filter.clone();
+            cx.notify();
+        }))
+    }
+
+    fn render_run_artifact_kind_filter_button(
+        &self,
+        label: String,
+        count: usize,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let is_active = self.run_artifact_kind_filter == label;
+        let next_filter = label.clone();
+        Button::new(gpui::SharedString::from(format!(
+            "run-artifact-kind-filter-{}",
+            label
+        )))
+        .small()
+        .label(format!("{} ({})", label, count))
+        .when(is_active, |button| button.primary())
+        .when(!is_active, |button| button.ghost())
+        .on_click(cx.listener(move |this, _, _, cx| {
+            this.run_artifact_kind_filter = next_filter.clone();
+            cx.notify();
+        }))
+    }
+
+    fn render_artifact_hub_kind_filter_button(
+        &self,
+        label: String,
+        count: usize,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let is_active = self.artifact_hub_kind_filter == label;
+        let next_filter = label.clone();
+        Button::new(gpui::SharedString::from(format!(
+            "artifact-hub-kind-filter-{}",
+            label
+        )))
+        .small()
+        .label(format!("{} ({})", label, count))
+        .when(is_active, |button| button.primary())
+        .when(!is_active, |button| button.ghost())
+        .on_click(cx.listener(move |this, _, _, cx| {
+            this.artifact_hub_kind_filter = next_filter.clone();
+            cx.notify();
+        }))
+    }
+
+    fn render_artifact_preview(
+        &self,
+        artifact: Option<&crate::core::models::ArtifactRecord>,
+        db: &dyn crate::core::traits::database::DatabasePort,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let theme = cx.theme().clone();
+        let Some(artifact) = artifact else {
+            return v_flex()
+                .gap_2()
+                .p_3()
+                .rounded_md()
+                .border_1()
+                .border_color(theme.border)
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .child("Artifact preview"),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child("Select an artifact to preview its content or metadata."),
+                )
+                .into_any_element();
+        };
+
+        let preview = Self::load_artifact_preview(db, artifact, &theme);
+        v_flex()
+            .gap_2()
+            .p_3()
+            .rounded_md()
+            .border_1()
+            .border_color(theme.border)
+            .child(
+                h_flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_3()
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child("Artifact preview"),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .px_2()
+                            .py_1()
+                            .rounded_sm()
+                            .bg(preview.status_color.opacity(0.12))
+                            .text_color(preview.status_color)
+                            .child(preview.status_label),
+                    ),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(preview.resolved_path.display().to_string()),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(preview.metadata),
+            )
+            .when_some(preview.hash_note, |this, note| {
+                this.child(div().text_xs().text_color(theme.warning).child(note))
+            })
+            .child(match preview.content {
+                Some(content) => div()
+                    .max_h(px(260.))
+                    .overflow_y_scrollbar()
+                    .p_3()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(theme.border.opacity(0.65))
+                    .bg(theme.secondary.opacity(0.35))
+                    .text_xs()
+                    .line_height(gpui::relative(1.45))
+                    .font_family("Courier New")
+                    .child(content)
+                    .into_any_element(),
+                None => div()
+                    .p_3()
+                    .rounded_md()
+                    .bg(theme.secondary.opacity(0.35))
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child("Preview is not available for this file type or size; metadata is still available.")
+                    .into_any_element(),
+            })
+            .into_any_element()
+    }
+
+    fn load_artifact_preview(
+        db: &dyn crate::core::traits::database::DatabasePort,
+        artifact: &crate::core::models::ArtifactRecord,
+        theme: &gpui_component::Theme,
+    ) -> ArtifactPreview {
+        const MAX_PREVIEW_BYTES: u64 = 256 * 1024;
+        const MAX_PREVIEW_CHARS: usize = 12_000;
+
+        let resolved_path = Self::resolve_artifact_path(db, artifact);
+        let mut preview = ArtifactPreview {
+            resolved_path: resolved_path.clone(),
+            status_label: "Missing".to_string(),
+            status_color: theme.danger,
+            metadata: format!(
+                "Kind {} | Agent {} | Hash {}",
+                artifact.artifact_kind,
+                artifact.agent_id.as_deref().unwrap_or("none"),
+                artifact.content_hash
+            ),
+            content: None,
+            hash_note: None,
+        };
+
+        let Ok(metadata) = std::fs::metadata(&resolved_path) else {
+            return preview;
+        };
+        let size = metadata.len();
+        preview.metadata = format!(
+            "Kind {} | {} bytes | Agent {} | Hash {}",
+            artifact.artifact_kind,
+            size,
+            artifact.agent_id.as_deref().unwrap_or("none"),
+            artifact.content_hash
+        );
+
+        match Self::artifact_hash_matches(&resolved_path, &artifact.content_hash) {
+            Ok(Some(false)) => {
+                preview.status_label = "Hash changed".to_string();
+                preview.status_color = theme.warning;
+                preview.hash_note =
+                    Some("File exists, but current content no longer matches the persisted artifact hash.".to_string());
+            }
+            Ok(_) => {
+                preview.status_label = "Available".to_string();
+                preview.status_color = theme.success;
+            }
+            Err(error) => {
+                preview.status_label = "Unreadable".to_string();
+                preview.status_color = theme.warning;
+                preview.hash_note = Some(error);
+            }
+        }
+
+        if size > MAX_PREVIEW_BYTES || !Self::is_text_preview_candidate(&resolved_path) {
+            return preview;
+        }
+
+        match std::fs::read_to_string(&resolved_path) {
+            Ok(mut content) => {
+                if content.chars().count() > MAX_PREVIEW_CHARS {
+                    content = content.chars().take(MAX_PREVIEW_CHARS).collect::<String>();
+                    content.push_str("\n\n[Preview truncated]");
+                }
+                preview.content = Some(content);
+            }
+            Err(error) => {
+                preview.hash_note = Some(format!("Preview read failed: {}", error));
+            }
+        }
+
+        preview
+    }
+
+    fn artifact_file_state(
+        db: &dyn crate::core::traits::database::DatabasePort,
+        artifact: &crate::core::models::ArtifactRecord,
+        theme: &gpui_component::Theme,
+    ) -> (String, gpui::Hsla) {
+        let path = Self::resolve_artifact_path(db, artifact);
+        if !path.exists() {
+            return ("Missing".to_string(), theme.danger);
+        }
+        match Self::artifact_hash_matches(&path, &artifact.content_hash) {
+            Ok(Some(false)) => ("Hash changed".to_string(), theme.warning),
+            Ok(_) => ("Available".to_string(), theme.success),
+            Err(_) => ("Unreadable".to_string(), theme.warning),
+        }
+    }
+
+    fn artifact_kind_filter_options(
+        artifacts: &[crate::core::models::ArtifactRecord],
+    ) -> Vec<(String, usize)> {
+        let mut counts = std::collections::BTreeMap::<String, usize>::new();
+        for artifact in artifacts {
+            *counts.entry(artifact.artifact_kind.clone()).or_default() += 1;
+        }
+        let mut options = vec![("All".to_string(), artifacts.len())];
+        options.extend(counts);
+        options
+    }
+
+    fn matches_artifact_kind_filter(artifact_kind: &str, filter: &str) -> bool {
+        filter == "All" || artifact_kind == filter
+    }
+
+    fn resolve_artifact_path(
+        db: &dyn crate::core::traits::database::DatabasePort,
+        artifact: &crate::core::models::ArtifactRecord,
+    ) -> PathBuf {
+        let requested = Path::new(&artifact.path);
+        if requested.is_absolute() {
+            return requested.to_path_buf();
+        }
+        db.get_setting(&format!("workspace_{}", artifact.instance_id))
+            .ok()
+            .flatten()
+            .map(PathBuf::from)
+            .filter(|workspace| !workspace.as_os_str().is_empty())
+            .map(|workspace| workspace.join(requested))
+            .unwrap_or_else(|| requested.to_path_buf())
+    }
+
+    fn reveal_artifact_path(
+        db: &dyn crate::core::traits::database::DatabasePort,
+        artifact: &crate::core::models::ArtifactRecord,
+    ) -> Result<(), String> {
+        let path = Self::resolve_artifact_path(db, artifact);
+        if !path.exists() {
+            return Err(format!("Artifact path does not exist: {}", path.display()));
+        }
+        Self::reveal_path(&path)
+    }
+
+    fn reveal_path(path: &Path) -> Result<(), String> {
+        #[cfg(target_os = "windows")]
+        {
+            let arg = if path.is_dir() {
+                path.display().to_string()
+            } else {
+                format!("/select,{}", path.display())
+            };
+            std::process::Command::new("explorer")
+                .arg(arg)
+                .spawn()
+                .map(|_| ())
+                .map_err(|error| format!("Unable to open file explorer: {}", error))
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            std::process::Command::new("open")
+                .arg("-R")
+                .arg(path)
+                .spawn()
+                .map(|_| ())
+                .map_err(|error| format!("Unable to reveal artifact: {}", error))
+        }
+
+        #[cfg(all(unix, not(target_os = "macos")))]
+        {
+            let target = if path.is_dir() {
+                path
+            } else {
+                path.parent().unwrap_or(path)
+            };
+            std::process::Command::new("xdg-open")
+                .arg(target)
+                .spawn()
+                .map(|_| ())
+                .map_err(|error| format!("Unable to open file manager: {}", error))
+        }
+    }
+
+    fn is_text_preview_candidate(path: &Path) -> bool {
+        matches!(
+            path.extension()
+                .and_then(|ext| ext.to_str())
+                .map(|ext| ext.to_ascii_lowercase())
+                .as_deref(),
+            Some(
+                "md" | "markdown"
+                    | "txt"
+                    | "json"
+                    | "jsonl"
+                    | "yaml"
+                    | "yml"
+                    | "toml"
+                    | "rs"
+                    | "ts"
+                    | "tsx"
+                    | "js"
+                    | "jsx"
+                    | "py"
+                    | "html"
+                    | "css"
+                    | "csv"
+                    | "xml"
+                    | "log"
+            )
+        )
+    }
+
+    fn artifact_hash_matches(path: &Path, expected_hash: &str) -> Result<Option<bool>, String> {
+        if expected_hash.len() != 64 || !expected_hash.chars().all(|ch| ch.is_ascii_hexdigit()) {
+            return Ok(None);
+        }
+        let bytes = std::fs::read(path)
+            .map_err(|error| format!("Unable to read artifact hash: {}", error))?;
+        let actual = format!("{:x}", Sha256::digest(&bytes));
+        Ok(Some(actual.eq_ignore_ascii_case(expected_hash)))
+    }
+
+    fn add_artifact_to_knowledge(
+        db: &dyn crate::core::traits::database::DatabasePort,
+        artifact: &crate::core::models::ArtifactRecord,
+    ) -> Result<(), String> {
+        let resolved_path = Self::resolve_artifact_path(db, artifact);
+        let source_uri = crate::knowledge::core::KnowledgeItem::normalize_file_source(
+            &resolved_path.display().to_string(),
+        );
+        let created_at = chrono::DateTime::parse_from_rfc3339(&artifact.created_at)
+            .map(|value| value.with_timezone(&chrono::Utc))
+            .unwrap_or_else(|_| chrono::Utc::now());
+        let title = resolved_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("Generated artifact")
+            .to_string();
+        let content = Self::artifact_knowledge_content(&resolved_path, artifact);
+        let item = crate::knowledge::core::KnowledgeItem {
+            id: uuid::Uuid::new_v4(),
+            record_kind: crate::knowledge::core::KnowledgeRecordKind::Artifact,
+            title,
+            content_hash: Some(crate::knowledge::core::KnowledgeItem::content_hash(
+                &content,
+            )),
+            content,
+            tags: vec![
+                crate::knowledge::core::Tag("artifact".to_string()),
+                crate::knowledge::core::Tag(artifact.artifact_kind.clone()),
+            ],
+            created_at,
+            updated_at: chrono::Utc::now(),
+            retention_policy: crate::knowledge::core::RetentionPolicy::KeepForever,
+            vault_path: Some(resolved_path.display().to_string()),
+            source_kind: "generated_artifact".to_string(),
+            source_uri_normalized: Some(source_uri),
+            origin_run_id: artifact.run_id.clone(),
+            origin_session_id: artifact.session_id.clone(),
+            origin_instance_id: Some(artifact.instance_id.clone()),
+            origin_agent_id: artifact.agent_id.clone(),
+        };
+        db.upsert_knowledge_item(&item)
+            .map_err(|error| error.to_string())
+    }
+
+    fn artifact_knowledge_content(
+        path: &Path,
+        artifact: &crate::core::models::ArtifactRecord,
+    ) -> String {
+        let metadata = format!(
+            "# Generated Artifact\n\nPath: {}\nKind: {}\nContent hash: {}\nRun: {}\nAgent: {}\n\n",
+            path.display(),
+            artifact.artifact_kind,
+            artifact.content_hash,
+            artifact.run_id.as_deref().unwrap_or("none"),
+            artifact.agent_id.as_deref().unwrap_or("none")
+        );
+        if Self::is_text_preview_candidate(path) {
+            if let Ok(content) = std::fs::read_to_string(path) {
+                return format!("{}## Content\n\n{}", metadata, content);
+            }
+        }
+        metadata
+    }
+
+    fn approval_operation_details(operation: &str) -> ApprovalOperationDetails {
+        let mut details = ApprovalOperationDetails::default();
+        details.mode = operation
+            .rsplit_once(":mode=")
+            .map(|(_, mode)| mode.trim().to_string())
+            .filter(|mode| !mode.is_empty());
+
+        let Some(rest) = operation.strip_prefix("tool:") else {
+            return details;
+        };
+        let Some((tool_name, tail)) = rest.split_once(':') else {
+            details.tool_name = rest.trim().to_string();
+            return details;
+        };
+        details.tool_name = tool_name.trim().to_string();
+
+        let summary = if let Some((summary, _)) = tail.split_once(":payload=") {
+            summary
+        } else if tail.starts_with("payload=") {
+            ""
+        } else {
+            tail.split(":mode=").next().unwrap_or(tail)
+        };
+
+        for part in summary
+            .split(';')
+            .map(str::trim)
+            .filter(|part| !part.is_empty())
+        {
+            if let Some(path) = part.strip_prefix("path=") {
+                details.path = Some(path.trim().to_string()).filter(|path| !path.is_empty());
+            } else if let Some(command) = part.strip_prefix("command=") {
+                details.command =
+                    Some(command.trim().to_string()).filter(|command| !command.is_empty());
+            }
+        }
+
+        details
+    }
+
+    fn approval_risk_label(tool_name: &str, path: Option<&str>) -> String {
+        match crate::application::orchestration::tool_gateway::ToolExecutionGateway::risk_for(
+            tool_name, false,
+        ) {
+            crate::application::orchestration::tool_gateway::ToolRisk::ReadOnly
+                if path.is_some() =>
+            {
+                "external path".to_string()
+            }
+            crate::application::orchestration::tool_gateway::ToolRisk::ReadOnly => {
+                "read-only".to_string()
+            }
+            crate::application::orchestration::tool_gateway::ToolRisk::ControlledMutation => {
+                "controlled mutation".to_string()
+            }
+            crate::application::orchestration::tool_gateway::ToolRisk::Sensitive => {
+                "sensitive".to_string()
+            }
+        }
+    }
+
+    fn resolve_run_approval(
+        approval_id: &str,
+        run_id: &str,
+        approved: bool,
+        source: &str,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        let state = crate::AppState::global(cx);
+        let db = state.db.clone();
+        let team_bus = state.team_bus.clone();
+        let runtime = state.tokio_runtime.clone();
+        let actor_id = state.current_actor_id.clone();
+        let (decision, task_status, run_status, event_type, audit_action, audit_details) =
+            if approved {
+                (
+                    "approved",
+                    "pending",
+                    "running",
+                    "tool_approval_approved",
+                    "tool_approval_approved",
+                    format!("Approved from {}", source),
+                )
+            } else {
+                (
+                    "rejected",
+                    "failed",
+                    "failed",
+                    "tool_approval_rejected",
+                    "tool_approval_rejected",
+                    format!("Rejected from {}", source),
+                )
+            };
+
+        db.resolve_approval_request(approval_id, decision, Some(&actor_id), Some(&audit_details))
+            .map_err(|error| error.to_string())?;
+        db.resolve_waiting_tasks_for_run(run_id, task_status)
+            .map_err(|error| error.to_string())?;
+        db.update_orchestration_run_status(run_id, run_status, None)
+            .map_err(|error| error.to_string())?;
+        db.insert_run_event(&crate::core::models::RunEventRecord {
+            id: uuid::Uuid::new_v4().to_string(),
+            run_id: run_id.to_string(),
+            event_type: event_type.to_string(),
+            actor_type: "user".to_string(),
+            actor_id: Some(actor_id.clone()),
+            task_id: None,
+            payload: Some(audit_details.clone()),
+            created_at: chrono::Utc::now().to_rfc3339(),
+        })
+        .map_err(|error| error.to_string())?;
+        db.insert_audit_log(&crate::infrastructure::security::audit::AuditEvent {
+            timestamp: chrono::Utc::now(),
+            action: audit_action.to_string(),
+            user_id: Some(actor_id),
+            resource: approval_id.to_string(),
+            details: audit_details,
+        })
+        .map_err(|error| error.to_string())?;
+
+        if approved {
+            crate::application::iflow_engine::automation::IFlowAutomation::resume_approved_run(
+                db, team_bus, runtime, run_id,
+            )
+            .map_err(|error| error.to_string())?;
+        } else {
+            crate::application::iflow_engine::automation::IFlowAutomation::reject_waiting_run(
+                db, team_bus, run_id,
+            )
+            .map_err(|error| error.to_string())?;
+        }
+
+        Ok(())
+    }
+
+    fn short_run_id(run_id: &str) -> String {
+        run_id.chars().take(8).collect()
+    }
+
+    fn truncate_run_text(value: &str) -> String {
+        const MAX_CHARS: usize = 240;
+        let mut text = value.trim().replace('\n', " ");
+        if text.chars().count() > MAX_CHARS {
+            text = text.chars().take(MAX_CHARS).collect::<String>();
+            text.push_str("...");
+        }
+        text
+    }
+
+    fn run_status_presentation(
+        status: &str,
+        theme: &gpui_component::Theme,
+    ) -> (&'static str, gpui::Hsla) {
+        match status {
+            "completed" => ("Completed", theme.success),
+            "failed" => ("Failed", theme.danger),
+            "cancelled" => ("Cancelled", theme.muted_foreground),
+            "waiting_approval" => ("Waiting approval", theme.warning),
+            "running" | "dispatched" | "pending" => ("In progress", theme.primary),
+            _ => ("Unknown", theme.muted_foreground),
+        }
+    }
+
+    fn run_event_presentation(
+        event_type: &str,
+        theme: &gpui_component::Theme,
+    ) -> (&'static str, gpui::Hsla) {
+        if event_type.contains("failed") || event_type.contains("denied") {
+            ("Failed or denied", theme.danger)
+        } else if event_type.contains("approval") || event_type.contains("waiting") {
+            ("Waiting for approval", theme.warning)
+        } else if event_type.contains("completed") || event_type.contains("succeeded") {
+            ("Completed", theme.success)
+        } else if event_type.contains("artifact") {
+            ("Artifact created", theme.primary)
+        } else if event_type.contains("created") {
+            ("Created", theme.primary)
+        } else if event_type.contains("started") || event_type.contains("dispatched") {
+            ("In progress", theme.primary)
+        } else {
+            ("Run event", theme.muted_foreground)
+        }
+    }
+
+    fn run_event_filter_options(
+        events: &[crate::core::models::RunEventRecord],
+    ) -> Vec<(String, usize)> {
+        let mut counts = std::collections::BTreeMap::<String, usize>::new();
+        for event in events {
+            *counts
+                .entry(Self::run_event_filter_label(&event.event_type).to_string())
+                .or_default() += 1;
+        }
+        let mut options = vec![("All".to_string(), events.len())];
+        options.extend(counts);
+        options
+    }
+
+    fn matches_run_event_filter(event_type: &str, filter: &str) -> bool {
+        filter == "All" || Self::run_event_filter_label(event_type) == filter
+    }
+
+    fn run_event_filter_label(event_type: &str) -> &'static str {
+        if event_type.contains("failed") || event_type.contains("denied") {
+            "Failures"
+        } else if event_type.contains("approval") || event_type.contains("waiting") {
+            "Approvals"
+        } else if event_type.contains("artifact") {
+            "Artifacts"
+        } else if event_type.contains("completed") || event_type.contains("succeeded") {
+            "Completed"
+        } else if event_type.contains("created") {
+            "Created"
+        } else if event_type.contains("started")
+            || event_type.contains("dispatched")
+            || event_type.contains("running")
+        {
+            "Progress"
+        } else {
+            "Other"
+        }
     }
 
     fn render_tracking(&self, cx: &Context<Self>) -> impl IntoElement {
@@ -2258,7 +3758,7 @@ impl OrchestrationPanel {
             .child(snapshot_list)
     }
 
-    fn render_artifacts(&self, cx: &Context<Self>) -> impl IntoElement {
+    fn render_artifacts(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let db = crate::AppState::global(cx).db.clone();
         let mut artifacts = Vec::new();
@@ -2268,6 +3768,14 @@ impl OrchestrationPanel {
             }
         }
         artifacts.sort_by(|left, right| right.created_at.cmp(&left.created_at));
+        let artifact_filter_options = Self::artifact_kind_filter_options(&artifacts);
+        let artifact_kind_filter = self.artifact_hub_kind_filter.clone();
+        let filtered_artifacts: Vec<_> = artifacts
+            .iter()
+            .filter(|artifact| {
+                Self::matches_artifact_kind_filter(&artifact.artifact_kind, &artifact_kind_filter)
+            })
+            .collect();
 
         let mut list = v_flex()
             .flex_1()
@@ -2282,48 +3790,208 @@ impl OrchestrationPanel {
                     .text_color(theme.muted_foreground)
                     .child("No persisted run artifacts."),
             );
+        } else if filtered_artifacts.is_empty() {
+            list = list.child(
+                div()
+                    .text_color(theme.muted_foreground)
+                    .child("No artifacts match the selected kind."),
+            );
         } else {
-            for artifact in artifacts.into_iter().take(100) {
+            for artifact in filtered_artifacts.into_iter().take(100) {
                 let run_label = artifact
                     .run_id
                     .as_deref()
                     .map(|id| id.chars().take(8).collect::<String>())
                     .unwrap_or_else(|| "unbound".to_string());
                 let hash_label = artifact.content_hash.chars().take(12).collect::<String>();
-                list =
-                    list.child(
-                        v_flex()
-                            .gap_1()
-                            .p_3()
-                            .rounded_md()
-                            .border_1()
-                            .border_color(theme.border)
-                            .child(
-                                h_flex()
-                                    .justify_between()
-                                    .child(
-                                        div()
-                                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                                            .child(artifact.artifact_kind),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .text_color(theme.muted_foreground)
-                                            .child(artifact.created_at),
-                                    ),
-                            )
-                            .child(div().text_sm().child(artifact.path))
-                            .child(div().text_sm().text_color(theme.muted_foreground).child(
-                                format!(
+                let kind = artifact.artifact_kind.clone();
+                let path = artifact.path.clone();
+                let created_at = artifact.created_at.clone();
+                let path_for_copy = path.clone();
+                let hash_for_copy = artifact.content_hash.clone();
+                let import_artifact: crate::core::models::ArtifactRecord = (*artifact).clone();
+                let reveal_artifact: crate::core::models::ArtifactRecord = (*artifact).clone();
+                let view_run_id = artifact.run_id.clone();
+                let (file_label, file_color) =
+                    Self::artifact_file_state(db.as_ref(), &artifact, &theme);
+                list = list.child(
+                    v_flex()
+                        .gap_2()
+                        .p_3()
+                        .rounded_md()
+                        .border_1()
+                        .border_color(theme.border)
+                        .child(
+                            h_flex()
+                                .justify_between()
+                                .child(
+                                    h_flex()
+                                        .gap_2()
+                                        .items_center()
+                                        .child(
+                                            div()
+                                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                .child(kind),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .px_2()
+                                                .py_1()
+                                                .rounded_sm()
+                                                .bg(file_color.opacity(0.12))
+                                                .text_color(file_color)
+                                                .child(file_label),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(theme.muted_foreground)
+                                        .child(created_at),
+                                ),
+                        )
+                        .child(div().text_sm().child(path))
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(theme.muted_foreground)
+                                .child(format!(
                                     "Run {} | Agent {} | Call {} | Hash {}",
                                     run_label,
                                     artifact.agent_id.as_deref().unwrap_or("none"),
                                     artifact.invocation_id.as_deref().unwrap_or("none"),
                                     hash_label
+                                )),
+                        )
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .when_some(view_run_id, |actions, run_id| {
+                                    let open_run_id = run_id.clone();
+                                    actions.child(
+                                        Button::new(gpui::SharedString::from(format!(
+                                            "artifact-hub-open-run-{}",
+                                            open_run_id
+                                        )))
+                                        .small()
+                                        .ghost()
+                                        .label("View run")
+                                        .on_click(
+                                            cx.listener(move |_this, _, _, cx| {
+                                                let state = crate::AppState::global(cx);
+                                                let _ = state.db.set_setting(
+                                                    "orchestration_selected_run_id",
+                                                    &open_run_id,
+                                                );
+                                                let selected =
+                                                    state.selected_orchestration_run_id.clone();
+                                                let active_panel = state.active_panel.clone();
+                                                let selected_run_id = open_run_id.clone();
+                                                selected.update(cx, move |current, cx| {
+                                                    *current = Some(selected_run_id);
+                                                    cx.notify();
+                                                });
+                                                active_panel.update(cx, |page, cx| {
+                                                    *page = "orchestration".to_string();
+                                                    cx.notify();
+                                                });
+                                            }),
+                                        ),
+                                    )
+                                })
+                                .child(
+                                    Button::new(gpui::SharedString::from(format!(
+                                        "artifact-hub-reveal-{}",
+                                        artifact.id
+                                    )))
+                                    .small()
+                                    .ghost()
+                                    .label("Reveal")
+                                    .on_click(cx.listener(move |_this, _, window, cx| {
+                                        let db = crate::AppState::global(cx).db.clone();
+                                        match Self::reveal_artifact_path(
+                                            db.as_ref(),
+                                            &reveal_artifact,
+                                        ) {
+                                            Ok(()) => window.push_notification(
+                                                (
+                                                    NotificationType::Success,
+                                                    "Artifact opened in file explorer.",
+                                                ),
+                                                cx,
+                                            ),
+                                            Err(error) => window.push_notification(
+                                                (
+                                                    NotificationType::Error,
+                                                    gpui::SharedString::from(error),
+                                                ),
+                                                cx,
+                                            ),
+                                        }
+                                    })),
+                                )
+                                .child(
+                                    Button::new(gpui::SharedString::from(format!(
+                                        "artifact-hub-copy-path-{}",
+                                        artifact.id
+                                    )))
+                                    .small()
+                                    .ghost()
+                                    .label("Copy path")
+                                    .on_click(cx.listener(move |_this, _, _, cx| {
+                                        cx.write_to_clipboard(ClipboardItem::new_string(
+                                            path_for_copy.clone(),
+                                        ));
+                                    })),
+                                )
+                                .child(
+                                    Button::new(gpui::SharedString::from(format!(
+                                        "artifact-hub-copy-hash-{}",
+                                        artifact.id
+                                    )))
+                                    .small()
+                                    .ghost()
+                                    .label("Copy hash")
+                                    .on_click(cx.listener(move |_this, _, _, cx| {
+                                        cx.write_to_clipboard(ClipboardItem::new_string(
+                                            hash_for_copy.clone(),
+                                        ));
+                                    })),
+                                )
+                                .child(
+                                    Button::new(gpui::SharedString::from(format!(
+                                        "artifact-hub-knowledge-{}",
+                                        artifact.id
+                                    )))
+                                    .small()
+                                    .label("Add to Knowledge")
+                                    .on_click(cx.listener(move |_this, _, window, cx| {
+                                        let db = crate::AppState::global(cx).db.clone();
+                                        match Self::add_artifact_to_knowledge(
+                                            db.as_ref(),
+                                            &import_artifact,
+                                        ) {
+                                            Ok(()) => window.push_notification(
+                                                (
+                                                    NotificationType::Success,
+                                                    "Artifact added to Knowledge.",
+                                                ),
+                                                cx,
+                                            ),
+                                            Err(error) => window.push_notification(
+                                                (
+                                                    NotificationType::Error,
+                                                    gpui::SharedString::from(error),
+                                                ),
+                                                cx,
+                                            ),
+                                        }
+                                        cx.notify();
+                                    })),
                                 ),
-                            )),
-                    );
+                        ),
+                );
             }
         }
 
@@ -2335,6 +4003,14 @@ impl OrchestrationPanel {
                     .text_lg()
                     .font_weight(gpui::FontWeight::SEMIBOLD)
                     .child("Run Artifacts"),
+            )
+            .child(
+                h_flex()
+                    .gap_2()
+                    .flex_wrap()
+                    .children(artifact_filter_options.into_iter().map(|(label, count)| {
+                        self.render_artifact_hub_kind_filter_button(label, count, cx)
+                    })),
             )
             .child(list)
     }

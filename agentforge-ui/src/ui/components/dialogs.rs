@@ -38,23 +38,24 @@ pub fn open_new_team_dialog<V: 'static>(
             .w(px(520.))
             .child(
                 v_form()
+                    .w_full()
                     .gap(px(12.))
                     .py(px(8.))
                     .child(
                         field()
                             .label("Name")
                             .required(true)
-                            .child(Input::new(&name_input)),
+                            .child(Input::new(&name_input).w_full()),
                     )
                     .child(
                         field()
                             .label("Description")
-                            .child(Input::new(&description_input)),
+                            .child(Input::new(&description_input).w_full()),
                     )
                     .child(
                         field()
                             .label("Objectives")
-                            .child(Input::new(&objectives_input)),
+                            .child(Input::new(&objectives_input).w_full()),
                     ),
             )
             .child(

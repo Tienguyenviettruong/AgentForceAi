@@ -1,9 +1,10 @@
+use gpui::prelude::FluentBuilder;
 use gpui::{
-    canvas, div, fill, point, px, quad, App, BorderStyle, Bounds, Context, Edges, Hsla,
-    InteractiveElement, IntoElement, MouseButton, ParentElement, Pixels, Point, SharedString,
-    Styled, Window,
+    canvas, div, fill, point, px, quad, App, BorderStyle, Bounds, ContentMask, Context, Edges,
+    Hsla, InteractiveElement, IntoElement, MouseButton, ParentElement, Pixels, Point, SharedString,
+    StatefulInteractiveElement, Styled, Window,
 };
-use gpui_component::button::Button;
+use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::input::Input;
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::{h_flex, v_flex, ActiveTheme as _, IconName, Sizable};
@@ -13,6 +14,7 @@ use std::time::Instant;
 
 const MAP_COLS: usize = 32;
 const MAP_ROWS: usize = 16;
+const OFFICE_CANVAS_COVER: bool = true;
 const STREAM_DISPLAY_MARKERS: [&str; 6] = [
     "<|channel>thought<channel|>",
     "<|channel>final<channel|>",
@@ -229,9 +231,37 @@ impl OfficeState {
         // Smooth movement
         for agent in &mut self.agents {
             agent.ready_for_assignment = true;
-            agent.x += (agent.tx - agent.x) * 0.1;
-            agent.y += (agent.ty - agent.y) * 0.1;
+            let dx = agent.tx - agent.x;
+            let dy = agent.ty - agent.y;
+            agent.x = if dx.abs() <= 0.01 {
+                agent.tx
+            } else {
+                agent.x + dx * 0.1
+            };
+            agent.y = if dy.abs() <= 0.01 {
+                agent.ty
+            } else {
+                agent.y + dy * 0.1
+            };
         }
+    }
+
+    fn has_active_motion(&self) -> bool {
+        self.dragged_agent_idx.is_some()
+            || self
+                .agents
+                .iter()
+                .any(|agent| (agent.x - agent.tx).abs() > 0.01 || (agent.y - agent.ty).abs() > 0.01)
+    }
+
+    fn has_live_messages(&self) -> bool {
+        self.agents
+            .iter()
+            .any(|agent| agent.message_expires.is_some())
+    }
+
+    fn needs_animation_tick(&self) -> bool {
+        self.has_active_motion() || self.has_live_messages()
     }
 }
 
@@ -240,10 +270,15 @@ impl OfficeState {
 struct OfficePalette {
     bg: Hsla,
     wall_front: Hsla,
+    wall_shadow: Hsla,
+    wall_highlight: Hsla,
     floor_dev: Hsla,
     floor_lounge: Hsla,
     floor_manager: Hsla,
     floor_kitchen: Hsla,
+    floor_grid: Hsla,
+    floor_checker_light: Hsla,
+    floor_checker_dark: Hsla,
     desk_top: Hsla,
     desk_base: Hsla,
     desk_edge: Hsla,
@@ -272,12 +307,17 @@ impl OfficePalette {
         let is_dark = theme.background.l < 0.5;
         if is_dark {
             Self {
-                bg: darken(theme.background, 0.08),
-                wall_front: Hsla::from(gpui::rgba(0x4c1d95ff)),
-                floor_dev: Hsla::from(gpui::rgba(0x20283aff)),
-                floor_lounge: Hsla::from(gpui::rgba(0x1f3136ff)),
-                floor_manager: Hsla::from(gpui::rgba(0x2a253cff)),
-                floor_kitchen: Hsla::from(gpui::rgba(0x302c34ff)),
+                bg: Hsla::from(gpui::rgba(0x05080fff)),
+                wall_front: Hsla::from(gpui::rgba(0x142334ff)),
+                wall_shadow: Hsla::from(gpui::rgba(0x050b12ff)),
+                wall_highlight: Hsla::from(gpui::rgba(0x2f4a5fff)),
+                floor_dev: Hsla::from(gpui::rgba(0x3d6385ff)),
+                floor_lounge: Hsla::from(gpui::rgba(0x78451fff)),
+                floor_manager: Hsla::from(gpui::rgba(0x3a607fff)),
+                floor_kitchen: Hsla::from(gpui::rgba(0x252d37ff)),
+                floor_grid: Hsla::from(gpui::rgba(0x17324aff)),
+                floor_checker_light: Hsla::from(gpui::rgba(0xd5dce2ff)),
+                floor_checker_dark: Hsla::from(gpui::rgba(0x171d25ff)),
                 desk_top: Hsla::from(gpui::rgba(0x5c3d2aff)),
                 desk_base: Hsla::from(gpui::rgba(0x3d2b1fff)),
                 desk_edge: Hsla::from(gpui::rgba(0x7a5238ff)),
@@ -307,11 +347,16 @@ impl OfficePalette {
             // Light theme: brighter, softer tones
             Self {
                 bg: darken(theme.background, 0.02),
-                wall_front: Hsla::from(gpui::rgba(0xd8b4feff)),
-                floor_dev: Hsla::from(gpui::rgba(0xe8f0ffff)),
-                floor_lounge: Hsla::from(gpui::rgba(0xe3f4f1ff)),
-                floor_manager: Hsla::from(gpui::rgba(0xefe8ffff)),
-                floor_kitchen: Hsla::from(gpui::rgba(0xf4efe6ff)),
+                wall_front: Hsla::from(gpui::rgba(0x6f8799ff)),
+                wall_shadow: Hsla::from(gpui::rgba(0x405768ff)),
+                wall_highlight: Hsla::from(gpui::rgba(0x9fb7c8ff)),
+                floor_dev: Hsla::from(gpui::rgba(0x9bbbd3ff)),
+                floor_lounge: Hsla::from(gpui::rgba(0xb77a46ff)),
+                floor_manager: Hsla::from(gpui::rgba(0x93b4ccff)),
+                floor_kitchen: Hsla::from(gpui::rgba(0x8fa7b8ff)),
+                floor_grid: Hsla::from(gpui::rgba(0x5f7e95ff)),
+                floor_checker_light: Hsla::from(gpui::rgba(0xf2f4f6ff)),
+                floor_checker_dark: Hsla::from(gpui::rgba(0x303844ff)),
                 desk_top: Hsla::from(gpui::rgba(0xc9a882ff)),
                 desk_base: Hsla::from(gpui::rgba(0xb89570ff)),
                 desk_edge: Hsla::from(gpui::rgba(0xd4b896ff)),
@@ -411,219 +456,221 @@ enum PropKind {
     Frame,
 }
 
-fn generate_props() -> Vec<Prop> {
-    vec![
-        Prop {
-            kind: PropKind::Bookshelf,
-            x: 4.0,
-            y: 2.0,
-            w: 3.0,
-            h: 1.0,
-        },
-        Prop {
-            kind: PropKind::Bookshelf,
-            x: 8.0,
-            y: 2.0,
-            w: 3.0,
-            h: 1.0,
-        },
-        Prop {
-            kind: PropKind::Plant,
-            x: 2.0,
-            y: 2.0,
-            w: 1.0,
-            h: 1.0,
-        },
-        Prop {
-            kind: PropKind::Plant,
-            x: 11.0,
-            y: 2.0,
-            w: 1.0,
-            h: 1.0,
-        },
-        Prop {
-            kind: PropKind::Plant,
-            x: 2.0,
-            y: 13.0,
-            w: 1.0,
-            h: 1.0,
-        },
-        Prop {
-            kind: PropKind::Plant,
-            x: 11.0,
-            y: 13.0,
-            w: 1.0,
-            h: 1.0,
-        },
-        Prop {
-            kind: PropKind::Desk,
-            x: 3.0,
-            y: 6.0,
-            w: 3.0,
-            h: 1.5,
-        },
-        Prop {
-            kind: PropKind::Pc,
-            x: 3.5,
-            y: 5.5,
-            w: 1.0,
-            h: 1.0,
-        },
-        Prop {
-            kind: PropKind::Pc,
-            x: 5.0,
-            y: 5.5,
-            w: 1.0,
-            h: 1.0,
-        },
-        Prop {
-            kind: PropKind::Desk,
-            x: 3.0,
-            y: 7.5,
-            w: 3.0,
-            h: 1.5,
-        },
-        Prop {
-            kind: PropKind::Pc,
-            x: 3.5,
-            y: 7.5,
-            w: 1.0,
-            h: 1.0,
-        },
-        Prop {
-            kind: PropKind::Pc,
-            x: 5.0,
-            y: 7.5,
-            w: 1.0,
-            h: 1.0,
-        },
-        Prop {
-            kind: PropKind::Desk,
-            x: 8.0,
-            y: 6.0,
-            w: 3.0,
-            h: 1.5,
-        },
-        Prop {
-            kind: PropKind::Pc,
-            x: 8.5,
-            y: 5.5,
-            w: 1.0,
-            h: 1.0,
-        },
-        Prop {
-            kind: PropKind::Pc,
-            x: 10.0,
-            y: 5.5,
-            w: 1.0,
-            h: 1.0,
-        },
-        Prop {
-            kind: PropKind::Desk,
-            x: 8.0,
-            y: 7.5,
-            w: 3.0,
-            h: 1.5,
-        },
-        Prop {
-            kind: PropKind::Pc,
-            x: 8.5,
-            y: 7.5,
-            w: 1.0,
-            h: 1.0,
-        },
-        Prop {
-            kind: PropKind::Pc,
-            x: 10.0,
-            y: 7.5,
-            w: 1.0,
-            h: 1.0,
-        },
-        Prop {
-            kind: PropKind::Plant,
-            x: 13.0,
-            y: 2.0,
-            w: 1.0,
-            h: 1.0,
-        },
-        Prop {
-            kind: PropKind::Plant,
-            x: 21.0,
-            y: 2.0,
-            w: 1.0,
-            h: 1.0,
-        },
-        Prop {
-            kind: PropKind::Frame,
-            x: 15.0,
-            y: 1.5,
-            w: 1.0,
-            h: 1.0,
-        },
-        Prop {
-            kind: PropKind::Frame,
-            x: 19.0,
-            y: 1.5,
-            w: 1.0,
-            h: 1.0,
-        },
-        Prop {
-            kind: PropKind::Sofa,
-            x: 15.0,
-            y: 6.0,
-            w: 1.5,
-            h: 3.0,
-        },
-        Prop {
-            kind: PropKind::Sofa,
-            x: 19.5,
-            y: 6.0,
-            w: 1.5,
-            h: 3.0,
-        },
-        Prop {
-            kind: PropKind::Table,
-            x: 16.5,
-            y: 6.5,
-            w: 3.0,
-            h: 2.0,
-        },
-        Prop {
-            kind: PropKind::Bookshelf,
-            x: 25.0,
-            y: 2.0,
-            w: 3.0,
-            h: 1.0,
-        },
-        Prop {
-            kind: PropKind::Plant,
-            x: 23.0,
-            y: 13.0,
-            w: 1.0,
-            h: 1.0,
-        },
-        Prop {
-            kind: PropKind::Plant,
-            x: 29.0,
-            y: 13.0,
-            w: 1.0,
-            h: 1.0,
-        },
-        Prop {
-            kind: PropKind::Desk,
-            x: 25.0,
-            y: 7.0,
-            w: 3.0,
-            h: 1.5,
-        },
-        Prop {
-            kind: PropKind::Pc,
-            x: 26.0,
-            y: 6.5,
-            w: 1.0,
-            h: 1.0,
-        },
-    ]
+const OFFICE_PROPS: &[Prop] = &[
+    Prop {
+        kind: PropKind::Bookshelf,
+        x: 4.0,
+        y: 2.0,
+        w: 3.0,
+        h: 1.0,
+    },
+    Prop {
+        kind: PropKind::Bookshelf,
+        x: 8.0,
+        y: 2.0,
+        w: 3.0,
+        h: 1.0,
+    },
+    Prop {
+        kind: PropKind::Plant,
+        x: 2.0,
+        y: 2.0,
+        w: 1.0,
+        h: 1.0,
+    },
+    Prop {
+        kind: PropKind::Plant,
+        x: 11.0,
+        y: 2.0,
+        w: 1.0,
+        h: 1.0,
+    },
+    Prop {
+        kind: PropKind::Plant,
+        x: 2.0,
+        y: 13.0,
+        w: 1.0,
+        h: 1.0,
+    },
+    Prop {
+        kind: PropKind::Plant,
+        x: 11.0,
+        y: 13.0,
+        w: 1.0,
+        h: 1.0,
+    },
+    Prop {
+        kind: PropKind::Desk,
+        x: 3.0,
+        y: 6.0,
+        w: 3.0,
+        h: 1.5,
+    },
+    Prop {
+        kind: PropKind::Pc,
+        x: 3.5,
+        y: 5.5,
+        w: 1.0,
+        h: 1.0,
+    },
+    Prop {
+        kind: PropKind::Pc,
+        x: 5.0,
+        y: 5.5,
+        w: 1.0,
+        h: 1.0,
+    },
+    Prop {
+        kind: PropKind::Desk,
+        x: 3.0,
+        y: 7.5,
+        w: 3.0,
+        h: 1.5,
+    },
+    Prop {
+        kind: PropKind::Pc,
+        x: 3.5,
+        y: 7.5,
+        w: 1.0,
+        h: 1.0,
+    },
+    Prop {
+        kind: PropKind::Pc,
+        x: 5.0,
+        y: 7.5,
+        w: 1.0,
+        h: 1.0,
+    },
+    Prop {
+        kind: PropKind::Desk,
+        x: 8.0,
+        y: 6.0,
+        w: 3.0,
+        h: 1.5,
+    },
+    Prop {
+        kind: PropKind::Pc,
+        x: 8.5,
+        y: 5.5,
+        w: 1.0,
+        h: 1.0,
+    },
+    Prop {
+        kind: PropKind::Pc,
+        x: 10.0,
+        y: 5.5,
+        w: 1.0,
+        h: 1.0,
+    },
+    Prop {
+        kind: PropKind::Desk,
+        x: 8.0,
+        y: 7.5,
+        w: 3.0,
+        h: 1.5,
+    },
+    Prop {
+        kind: PropKind::Pc,
+        x: 8.5,
+        y: 7.5,
+        w: 1.0,
+        h: 1.0,
+    },
+    Prop {
+        kind: PropKind::Pc,
+        x: 10.0,
+        y: 7.5,
+        w: 1.0,
+        h: 1.0,
+    },
+    Prop {
+        kind: PropKind::Plant,
+        x: 13.0,
+        y: 2.0,
+        w: 1.0,
+        h: 1.0,
+    },
+    Prop {
+        kind: PropKind::Plant,
+        x: 21.0,
+        y: 2.0,
+        w: 1.0,
+        h: 1.0,
+    },
+    Prop {
+        kind: PropKind::Frame,
+        x: 15.0,
+        y: 1.5,
+        w: 1.0,
+        h: 1.0,
+    },
+    Prop {
+        kind: PropKind::Frame,
+        x: 19.0,
+        y: 1.5,
+        w: 1.0,
+        h: 1.0,
+    },
+    Prop {
+        kind: PropKind::Sofa,
+        x: 15.0,
+        y: 6.0,
+        w: 1.5,
+        h: 3.0,
+    },
+    Prop {
+        kind: PropKind::Sofa,
+        x: 19.5,
+        y: 6.0,
+        w: 1.5,
+        h: 3.0,
+    },
+    Prop {
+        kind: PropKind::Table,
+        x: 16.5,
+        y: 6.5,
+        w: 3.0,
+        h: 2.0,
+    },
+    Prop {
+        kind: PropKind::Bookshelf,
+        x: 25.0,
+        y: 2.0,
+        w: 3.0,
+        h: 1.0,
+    },
+    Prop {
+        kind: PropKind::Plant,
+        x: 23.0,
+        y: 13.0,
+        w: 1.0,
+        h: 1.0,
+    },
+    Prop {
+        kind: PropKind::Plant,
+        x: 29.0,
+        y: 13.0,
+        w: 1.0,
+        h: 1.0,
+    },
+    Prop {
+        kind: PropKind::Desk,
+        x: 25.0,
+        y: 7.0,
+        w: 3.0,
+        h: 1.5,
+    },
+    Prop {
+        kind: PropKind::Pc,
+        x: 26.0,
+        y: 6.5,
+        w: 1.0,
+        h: 1.0,
+    },
+];
+
+fn office_props() -> &'static [Prop] {
+    OFFICE_PROPS
 }
 
 // Paint helpers
@@ -638,7 +685,11 @@ impl OfficeLayout {
     fn from_bounds(bounds: Bounds<Pixels>) -> Self {
         let tile_w = bounds.size.width / MAP_COLS as f32;
         let tile_h = bounds.size.height / MAP_ROWS as f32;
-        let tile = tile_w.min(tile_h);
+        let tile = if OFFICE_CANVAS_COVER {
+            tile_w.max(tile_h)
+        } else {
+            tile_w.min(tile_h)
+        };
         let total_w = tile * MAP_COLS as f32;
         let total_h = tile * MAP_ROWS as f32;
 
@@ -746,6 +797,197 @@ fn paint_text_centered(
 
 // Main paint function
 
+#[derive(Clone, Copy)]
+enum OfficeFloorPattern {
+    Tile,
+    Wood,
+    Checker,
+}
+
+fn floor_cell_size(tile: Pixels, index: usize, extent: f32) -> Pixels {
+    tile * (extent - index as f32).clamp(0.0, 1.0)
+}
+
+fn paint_floor_grid(
+    window: &mut Window,
+    rx: Pixels,
+    ry: Pixels,
+    rw: Pixels,
+    rh: Pixels,
+    tile: Pixels,
+    cols: usize,
+    rows: usize,
+    color: Hsla,
+) {
+    let tile_f: f32 = tile.into();
+    let line = px((tile_f * 0.035).clamp(1.0, 2.0));
+
+    for col in 1..cols {
+        paint_rect(window, rx + tile * col as f32, ry, line, rh, color);
+    }
+    for row in 1..rows {
+        paint_rect(window, rx, ry + tile * row as f32, rw, line, color);
+    }
+    paint_rect(window, rx, ry, rw, line, with_alpha(color, 0.5));
+    paint_rect(window, rx, ry + rh - line, rw, line, with_alpha(color, 0.5));
+    paint_rect(window, rx, ry, line, rh, with_alpha(color, 0.5));
+    paint_rect(window, rx + rw - line, ry, line, rh, with_alpha(color, 0.5));
+}
+
+fn paint_tiled_floor(
+    window: &mut Window,
+    rx: Pixels,
+    ry: Pixels,
+    rw: Pixels,
+    rh: Pixels,
+    tile: Pixels,
+    cols: usize,
+    rows: usize,
+    extent_w: f32,
+    extent_h: f32,
+    palette: &OfficePalette,
+    color: Hsla,
+) {
+    paint_rect(window, rx, ry, rw, rh, color);
+
+    for row in 0..rows {
+        for col in 0..cols {
+            if (row + col) % 2 == 0 {
+                let cell_w = floor_cell_size(tile, col, extent_w);
+                let cell_h = floor_cell_size(tile, row, extent_h);
+                paint_rect(
+                    window,
+                    rx + tile * col as f32,
+                    ry + tile * row as f32,
+                    cell_w,
+                    cell_h,
+                    with_alpha(lighten(color, 0.04), 0.18),
+                );
+            }
+        }
+    }
+
+    paint_floor_grid(
+        window,
+        rx,
+        ry,
+        rw,
+        rh,
+        tile,
+        cols,
+        rows,
+        with_alpha(palette.floor_grid, 0.6),
+    );
+}
+
+fn paint_wood_floor(
+    window: &mut Window,
+    rx: Pixels,
+    ry: Pixels,
+    rw: Pixels,
+    rh: Pixels,
+    tile: Pixels,
+    cols: usize,
+    rows: usize,
+    extent_w: f32,
+    extent_h: f32,
+    color: Hsla,
+) {
+    paint_rect(window, rx, ry, rw, rh, color);
+
+    for row in 0..rows {
+        for col in 0..cols {
+            let cell_w = floor_cell_size(tile, col, extent_w);
+            let cell_h = floor_cell_size(tile, row, extent_h);
+            let shade = if (row + col) % 2 == 0 {
+                lighten(color, 0.035)
+            } else {
+                darken(color, 0.035)
+            };
+            paint_rect(
+                window,
+                rx + tile * col as f32,
+                ry + tile * row as f32,
+                cell_w,
+                cell_h,
+                with_alpha(shade, 0.35),
+            );
+        }
+    }
+
+    paint_floor_grid(
+        window,
+        rx,
+        ry,
+        rw,
+        rh,
+        tile,
+        cols,
+        rows,
+        with_alpha(darken(color, 0.16), 0.82),
+    );
+
+    for row in 0..rows {
+        let seam_y = ry + tile * row as f32 + tile * 0.5;
+        paint_rect(
+            window,
+            rx,
+            seam_y,
+            rw,
+            px(1.0),
+            with_alpha(darken(color, 0.12), 0.45),
+        );
+    }
+}
+
+fn paint_checker_floor(
+    window: &mut Window,
+    rx: Pixels,
+    ry: Pixels,
+    rw: Pixels,
+    rh: Pixels,
+    tile: Pixels,
+    cols: usize,
+    rows: usize,
+    extent_w: f32,
+    extent_h: f32,
+    palette: &OfficePalette,
+) {
+    paint_rect(window, rx, ry, rw, rh, palette.floor_kitchen);
+
+    for row in 0..rows {
+        for col in 0..cols {
+            let cell_w = floor_cell_size(tile, col, extent_w);
+            let cell_h = floor_cell_size(tile, row, extent_h);
+            let color = if (row + col) % 2 == 0 {
+                palette.floor_checker_light
+            } else {
+                palette.floor_checker_dark
+            };
+            paint_rect(
+                window,
+                rx + tile * col as f32,
+                ry + tile * row as f32,
+                cell_w,
+                cell_h,
+                color,
+            );
+        }
+    }
+
+    paint_floor_grid(
+        window,
+        rx,
+        ry,
+        rw,
+        rh,
+        tile,
+        cols,
+        rows,
+        with_alpha(palette.wall_shadow, 0.5),
+    );
+}
+
 fn paint_room_floor(
     window: &mut Window,
     ox: Pixels,
@@ -757,21 +999,26 @@ fn paint_room_floor(
     w: f32,
     h: f32,
     color: Hsla,
+    pattern: OfficeFloorPattern,
 ) {
     let rx = ox + tile * x;
     let ry = oy + tile * y;
     let rw = tile * w;
     let rh = tile * h;
+    let cols = w.ceil() as usize;
+    let rows = h.ceil() as usize;
 
-    paint_rect(window, rx, ry, rw, rh, color);
-    paint_rect(
-        window,
-        rx + px(10.0),
-        ry + px(10.0),
-        rw - px(20.0),
-        px(2.0),
-        with_alpha(palette.text, 0.08),
-    );
+    match pattern {
+        OfficeFloorPattern::Tile => paint_tiled_floor(
+            window, rx, ry, rw, rh, tile, cols, rows, w, h, palette, color,
+        ),
+        OfficeFloorPattern::Wood => {
+            paint_wood_floor(window, rx, ry, rw, rh, tile, cols, rows, w, h, color)
+        }
+        OfficeFloorPattern::Checker => {
+            paint_checker_floor(window, rx, ry, rw, rh, tile, cols, rows, w, h, palette)
+        }
+    }
 }
 
 fn paint_wall_segment(
@@ -783,6 +1030,55 @@ fn paint_wall_segment(
     palette: &OfficePalette,
 ) {
     paint_rect(window, x, y, w, h, palette.wall_front);
+
+    let w_f: f32 = w.into();
+    let h_f: f32 = h.into();
+    let trim = px((w_f.min(h_f) * 0.14).clamp(2.0, 5.0));
+
+    paint_rect(
+        window,
+        x,
+        y,
+        w,
+        trim,
+        with_alpha(palette.wall_highlight, 0.62),
+    );
+    paint_rect(
+        window,
+        x,
+        y,
+        trim,
+        h,
+        with_alpha(palette.wall_highlight, 0.38),
+    );
+    paint_rect(
+        window,
+        x,
+        y + h - trim,
+        w,
+        trim,
+        with_alpha(palette.wall_shadow, 0.82),
+    );
+    paint_rect(
+        window,
+        x + w - trim,
+        y,
+        trim,
+        h,
+        with_alpha(palette.wall_shadow, 0.65),
+    );
+
+    for stripe in 1..4 {
+        let stripe_y = y + h * (stripe as f32 / 4.0);
+        paint_rect(
+            window,
+            x + trim,
+            stripe_y,
+            w - trim * 2.0,
+            px(1.0),
+            with_alpha(palette.wall_highlight, 0.18),
+        );
+    }
 }
 
 fn paint_room_shell(
@@ -793,7 +1089,7 @@ fn paint_room_shell(
     palette: &OfficePalette,
 ) {
     let tile_f: f32 = tile.into();
-    let wall = px((tile_f * 0.32).clamp(8.0, 18.0));
+    let wall = px((tile_f * 0.58).clamp(14.0, 26.0));
     let full_x = ox + tile;
     let full_y = oy + tile;
     let full_w = tile * 30.0;
@@ -805,11 +1101,12 @@ fn paint_room_shell(
         oy,
         tile,
         palette,
-        2.0,
-        2.0,
-        10.0,
-        12.0,
+        1.0,
+        1.0,
+        11.0,
+        14.0,
         palette.floor_dev,
+        OfficeFloorPattern::Tile,
     );
     paint_room_floor(
         window,
@@ -817,35 +1114,38 @@ fn paint_room_shell(
         oy,
         tile,
         palette,
-        13.0,
-        2.0,
-        9.0,
-        7.5,
-        palette.floor_lounge,
-    );
-    paint_room_floor(
-        window,
-        ox,
-        oy,
-        tile,
-        palette,
-        13.0,
-        9.5,
-        9.0,
-        4.5,
-        palette.floor_kitchen,
-    );
-    paint_room_floor(
-        window,
-        ox,
-        oy,
-        tile,
-        palette,
-        23.0,
-        2.0,
-        7.0,
         12.0,
+        1.0,
+        10.0,
+        8.5,
+        palette.floor_lounge,
+        OfficeFloorPattern::Wood,
+    );
+    paint_room_floor(
+        window,
+        ox,
+        oy,
+        tile,
+        palette,
+        12.0,
+        9.5,
+        10.0,
+        5.5,
+        palette.floor_kitchen,
+        OfficeFloorPattern::Checker,
+    );
+    paint_room_floor(
+        window,
+        ox,
+        oy,
+        tile,
+        palette,
+        22.0,
+        1.0,
+        9.0,
+        14.0,
         palette.floor_manager,
+        OfficeFloorPattern::Tile,
     );
 
     paint_wall_segment(window, full_x, full_y, full_w, wall, palette);
@@ -877,7 +1177,7 @@ fn paint_room_shell(
             oy + tile * 6.0,
             wall + px(4.0),
             px(3.0),
-            with_alpha(palette.green, 0.75),
+            with_alpha(palette.wall_highlight, 0.72),
         );
         paint_rect(
             window,
@@ -885,14 +1185,19 @@ fn paint_room_shell(
             oy + tile * 9.0,
             wall + px(4.0),
             px(3.0),
-            with_alpha(palette.green, 0.75),
+            with_alpha(palette.wall_shadow, 0.72),
         );
     }
 }
 
-fn paint_office(bounds: Bounds<Pixels>, state: &OfficeState, window: &mut Window, cx: &mut App) {
+fn paint_office(
+    bounds: Bounds<Pixels>,
+    state: &OfficeState,
+    reduce_text_paint: bool,
+    window: &mut Window,
+    cx: &mut App,
+) {
     let palette = OfficePalette::from_theme(cx.theme());
-    let props = generate_props();
     let layout = OfficeLayout::from_bounds(bounds);
     let tile = layout.tile;
     let ox = layout.origin.x;
@@ -902,46 +1207,48 @@ fn paint_office(bounds: Bounds<Pixels>, state: &OfficeState, window: &mut Window
     window.paint_quad(fill(bounds, palette.bg));
     paint_room_shell(window, ox, oy, tile, &palette);
 
-    // Room labels
-    paint_text_centered(
-        window,
-        cx,
-        "DEV ROOM",
-        ox + tile * 6.5,
-        oy + tile * 3.5,
-        px(9.0),
-        with_alpha(palette.text_dim, 0.32),
-    );
-    paint_text_centered(
-        window,
-        cx,
-        "COORDINATION",
-        ox + tile * 17.0,
-        oy + tile * 3.5,
-        px(9.0),
-        with_alpha(palette.text_dim, 0.32),
-    );
-    paint_text_centered(
-        window,
-        cx,
-        "WAITING",
-        ox + tile * 17.2,
-        oy + tile * 11.2,
-        px(9.0),
-        with_alpha(palette.text_dim, 0.32),
-    );
-    paint_text_centered(
-        window,
-        cx,
-        "MANAGER",
-        ox + tile * 27.0,
-        oy + tile * 3.5,
-        px(9.0),
-        with_alpha(palette.text_dim, 0.32),
-    );
+    if !reduce_text_paint {
+        // Room labels
+        paint_text_centered(
+            window,
+            cx,
+            "DEV ROOM",
+            ox + tile * 6.5,
+            oy + tile * 3.5,
+            px(9.0),
+            with_alpha(palette.text_dim, 0.32),
+        );
+        paint_text_centered(
+            window,
+            cx,
+            "COORDINATION",
+            ox + tile * 17.0,
+            oy + tile * 3.5,
+            px(9.0),
+            with_alpha(palette.text_dim, 0.32),
+        );
+        paint_text_centered(
+            window,
+            cx,
+            "WAITING",
+            ox + tile * 17.2,
+            oy + tile * 11.2,
+            px(9.0),
+            with_alpha(palette.text_dim, 0.32),
+        );
+        paint_text_centered(
+            window,
+            cx,
+            "MANAGER",
+            ox + tile * 27.0,
+            oy + tile * 3.5,
+            px(9.0),
+            with_alpha(palette.text_dim, 0.32),
+        );
+    }
 
     // Props
-    for p in &props {
+    for p in office_props() {
         let ppx = ox + tile * p.x;
         let ppy = oy + tile * p.y;
         let ppw = tile * p.w;
@@ -1482,77 +1789,79 @@ fn paint_office(bounds: Bounds<Pixels>, state: &OfficeState, window: &mut Window
             Hsla::from(gpui::rgba(0xc0706aff)),
         );
 
-        // Name tag
-        let tag_y = apy - px(6.0) + px(bob * 0.4);
-        let name_text = &agent.name;
-        let tw = px(name_text.chars().count().max(6) as f32 * 5.5 + 14.0);
-        // Tag background
-        paint_rounded_rect(
-            window,
-            bx - tw / 2.0,
-            tag_y - px(13.0),
-            tw,
-            px(14.0),
-            px(3.0),
-            palette.label_bg,
-        );
-        // Tag accent bar
-        paint_rect(
-            window,
-            bx - tw / 2.0,
-            tag_y - px(13.0),
-            px(3.0),
-            px(14.0),
-            agent.color,
-        );
-        // Name text
-        paint_text_centered(
-            window,
-            cx,
-            name_text,
-            bx + px(1.0),
-            tag_y - px(6.0),
-            px(9.0),
-            palette.text,
-        );
-
-        // Status badge
-        let status_text = &agent.status;
-        let sw = px(status_text.chars().count().max(4) as f32 * 5.0 + 10.0);
-        paint_rounded_rect(
-            window,
-            bx - sw / 2.0,
-            tag_y + px(3.0),
-            sw,
-            px(12.0),
-            px(5.0),
-            palette.label_bg,
-        );
-        paint_text_centered(window, cx, status_text, bx, tag_y + px(9.0), px(9.0), sc);
-
-        // Message bubble
-        if let Some(msg) = &agent.message {
-            let mw = px(msg.chars().count().max(5) as f32 * 5.5 + 18.0);
+        if !reduce_text_paint {
+            // Name tag
+            let tag_y = apy - px(6.0) + px(bob * 0.4);
+            let name_text = &agent.name;
+            let tw = px(name_text.chars().count().max(6) as f32 * 5.5 + 14.0);
+            // Tag background
             paint_rounded_rect(
                 window,
-                bx - mw / 2.0,
-                tag_y - px(36.0),
-                mw,
-                px(22.0),
-                px(6.0),
+                bx - tw / 2.0,
+                tag_y - px(13.0),
+                tw,
+                px(14.0),
+                px(3.0),
                 palette.label_bg,
             );
-            // Pointer triangle approximation
+            // Tag accent bar
             paint_rect(
                 window,
-                bx - px(3.0),
-                tag_y - px(14.0),
-                px(6.0),
-                px(6.0),
+                bx - tw / 2.0,
+                tag_y - px(13.0),
+                px(3.0),
+                px(14.0),
+                agent.color,
+            );
+            // Name text
+            paint_text_centered(
+                window,
+                cx,
+                name_text,
+                bx + px(1.0),
+                tag_y - px(6.0),
+                px(9.0),
+                palette.text,
+            );
+
+            // Status badge
+            let status_text = &agent.status;
+            let sw = px(status_text.chars().count().max(4) as f32 * 5.0 + 10.0);
+            paint_rounded_rect(
+                window,
+                bx - sw / 2.0,
+                tag_y + px(3.0),
+                sw,
+                px(12.0),
+                px(5.0),
                 palette.label_bg,
             );
-            // Message text
-            paint_text_centered(window, cx, msg, bx, tag_y - px(25.0), px(9.0), palette.text);
+            paint_text_centered(window, cx, status_text, bx, tag_y + px(9.0), px(9.0), sc);
+
+            // Message bubble
+            if let Some(msg) = &agent.message {
+                let mw = px(msg.chars().count().max(5) as f32 * 5.5 + 18.0);
+                paint_rounded_rect(
+                    window,
+                    bx - mw / 2.0,
+                    tag_y - px(36.0),
+                    mw,
+                    px(22.0),
+                    px(6.0),
+                    palette.label_bg,
+                );
+                // Pointer triangle approximation
+                paint_rect(
+                    window,
+                    bx - px(3.0),
+                    tag_y - px(14.0),
+                    px(6.0),
+                    px(6.0),
+                    palette.label_bg,
+                );
+                // Message text
+                paint_text_centered(window, cx, msg, bx, tag_y - px(25.0), px(9.0), palette.text);
+            }
         }
     }
 }
@@ -1841,9 +2150,10 @@ impl super::TeamWorkspacePanel {
         let view = cx.entity().clone();
 
         // Gather active agents for the sidebar
-        let mut active_agents: Vec<(String, String, usize, Hsla)> = Vec::new();
+        let mut active_agents: Vec<(String, String, String, usize, Hsla)> = Vec::new();
         for agent in &self.office_state.agents {
             active_agents.push((
+                agent.id.clone(),
                 agent.name.clone(),
                 agent.status.clone(),
                 agent.task_count,
@@ -1851,29 +2161,85 @@ impl super::TeamWorkspacePanel {
             ));
         }
         let agent_count = active_agents.len();
+        let selected_agent = self.selected_office_agent_id.as_ref().and_then(|agent_id| {
+            self.office_state
+                .agents
+                .iter()
+                .find(|agent| &agent.id == agent_id)
+                .cloned()
+        });
+        let selected_agent_run = selected_agent.as_ref().and_then(|agent| {
+            let instance_id = self.selected_instance_id.as_ref()?;
+            let db = crate::AppState::global(cx).db.clone();
+            let task = db
+                .list_tasks_for_instance(instance_id)
+                .ok()?
+                .into_iter()
+                .filter(|task| {
+                    task.assignee_id.as_deref() == Some(agent.id.as_str())
+                        && task.run_id.is_some()
+                        && !matches!(task.status.as_str(), "completed" | "failed" | "cancelled")
+                })
+                .max_by(|left, right| left.updated_at.cmp(&right.updated_at))?;
+            let run_id = task.run_id.clone()?;
+            let run = db.get_orchestration_run(&run_id).ok().flatten()?;
+            Some((task, run))
+        });
 
-        // Tick animation state
-        self.office_state.tick();
+        // Avoid competing with text input while the inline office chat is active.
+        let quick_chat_open = self.office_quick_chat_agent_id.is_some();
+        if !quick_chat_open {
+            self.office_state.tick();
+        }
+        let should_continue_office_animation =
+            !quick_chat_open && self.office_state.needs_animation_tick();
+        let office_animation_delay = if self.office_state.has_active_motion() {
+            std::time::Duration::from_millis(50)
+        } else {
+            std::time::Duration::from_millis(250)
+        };
 
         // Build sidebar
         let sidebar = {
-            let mut agent_list = v_flex().w_full().gap(px(2.0));
-            for (name, status, task_count, color) in &active_agents {
+            let mut agent_list = v_flex().w_full().gap(px(6.0)).p(px(8.0));
+            for (agent_id, name, status, task_count, color) in &active_agents {
                 let sc = status_color(status);
+                let is_selected = self.selected_office_agent_id.as_deref() == Some(agent_id);
                 let status_label = if *task_count > 0 {
                     format!("{} tasks", task_count)
                 } else {
                     status.clone()
                 };
                 let initials: String = name.chars().take(2).collect::<String>().to_uppercase();
+                let selected_agent_id = agent_id.clone();
                 agent_list = agent_list.child(
                     h_flex()
+                        .id(gpui::ElementId::Name(
+                            format!("office-agent-row-{}", agent_id).into(),
+                        ))
                         .w_full()
                         .px(px(12.0))
                         .py(px(6.0))
                         .gap(px(9.0))
                         .items_center()
+                        .rounded(px(8.0))
+                        .border_1()
+                        .border_color(if is_selected {
+                            theme.primary.opacity(0.32)
+                        } else {
+                            theme.border.opacity(0.55)
+                        })
+                        .bg(if is_selected {
+                            theme.primary.opacity(0.12)
+                        } else {
+                            theme.background.opacity(0.18)
+                        })
+                        .cursor_pointer()
                         .hover(|s| s.bg(theme.primary.opacity(0.07)))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.selected_office_agent_id = Some(selected_agent_id.clone());
+                            cx.notify();
+                        }))
                         .child(
                             div()
                                 .w(px(26.0))
@@ -1918,13 +2284,137 @@ impl super::TeamWorkspacePanel {
                 );
             }
 
+            let agent_inspector = selected_agent.map(|agent| {
+                let status = status_color(&agent.status);
+                let has_run = selected_agent_run.is_some();
+                let run_detail = selected_agent_run.clone().map(|(task, run)| {
+                    let open_run_id = run.id.clone();
+                    let run_label = run.id.chars().take(8).collect::<String>();
+                    v_flex()
+                        .gap(px(6.0))
+                        .pt(px(8.0))
+                        .border_t_1()
+                        .border_color(theme.border)
+                        .child(
+                            h_flex()
+                                .justify_between()
+                                .text_size(px(10.0))
+                                .child(
+                                    div()
+                                        .text_color(theme.muted_foreground)
+                                        .child("Current run"),
+                                )
+                                .child(
+                                    div()
+                                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                                        .text_color(theme.foreground)
+                                        .child(run_label),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(10.0))
+                                .text_color(theme.muted_foreground)
+                                .line_height(gpui::relative(1.35))
+                                .child(format!("{} | {}", run.status, task.status)),
+                        )
+                        .child(
+                            Button::new(gpui::SharedString::from(format!(
+                                "office-open-run-{}",
+                                open_run_id
+                            )))
+                            .small()
+                            .label("Open run")
+                            .on_click(cx.listener(
+                                move |_this, _, _, cx| {
+                                    let state = crate::AppState::global(cx);
+                                    let _ = state
+                                        .db
+                                        .set_setting("orchestration_selected_run_id", &open_run_id);
+                                    let selected = state.selected_orchestration_run_id.clone();
+                                    let active_panel = state.active_panel.clone();
+                                    let selected_run_id = open_run_id.clone();
+                                    selected.update(cx, move |current, cx| {
+                                        *current = Some(selected_run_id);
+                                        cx.notify();
+                                    });
+                                    active_panel.update(cx, |page, cx| {
+                                        *page = "orchestration".to_string();
+                                        cx.notify();
+                                    });
+                                },
+                            )),
+                        )
+                        .into_any_element()
+                });
+                v_flex()
+                    .gap(px(6.0))
+                    .p(px(10.0))
+                    .border_1()
+                    .border_color(theme.border)
+                    .rounded(px(10.0))
+                    .bg(theme.secondary)
+                    .child(
+                        div()
+                            .text_size(px(10.0))
+                            .font_weight(gpui::FontWeight::BOLD)
+                            .text_color(theme.muted_foreground)
+                            .child("SELECTED AGENT"),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(13.0))
+                            .font_weight(gpui::FontWeight::BOLD)
+                            .text_color(theme.foreground)
+                            .child(agent.name),
+                    )
+                    .child(
+                        h_flex()
+                            .justify_between()
+                            .text_size(px(10.0))
+                            .child(div().text_color(theme.muted_foreground).child("Status"))
+                            .child(div().text_color(status).child(agent.status)),
+                    )
+                    .child(
+                        h_flex()
+                            .justify_between()
+                            .text_size(px(10.0))
+                            .child(
+                                div()
+                                    .text_color(theme.muted_foreground)
+                                    .child("Active tasks"),
+                            )
+                            .child(
+                                div()
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .text_color(theme.foreground)
+                                    .child(agent.task_count.to_string()),
+                            ),
+                    )
+                    .when_some(run_detail, |inspector, run_detail| {
+                        inspector.child(run_detail)
+                    })
+                    .when(!has_run, |inspector| {
+                        inspector.child(
+                            div()
+                                .pt(px(8.0))
+                                .border_t_1()
+                                .border_color(theme.border)
+                                .text_size(px(10.0))
+                                .text_color(theme.muted_foreground)
+                                .child("No active run linked to this agent."),
+                        )
+                    })
+                    .into_any_element()
+            });
+
             div()
                 .w(px(200.0))
                 .flex_shrink_0()
                 .h_full()
                 .flex()
                 .flex_col()
-                .gap(px(10.0))
+                .gap(px(12.0))
                 .py(px(14.0))
                 .px(px(10.0))
                 .bg(theme.background)
@@ -1957,6 +2447,9 @@ impl super::TeamWorkspacePanel {
                         )
                         .child(agent_list),
                 )
+                .when_some(agent_inspector, |sidebar, inspector| {
+                    sidebar.child(inspector)
+                })
                 // Stats
                 .child(
                     v_flex()
@@ -2018,13 +2511,17 @@ impl super::TeamWorkspacePanel {
             let state_snapshot = self.office_state.clone();
             let view_for_mouse = view.clone();
             let view_for_bounds = view.clone();
+            let quick_chat_overlay = self.render_office_quick_chat_overlay(cx);
+            let reduce_text_paint = quick_chat_open;
 
             div()
+                .relative()
                 .flex_1()
                 .w_full()
                 .min_w_0()
                 .min_h(px(280.0))
                 .id("office-canvas")
+                .overflow_hidden()
                 .on_mouse_down(MouseButton::Left, {
                     let view_md = view.clone();
                     move |event, _window, cx| {
@@ -2033,6 +2530,16 @@ impl super::TeamWorkspacePanel {
                             // We need the canvas bounds, approximate from the event position
                             let pos = event.position;
                             this.office_handle_mouse_down(pos, cx);
+                        });
+                    }
+                })
+                .on_mouse_down(MouseButton::Right, {
+                    let view_context = view.clone();
+                    move |event, window, cx| {
+                        cx.stop_propagation();
+                        let pos = event.position;
+                        let _ = view_context.update(cx, |this, cx| {
+                            this.office_open_quick_chat_at(pos, window, cx);
                         });
                     }
                 })
@@ -2063,22 +2570,31 @@ impl super::TeamWorkspacePanel {
                             });
                         },
                         move |bounds, _, window, cx| {
-                            paint_office(bounds, &state_snapshot, window, cx);
+                            window.with_content_mask(Some(ContentMask { bounds }), |window| {
+                                paint_office(
+                                    bounds,
+                                    &state_snapshot,
+                                    reduce_text_paint,
+                                    window,
+                                    cx,
+                                );
+                            });
                         },
                     )
                     .size_full(),
                 )
+                .when_some(quick_chat_overlay, |container, overlay| {
+                    container.child(overlay)
+                })
         };
         let chat_panel = self.render_office_chat_panel(cx);
 
-        if !self.office_animation_queued {
+        if should_continue_office_animation && !self.office_animation_queued {
             self.office_animation_queued = true;
             cx.spawn({
                 let view_anim = view.clone();
                 async move |_, cx| {
-                    cx.background_executor()
-                        .timer(std::time::Duration::from_millis(50))
-                        .await;
+                    cx.background_executor().timer(office_animation_delay).await;
                     let _ = cx.update(|cx| {
                         let _ = view_anim.update(cx, |this, cx| {
                             this.office_animation_queued = false;
@@ -2106,33 +2622,224 @@ impl super::TeamWorkspacePanel {
         self.office_canvas_bounds_cache
     }
 
-    fn office_handle_mouse_down(&mut self, pos: Point<Pixels>, cx: &mut Context<Self>) {
-        // Approximate: find agent whose rendered position is close to click
-        // We'll use a simplified approach: check tile positions
-        // In a real scenario we'd cache bounds from the canvas paint
-        let Some(bounds) = self.office_canvas_bounds() else {
-            return;
-        };
+    fn office_agent_index_at_position(
+        &self,
+        pos: Point<Pixels>,
+        include_static_agents: bool,
+    ) -> Option<usize> {
+        let bounds = self.office_canvas_bounds()?;
         let layout = OfficeLayout::from_bounds(bounds);
         let pos_x: f32 = pos.x.into();
         let pos_y: f32 = pos.y.into();
 
-        for (i, agent) in self.office_state.agents.iter().enumerate() {
-            if is_coordinator_identity(&agent.id, &agent.name) {
-                continue;
-            }
-            let center = layout.agent_center(agent);
-            let center_x: f32 = center.x.into();
-            let center_y: f32 = center.y.into();
-            let dx = (pos_x - center_x).abs();
-            let dy = (pos_y - center_y).abs();
-            // Simple distance check
-            if dx < 32.0 && dy < 42.0 {
-                self.office_state.dragged_agent_idx = Some(i);
+        self.office_state
+            .agents
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(idx, agent)| {
+                if !include_static_agents && is_coordinator_identity(&agent.id, &agent.name) {
+                    return None;
+                }
+
+                let center = layout.agent_center(agent);
+                let center_x: f32 = center.x.into();
+                let center_y: f32 = center.y.into();
+                let dx = (pos_x - center_x).abs();
+                let dy = (pos_y - center_y).abs();
+
+                (dx < 32.0 && dy < 42.0).then_some(idx)
+            })
+    }
+
+    fn office_handle_mouse_down(&mut self, pos: Point<Pixels>, cx: &mut Context<Self>) {
+        if let Some(idx) = self.office_agent_index_at_position(pos, false) {
+            if let Some(agent) = self.office_state.agents.get(idx) {
+                self.office_state.dragged_agent_idx = Some(idx);
+                self.selected_office_agent_id = Some(agent.id.clone());
                 cx.notify();
-                return;
             }
+        } else if self.office_quick_chat_agent_id.is_some() {
+            self.office_quick_chat_agent_id = None;
+            cx.notify();
         }
+    }
+
+    fn office_open_quick_chat_at(
+        &mut self,
+        pos: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(idx) = self.office_agent_index_at_position(pos, true) else {
+            return;
+        };
+        let Some(agent) = self.office_state.agents.get(idx).cloned() else {
+            return;
+        };
+
+        self.selected_office_agent_id = Some(agent.id.clone());
+        self.office_quick_chat_agent_id = Some(agent.id.clone());
+        self.office_quick_chat_input_state.update(cx, |state, cx| {
+            state.set_value("", window, cx);
+        });
+        cx.notify();
+    }
+
+    fn render_office_quick_chat_overlay(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let agent_id = self.office_quick_chat_agent_id.as_ref()?;
+        let agent = self
+            .office_state
+            .agents
+            .iter()
+            .find(|agent| &agent.id == agent_id)?;
+        let bounds = self.office_canvas_bounds()?;
+        let layout = OfficeLayout::from_bounds(bounds);
+        let center = layout.agent_center(agent);
+        let theme = cx.theme().clone();
+
+        let bounds_w: f32 = bounds.size.width.into();
+        let bounds_h: f32 = bounds.size.height.into();
+        let origin_x: f32 = bounds.origin.x.into();
+        let origin_y: f32 = bounds.origin.y.into();
+        let center_x: f32 = center.x.into();
+        let center_y: f32 = center.y.into();
+
+        let panel_w = if bounds_w < 376.0 {
+            (bounds_w - 16.0).max(220.0)
+        } else {
+            360.0
+        };
+        let panel_h = 158.0;
+        let rel_x = center_x - origin_x;
+        let rel_y = center_y - origin_y;
+        let max_left = (bounds_w - panel_w - 8.0).max(8.0);
+        let left = (rel_x - panel_w / 2.0).clamp(8.0, max_left);
+        let below_top = rel_y + 36.0;
+        let max_top = (bounds_h - panel_h - 8.0).max(8.0);
+        let top = if below_top <= max_top {
+            below_top
+        } else {
+            (rel_y - panel_h - 52.0).max(8.0)
+        };
+
+        let target_agent_id = agent.id.clone();
+        let target_name = agent.name.clone();
+        let title = "CURRENT AGENT";
+        let helper = "Add message as context for this agent";
+
+        Some(
+            v_flex()
+                .absolute()
+                .left(px(left))
+                .top(px(top))
+                .w(px(panel_w))
+                .h(px(panel_h))
+                .rounded(px(8.0))
+                .border_1()
+                .border_color(theme.border)
+                .bg(theme.background.opacity(0.98))
+                .overflow_hidden()
+                .p(px(8.0))
+                .gap(px(7.0))
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
+                .child(
+                    h_flex()
+                        .justify_between()
+                        .items_center()
+                        .px(px(2.0))
+                        .child(
+                            div()
+                                .text_size(px(11.0))
+                                .font_weight(gpui::FontWeight::BOLD)
+                                .text_color(theme.muted_foreground)
+                                .child(title),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(12.0))
+                                .font_weight(gpui::FontWeight::BOLD)
+                                .text_color(theme.foreground)
+                                .child(target_name.clone()),
+                        ),
+                )
+                .child(
+                    div()
+                        .w_full()
+                        .h(px(76.0))
+                        .min_h(px(76.0))
+                        .max_h(px(76.0))
+                        .rounded(px(7.0))
+                        .border_1()
+                        .border_color(theme.border)
+                        .bg(theme.background)
+                        .overflow_hidden()
+                        .px(px(8.0))
+                        .py(px(6.0))
+                        .child(
+                            Input::new(&self.office_quick_chat_input_state)
+                                .appearance(false)
+                                .w_full()
+                                .h_full()
+                                .overflow_hidden(),
+                        ),
+                )
+                .child(
+                    h_flex()
+                        .w_full()
+                        .h(px(30.0))
+                        .flex_shrink_0()
+                        .items_center()
+                        .justify_between()
+                        .gap(px(8.0))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .overflow_hidden()
+                                .truncate()
+                                .text_size(px(11.0))
+                                .text_color(theme.muted_foreground)
+                                .child(helper),
+                        )
+                        .child(
+                            Button::new(SharedString::from(format!(
+                                "office-quick-chat-send-{}",
+                                target_agent_id
+                            )))
+                            .small()
+                            .primary()
+                            .label("Send")
+                            .on_click(cx.listener(
+                                move |this, _, window, cx| {
+                                    let text = this
+                                        .office_quick_chat_input_state
+                                        .read(cx)
+                                        .text()
+                                        .to_string();
+                                    let text = text.trim().to_string();
+                                    if text.is_empty() {
+                                        return;
+                                    }
+
+                                    this.selected_office_agent_id = Some(target_agent_id.clone());
+                                    this.office_chat_target_agent_id =
+                                        Some(target_agent_id.clone());
+                                    this.office_quick_chat_agent_id = None;
+                                    this.office_quick_chat_input_state.update(cx, |state, cx| {
+                                        state.set_value("", window, cx);
+                                    });
+                                    this.chat_input_state.update(cx, |state, cx| {
+                                        state.set_value(&text, window, cx);
+                                    });
+                                    this.handle_send_chat(window, cx);
+                                },
+                            )),
+                        ),
+                )
+                .into_any_element(),
+        )
     }
 
     fn office_handle_mouse_move(&mut self, pos: Point<Pixels>, cx: &mut Context<Self>) {

@@ -23,6 +23,24 @@ impl KnowledgeService {
 
     pub fn get_all_records(&self) -> Result<Vec<KnowledgeItem>, crate::core::errors::CoreError> {
         let mut records = self.get_all_knowledge_items()?;
+        let mut imported_artifact_keys = HashSet::new();
+        for record in &mut records {
+            if record.source_kind == "generated_artifact" {
+                record.record_kind = KnowledgeRecordKind::Artifact;
+                if let Some(source_uri) = record.source_uri_normalized.clone() {
+                    imported_artifact_keys.insert(format!("uri:{source_uri}"));
+                }
+                if let Some(content_hash) = record.content_hash.clone() {
+                    imported_artifact_keys.insert(format!("hash:{content_hash}"));
+                }
+                if let Some(path) = record.vault_path.clone() {
+                    imported_artifact_keys.insert(format!(
+                        "uri:{}",
+                        KnowledgeItem::normalize_file_source(&path)
+                    ));
+                }
+            }
+        }
         let memories = self
             .db
             .get_all_knowledge_entries()
@@ -35,6 +53,16 @@ impl KnowledgeService {
             .unwrap_or_default()
         {
             for artifact in self.db.list_artifacts_for_run(&run.id).unwrap_or_default() {
+                let artifact_hash_key = format!("hash:{}", artifact.content_hash);
+                let artifact_uri_key = format!(
+                    "uri:{}",
+                    KnowledgeItem::normalize_file_source(&artifact.path)
+                );
+                if imported_artifact_keys.contains(&artifact_hash_key)
+                    || imported_artifact_keys.contains(&artifact_uri_key)
+                {
+                    continue;
+                }
                 if seen_artifacts.insert(artifact.id.clone()) {
                     records.push(Self::artifact_as_record(artifact));
                 }
@@ -69,9 +97,10 @@ impl KnowledgeService {
         let created_at = DateTime::parse_from_rfc3339(&artifact.created_at)
             .map(|value| value.with_timezone(&Utc))
             .unwrap_or_else(|_| Utc::now());
+        let path = artifact.path.clone();
         let content = format!(
             "# Generated Artifact\n\nPath: {}\nKind: {}\nContent hash: {}\n",
-            artifact.path, artifact.artifact_kind, artifact.content_hash
+            path, artifact.artifact_kind, artifact.content_hash
         );
         KnowledgeItem {
             id: uuid::Uuid::parse_str(&artifact.id).unwrap_or_default(),
@@ -90,9 +119,9 @@ impl KnowledgeService {
             created_at,
             updated_at: created_at,
             retention_policy: RetentionPolicy::KeepForever,
-            vault_path: Some(artifact.path),
+            vault_path: Some(path.clone()),
             source_kind: "generated_artifact".to_string(),
-            source_uri_normalized: None,
+            source_uri_normalized: Some(KnowledgeItem::normalize_file_source(&path)),
             origin_run_id: artifact.run_id,
             origin_session_id: artifact.session_id,
             origin_instance_id: Some(artifact.instance_id),
