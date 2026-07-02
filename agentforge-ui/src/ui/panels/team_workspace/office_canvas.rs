@@ -1953,6 +1953,1573 @@ fn office_plain_text(value: &str, max_chars: usize) -> String {
     out
 }
 
+#[derive(Clone)]
+struct CombinedOfficeAgent {
+    name: String,
+    status: String,
+    color: Hsla,
+}
+
+#[derive(Clone)]
+struct CombinedOfficeSection {
+    instance_name: String,
+    team_name: String,
+    is_current: bool,
+    agents: Vec<CombinedOfficeAgent>,
+}
+
+#[derive(Clone, Copy)]
+enum CombinedFloorPattern {
+    Tile,
+    Wood,
+    Checker,
+}
+
+#[derive(Clone, Copy)]
+struct CombinedOfficeLayout {
+    origin: Point<Pixels>,
+    unit: Pixels,
+}
+
+const COMBINED_OFFICE_COLS: f32 = 64.0;
+const COMBINED_OFFICE_ROWS: f32 = 40.0;
+
+impl CombinedOfficeLayout {
+    fn from_bounds(bounds: Bounds<Pixels>) -> Self {
+        let unit_w = bounds.size.width / COMBINED_OFFICE_COLS;
+        let unit_h = bounds.size.height / COMBINED_OFFICE_ROWS;
+        let unit = unit_w.min(unit_h);
+        let total_w = unit * COMBINED_OFFICE_COLS;
+        let total_h = unit * COMBINED_OFFICE_ROWS;
+
+        Self {
+            origin: point(
+                bounds.origin.x + (bounds.size.width - total_w) / 2.0,
+                bounds.origin.y + (bounds.size.height - total_h) / 2.0,
+            ),
+            unit,
+        }
+    }
+
+    fn x(&self, x: f32) -> Pixels {
+        self.origin.x + self.unit * x
+    }
+
+    fn y(&self, y: f32) -> Pixels {
+        self.origin.y + self.unit * y
+    }
+
+    fn w(&self, w: f32) -> Pixels {
+        self.unit * w
+    }
+
+    fn h(&self, h: f32) -> Pixels {
+        self.unit * h
+    }
+}
+
+fn compact_label(value: &str, max_chars: usize) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return "Agent".to_string();
+    }
+
+    let mut out = String::new();
+    for (idx, ch) in trimmed.chars().enumerate() {
+        if idx >= max_chars {
+            out.push_str("...");
+            return out;
+        }
+        out.push(ch);
+    }
+    out
+}
+
+fn combined_status_label(status: &str) -> String {
+    let status = status.trim();
+    if status.is_empty() {
+        "online".to_string()
+    } else {
+        compact_label(status, 10)
+    }
+}
+
+fn paint_combined_floor(
+    window: &mut Window,
+    layout: CombinedOfficeLayout,
+    palette: &OfficePalette,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    color: Hsla,
+    pattern: CombinedFloorPattern,
+) {
+    let rx = layout.x(x);
+    let ry = layout.y(y);
+    let rw = layout.w(w);
+    let rh = layout.h(h);
+    paint_rect(window, rx, ry, rw, rh, color);
+
+    let cols = w.ceil() as usize;
+    let rows = h.ceil() as usize;
+    for row in 0..rows {
+        for col in 0..cols {
+            let cell_w = floor_cell_size(layout.unit, col, w);
+            let cell_h = floor_cell_size(layout.unit, row, h);
+            let px = rx + layout.unit * col as f32;
+            let py = ry + layout.unit * row as f32;
+            let cell_color = match pattern {
+                CombinedFloorPattern::Tile => {
+                    if (row + col) % 2 == 0 {
+                        with_alpha(lighten(color, 0.04), 0.18)
+                    } else {
+                        with_alpha(darken(color, 0.03), 0.12)
+                    }
+                }
+                CombinedFloorPattern::Wood => {
+                    if (row + col) % 2 == 0 {
+                        with_alpha(lighten(color, 0.035), 0.36)
+                    } else {
+                        with_alpha(darken(color, 0.04), 0.28)
+                    }
+                }
+                CombinedFloorPattern::Checker => {
+                    if (row + col) % 2 == 0 {
+                        palette.floor_checker_light
+                    } else {
+                        palette.floor_checker_dark
+                    }
+                }
+            };
+            paint_rect(window, px, py, cell_w, cell_h, cell_color);
+        }
+    }
+
+    paint_floor_grid(
+        window,
+        rx,
+        ry,
+        rw,
+        rh,
+        layout.unit,
+        cols,
+        rows,
+        with_alpha(palette.floor_grid, 0.54),
+    );
+}
+
+fn paint_combined_wall_frame(
+    window: &mut Window,
+    layout: CombinedOfficeLayout,
+    palette: &OfficePalette,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+) {
+    let unit_f: f32 = layout.unit.into();
+    let wall = px((unit_f * 0.42).clamp(5.0, 12.0));
+    let rx = layout.x(x);
+    let ry = layout.y(y);
+    let rw = layout.w(w);
+    let rh = layout.h(h);
+
+    paint_rect(window, rx, ry, rw, wall, palette.wall_front);
+    paint_rect(window, rx, ry + rh - wall, rw, wall, palette.wall_shadow);
+    paint_rect(window, rx, ry, wall, rh, palette.wall_front);
+    paint_rect(window, rx + rw - wall, ry, wall, rh, palette.wall_shadow);
+
+    paint_rect(
+        window,
+        rx,
+        ry,
+        rw,
+        px((unit_f * 0.08).clamp(1.0, 2.0)),
+        with_alpha(palette.wall_highlight, 0.7),
+    );
+    paint_rect(
+        window,
+        rx + wall,
+        ry + wall,
+        rw - wall * 2.0,
+        px(1.0),
+        with_alpha(palette.wall_highlight, 0.28),
+    );
+}
+
+fn paint_combined_room_label(
+    window: &mut Window,
+    cx: &mut App,
+    layout: CombinedOfficeLayout,
+    palette: &OfficePalette,
+    label: &str,
+    x: f32,
+    y: f32,
+    w: f32,
+) {
+    let center_x = layout.x(x + w / 2.0);
+    let center_y = layout.y(y + 1.0);
+    let label_w = px((label.chars().count().max(7) as f32 * 5.4 + 14.0).min(150.0));
+    paint_rounded_rect(
+        window,
+        center_x - label_w / 2.0,
+        center_y - px(9.0),
+        label_w,
+        px(17.0),
+        px(3.0),
+        with_alpha(palette.label_bg, 0.72),
+    );
+    paint_text_centered(window, cx, label, center_x, center_y, px(9.0), palette.text);
+}
+
+fn paint_combined_room(
+    window: &mut Window,
+    cx: &mut App,
+    layout: CombinedOfficeLayout,
+    palette: &OfficePalette,
+    label: &str,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    color: Hsla,
+    pattern: CombinedFloorPattern,
+) {
+    paint_combined_floor(window, layout, palette, x, y, w, h, color, pattern);
+    paint_combined_wall_frame(window, layout, palette, x, y, w, h);
+    paint_combined_room_label(window, cx, layout, palette, label, x, y, w);
+}
+
+fn paint_combined_door(
+    window: &mut Window,
+    layout: CombinedOfficeLayout,
+    palette: &OfficePalette,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+) {
+    paint_rect(
+        window,
+        layout.x(x),
+        layout.y(y),
+        layout.w(w),
+        layout.h(h),
+        palette.desk_light,
+    );
+    paint_rect(
+        window,
+        layout.x(x),
+        layout.y(y + h),
+        layout.w(w),
+        px(2.0),
+        with_alpha(palette.bg, 0.28),
+    );
+}
+
+fn paint_combined_desk(
+    window: &mut Window,
+    layout: CombinedOfficeLayout,
+    palette: &OfficePalette,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+) {
+    let rx = layout.x(x);
+    let ry = layout.y(y);
+    let rw = layout.w(w);
+    let rh = layout.h(h);
+
+    paint_rect(
+        window,
+        rx + px(2.0),
+        ry + rh,
+        rw - px(2.0),
+        px(4.0),
+        with_alpha(palette.bg, 0.34),
+    );
+    paint_rect(window, rx, ry, rw, rh, palette.desk_base);
+    paint_rect(window, rx, ry, rw, rh * 0.68, palette.desk_top);
+    paint_rect(window, rx, ry + rh * 0.68, rw, px(2.0), palette.desk_edge);
+    paint_rect(
+        window,
+        rx + px(3.0),
+        ry + px(2.0),
+        rw - px(6.0),
+        px(2.0),
+        with_alpha(palette.desk_light, 0.8),
+    );
+}
+
+fn paint_combined_pc(
+    window: &mut Window,
+    layout: CombinedOfficeLayout,
+    palette: &OfficePalette,
+    x: f32,
+    y: f32,
+    scale: f32,
+) {
+    let rx = layout.x(x);
+    let ry = layout.y(y);
+    let w = layout.w(1.05 * scale);
+    let h = layout.h(0.72 * scale);
+
+    paint_rect(window, rx, ry, w, h, palette.pc_bezel);
+    paint_rect(
+        window,
+        rx + layout.w(0.08 * scale),
+        ry + layout.h(0.08 * scale),
+        w - layout.w(0.16 * scale),
+        h - layout.h(0.20 * scale),
+        palette.pc_screen,
+    );
+    for idx in 0..4 {
+        let line = layout.w((0.28 + idx as f32 * 0.12) * scale);
+        let color = [
+            Hsla::from(gpui::rgba(0x60a5faff)),
+            palette.accent,
+            palette.green,
+            Hsla::from(gpui::rgba(0xfbbf24ff)),
+        ][idx];
+        paint_rect(
+            window,
+            rx + layout.w(0.14 * scale),
+            ry + layout.h((0.16 + idx as f32 * 0.11) * scale),
+            line,
+            px(1.3),
+            with_alpha(color, 0.8),
+        );
+    }
+    paint_rect(
+        window,
+        rx + w * 0.43,
+        ry + h,
+        w * 0.14,
+        layout.h(0.18 * scale),
+        palette.pc_bezel,
+    );
+    paint_rect(
+        window,
+        rx + w * 0.28,
+        ry + h + layout.h(0.16 * scale),
+        w * 0.44,
+        px(2.0),
+        palette.pc_bezel,
+    );
+}
+
+fn paint_combined_chair(
+    window: &mut Window,
+    layout: CombinedOfficeLayout,
+    palette: &OfficePalette,
+    color: Hsla,
+    x: f32,
+    y: f32,
+) {
+    paint_rect(
+        window,
+        layout.x(x),
+        layout.y(y),
+        layout.w(0.65),
+        layout.h(0.45),
+        darken(color, 0.08),
+    );
+    paint_rect(
+        window,
+        layout.x(x + 0.06),
+        layout.y(y + 0.06),
+        layout.w(0.53),
+        layout.h(0.27),
+        with_alpha(lighten(color, 0.06), 0.78),
+    );
+    paint_rect(
+        window,
+        layout.x(x + 0.12),
+        layout.y(y + 0.43),
+        layout.w(0.12),
+        layout.h(0.20),
+        palette.pc_bezel,
+    );
+    paint_rect(
+        window,
+        layout.x(x + 0.42),
+        layout.y(y + 0.43),
+        layout.w(0.12),
+        layout.h(0.20),
+        palette.pc_bezel,
+    );
+}
+
+fn paint_combined_workstation(
+    window: &mut Window,
+    layout: CombinedOfficeLayout,
+    palette: &OfficePalette,
+    x: f32,
+    y: f32,
+    accent: Hsla,
+) {
+    paint_combined_desk(window, layout, palette, x, y, 2.55, 1.25);
+    paint_combined_pc(window, layout, palette, x + 0.28, y - 0.55, 0.86);
+    paint_combined_pc(window, layout, palette, x + 1.35, y - 0.55, 0.86);
+    paint_combined_chair(window, layout, palette, accent, x + 0.35, y + 1.18);
+    paint_combined_chair(window, layout, palette, accent, x + 1.45, y + 1.18);
+}
+
+fn paint_combined_bookshelf(
+    window: &mut Window,
+    layout: CombinedOfficeLayout,
+    palette: &OfficePalette,
+    x: f32,
+    y: f32,
+    w: f32,
+) {
+    paint_rect(
+        window,
+        layout.x(x),
+        layout.y(y),
+        layout.w(w),
+        layout.h(0.95),
+        palette.shelf_base,
+    );
+    paint_rect(
+        window,
+        layout.x(x + 0.1),
+        layout.y(y + 0.1),
+        layout.w(w - 0.2),
+        layout.h(0.65),
+        palette.shelf_wood,
+    );
+
+    let book_colors = [
+        Hsla::from(gpui::rgba(0xf472b6ff)),
+        Hsla::from(gpui::rgba(0x60a5faff)),
+        palette.green,
+        Hsla::from(gpui::rgba(0xfbbf24ff)),
+        Hsla::from(gpui::rgba(0xa78bfaff)),
+        Hsla::from(gpui::rgba(0xfb923cff)),
+    ];
+    let count = (w * 4.0).round() as usize;
+    for idx in 0..count {
+        let bx = x + 0.22 + idx as f32 * 0.22;
+        if bx > x + w - 0.22 {
+            break;
+        }
+        paint_rect(
+            window,
+            layout.x(bx),
+            layout.y(y + 0.18),
+            layout.w(0.12),
+            layout.h(0.48 + (idx % 3) as f32 * 0.06),
+            with_alpha(book_colors[idx % book_colors.len()], 0.88),
+        );
+    }
+}
+
+fn paint_combined_plant(
+    window: &mut Window,
+    layout: CombinedOfficeLayout,
+    palette: &OfficePalette,
+    x: f32,
+    y: f32,
+) {
+    let cx = layout.x(x + 0.5);
+    let pot_y = layout.y(y + 0.56);
+    paint_rect(
+        window,
+        cx - layout.w(0.24),
+        pot_y,
+        layout.w(0.48),
+        layout.h(0.36),
+        palette.plant_pot,
+    );
+    paint_rect(
+        window,
+        cx - layout.w(0.28),
+        pot_y - layout.h(0.08),
+        layout.w(0.56),
+        layout.h(0.10),
+        lighten(palette.plant_pot, 0.06),
+    );
+    paint_rounded_rect(
+        window,
+        cx - layout.w(0.42),
+        layout.y(y + 0.08),
+        layout.w(0.84),
+        layout.h(0.44),
+        layout.w(0.20),
+        palette.leaf1,
+    );
+    paint_rounded_rect(
+        window,
+        cx - layout.w(0.30),
+        layout.y(y - 0.04),
+        layout.w(0.60),
+        layout.h(0.48),
+        layout.w(0.18),
+        palette.leaf2,
+    );
+    paint_rounded_rect(
+        window,
+        cx - layout.w(0.18),
+        layout.y(y - 0.12),
+        layout.w(0.36),
+        layout.h(0.40),
+        layout.w(0.14),
+        palette.leaf3,
+    );
+}
+
+fn paint_combined_screen(
+    window: &mut Window,
+    layout: CombinedOfficeLayout,
+    palette: &OfficePalette,
+    x: f32,
+    y: f32,
+) {
+    paint_rect(
+        window,
+        layout.x(x),
+        layout.y(y),
+        layout.w(3.0),
+        layout.h(1.15),
+        palette.pc_bezel,
+    );
+    paint_rect(
+        window,
+        layout.x(x + 0.16),
+        layout.y(y + 0.16),
+        layout.w(2.68),
+        layout.h(0.76),
+        with_alpha(palette.pc_glow, 0.72),
+    );
+}
+
+fn paint_combined_whiteboard(
+    window: &mut Window,
+    layout: CombinedOfficeLayout,
+    palette: &OfficePalette,
+    x: f32,
+    y: f32,
+) {
+    paint_rect(
+        window,
+        layout.x(x),
+        layout.y(y),
+        layout.w(2.4),
+        layout.h(1.3),
+        palette.pc_bezel,
+    );
+    paint_rect(
+        window,
+        layout.x(x + 0.12),
+        layout.y(y + 0.12),
+        layout.w(2.16),
+        layout.h(1.02),
+        Hsla::from(gpui::rgba(0xd8e2e8ff)),
+    );
+    for idx in 0..5 {
+        let color = [
+            Hsla::from(gpui::rgba(0xfb923cff)),
+            Hsla::from(gpui::rgba(0x60a5faff)),
+            Hsla::from(gpui::rgba(0x4ade80ff)),
+            Hsla::from(gpui::rgba(0xf472b6ff)),
+            Hsla::from(gpui::rgba(0xfbbf24ff)),
+        ][idx];
+        paint_rect(
+            window,
+            layout.x(x + 0.32 + idx as f32 * 0.36),
+            layout.y(y + 0.34 + (idx % 2) as f32 * 0.26),
+            layout.w(0.2),
+            layout.h(0.12),
+            color,
+        );
+    }
+}
+
+fn paint_combined_meeting_table(
+    window: &mut Window,
+    layout: CombinedOfficeLayout,
+    palette: &OfficePalette,
+    x: f32,
+    y: f32,
+    chair_color: Hsla,
+) {
+    paint_combined_desk(window, layout, palette, x, y, 4.3, 1.35);
+    paint_combined_pc(window, layout, palette, x + 1.85, y - 0.35, 0.72);
+    for idx in 0..4 {
+        paint_combined_chair(
+            window,
+            layout,
+            palette,
+            chair_color,
+            x + 0.45 + idx as f32 * 0.9,
+            y + 1.26,
+        );
+    }
+    paint_combined_chair(window, layout, palette, chair_color, x - 0.58, y + 0.38);
+    paint_combined_chair(window, layout, palette, chair_color, x + 4.22, y + 0.38);
+}
+
+fn paint_combined_round_table(
+    window: &mut Window,
+    layout: CombinedOfficeLayout,
+    palette: &OfficePalette,
+    x: f32,
+    y: f32,
+) {
+    paint_rounded_rect(
+        window,
+        layout.x(x),
+        layout.y(y),
+        layout.w(2.0),
+        layout.h(1.8),
+        layout.w(0.9),
+        Hsla::from(gpui::rgba(0x9a5b4dff)),
+    );
+    paint_rounded_rect(
+        window,
+        layout.x(x + 0.24),
+        layout.y(y + 0.18),
+        layout.w(1.52),
+        layout.h(1.10),
+        layout.w(0.55),
+        with_alpha(palette.desk_light, 0.35),
+    );
+    for (cx, cy) in [
+        (x - 0.72, y + 0.35),
+        (x + 2.08, y + 0.35),
+        (x + 0.64, y - 0.68),
+        (x + 0.64, y + 1.95),
+    ] {
+        paint_combined_chair(
+            window,
+            layout,
+            palette,
+            Hsla::from(gpui::rgba(0x7a3d6aff)),
+            cx,
+            cy,
+        );
+    }
+}
+
+fn paint_combined_server_rack(
+    window: &mut Window,
+    layout: CombinedOfficeLayout,
+    palette: &OfficePalette,
+    x: f32,
+    y: f32,
+    h: f32,
+) {
+    paint_rect(
+        window,
+        layout.x(x),
+        layout.y(y),
+        layout.w(0.88),
+        layout.h(h),
+        Hsla::from(gpui::rgba(0x101820ff)),
+    );
+    paint_rect(
+        window,
+        layout.x(x + 0.08),
+        layout.y(y + 0.12),
+        layout.w(0.72),
+        layout.h(h - 0.24),
+        Hsla::from(gpui::rgba(0x1d2732ff)),
+    );
+    for row in 0..8 {
+        paint_rect(
+            window,
+            layout.x(x + 0.16),
+            layout.y(y + 0.32 + row as f32 * 0.34),
+            layout.w(0.12),
+            layout.h(0.08),
+            if row % 3 == 0 {
+                palette.green
+            } else {
+                Hsla::from(gpui::rgba(0xfbbf24ff))
+            },
+        );
+        paint_rect(
+            window,
+            layout.x(x + 0.38),
+            layout.y(y + 0.32 + row as f32 * 0.34),
+            layout.w(0.28),
+            layout.h(0.04),
+            with_alpha(palette.text, 0.18),
+        );
+    }
+}
+
+fn paint_combined_sofa(
+    window: &mut Window,
+    layout: CombinedOfficeLayout,
+    palette: &OfficePalette,
+    x: f32,
+    y: f32,
+    vertical: bool,
+) {
+    let (w, h) = if vertical { (1.45, 3.2) } else { (3.2, 1.45) };
+    paint_rect(
+        window,
+        layout.x(x + 0.1),
+        layout.y(y + h),
+        layout.w(w),
+        px(4.0),
+        with_alpha(palette.bg, 0.32),
+    );
+    paint_rect(
+        window,
+        layout.x(x),
+        layout.y(y),
+        layout.w(w),
+        layout.h(h),
+        palette.sofa_base,
+    );
+    paint_rect(
+        window,
+        layout.x(x + 0.12),
+        layout.y(y + 0.12),
+        layout.w(w - 0.24),
+        layout.h(h - 0.34),
+        palette.sofa_top,
+    );
+    paint_rect(
+        window,
+        layout.x(x + 0.12),
+        layout.y(y + 0.12),
+        layout.w(w - 0.24),
+        layout.h(0.16),
+        with_alpha(palette.text, 0.08),
+    );
+}
+
+fn paint_combined_camera(
+    window: &mut Window,
+    layout: CombinedOfficeLayout,
+    palette: &OfficePalette,
+    x: f32,
+    y: f32,
+) {
+    paint_rect(
+        window,
+        layout.x(x),
+        layout.y(y),
+        layout.w(1.0),
+        layout.h(0.6),
+        palette.pc_bezel,
+    );
+    paint_rect(
+        window,
+        layout.x(x + 0.88),
+        layout.y(y + 0.16),
+        layout.w(0.42),
+        layout.h(0.28),
+        palette.pc_bezel,
+    );
+    paint_rect(
+        window,
+        layout.x(x + 0.42),
+        layout.y(y + 0.6),
+        layout.w(0.12),
+        layout.h(1.2),
+        palette.pc_bezel,
+    );
+    paint_rect(
+        window,
+        layout.x(x + 0.16),
+        layout.y(y + 1.74),
+        layout.w(0.72),
+        layout.h(0.08),
+        palette.pc_bezel,
+    );
+}
+
+fn paint_combined_archive_shelves(
+    window: &mut Window,
+    layout: CombinedOfficeLayout,
+    palette: &OfficePalette,
+    x: f32,
+    y: f32,
+) {
+    for row in 0..3 {
+        for col in 0..4 {
+            let rx = x + col as f32 * 1.0;
+            let ry = y + row as f32 * 0.82;
+            paint_rect(
+                window,
+                layout.x(rx),
+                layout.y(ry),
+                layout.w(0.82),
+                layout.h(0.62),
+                palette.shelf_base,
+            );
+            paint_rect(
+                window,
+                layout.x(rx + 0.1),
+                layout.y(ry + 0.12),
+                layout.w(0.62),
+                layout.h(0.08),
+                with_alpha(palette.text, 0.12),
+            );
+        }
+    }
+}
+
+fn paint_combined_entrance(
+    window: &mut Window,
+    layout: CombinedOfficeLayout,
+    palette: &OfficePalette,
+) {
+    paint_rect(
+        window,
+        layout.x(29.4),
+        layout.y(33.5),
+        layout.w(5.0),
+        layout.h(2.25),
+        Hsla::from(gpui::rgba(0x5a1e23ff)),
+    );
+    paint_rect(
+        window,
+        layout.x(30.4),
+        layout.y(34.25),
+        layout.w(3.0),
+        layout.h(0.85),
+        palette.desk_base,
+    );
+    paint_combined_pc(window, layout, palette, 31.3, 33.72, 0.9);
+    paint_rect(
+        window,
+        layout.x(30.6),
+        layout.y(37.35),
+        layout.w(2.8),
+        layout.h(1.15),
+        Hsla::from(gpui::rgba(0x2f5368ff)),
+    );
+    paint_rect(
+        window,
+        layout.x(31.94),
+        layout.y(37.35),
+        px(2.0),
+        layout.h(1.15),
+        with_alpha(palette.text, 0.18),
+    );
+    paint_rect(
+        window,
+        layout.x(30.4),
+        layout.y(38.58),
+        layout.w(3.2),
+        layout.h(0.55),
+        Hsla::from(gpui::rgba(0xa83d4aff)),
+    );
+}
+
+fn paint_combined_static_furniture(
+    window: &mut Window,
+    layout: CombinedOfficeLayout,
+    palette: &OfficePalette,
+) {
+    let blue = Hsla::from(gpui::rgba(0x365fbbff));
+    let green = Hsla::from(gpui::rgba(0x4b8f4dff));
+    let violet = Hsla::from(gpui::rgba(0x7a3d85ff));
+    let amber = Hsla::from(gpui::rgba(0x9a6432ff));
+
+    paint_combined_bookshelf(window, layout, palette, 3.6, 2.2, 3.4);
+    paint_combined_bookshelf(window, layout, palette, 8.6, 2.2, 3.4);
+    paint_combined_plant(window, layout, palette, 2.0, 2.4);
+    paint_combined_plant(window, layout, palette, 13.6, 2.4);
+    paint_combined_workstation(window, layout, palette, 3.2, 5.2, violet);
+    paint_combined_workstation(window, layout, palette, 8.8, 5.2, blue);
+
+    paint_combined_screen(window, layout, palette, 19.2, 2.6);
+    paint_combined_whiteboard(window, layout, palette, 24.0, 2.4);
+    paint_combined_meeting_table(window, layout, palette, 18.6, 5.2, blue);
+
+    paint_combined_bookshelf(window, layout, palette, 28.0, 2.2, 1.4);
+    paint_combined_desk(window, layout, palette, 31.2, 3.1, 5.0, 1.0);
+    paint_combined_pc(window, layout, palette, 31.8, 2.45, 0.75);
+    paint_combined_pc(window, layout, palette, 33.4, 2.45, 0.75);
+    paint_combined_pc(window, layout, palette, 35.0, 2.45, 0.75);
+    paint_combined_round_table(window, layout, palette, 31.6, 5.4);
+    paint_combined_plant(window, layout, palette, 27.0, 7.2);
+    paint_combined_plant(window, layout, palette, 37.0, 7.2);
+
+    paint_combined_screen(window, layout, palette, 43.2, 2.6);
+    paint_combined_whiteboard(window, layout, palette, 40.8, 2.4);
+    paint_combined_meeting_table(window, layout, palette, 42.0, 5.2, green);
+    paint_combined_plant(window, layout, palette, 48.0, 2.4);
+
+    paint_combined_bookshelf(window, layout, palette, 57.4, 2.2, 3.6);
+    paint_combined_whiteboard(window, layout, palette, 52.7, 2.4);
+    paint_combined_desk(window, layout, palette, 54.8, 5.0, 4.1, 1.9);
+    paint_combined_pc(window, layout, palette, 56.1, 4.1, 0.95);
+    paint_combined_plant(window, layout, palette, 61.0, 2.5);
+
+    paint_combined_whiteboard(window, layout, palette, 7.4, 11.3);
+    paint_combined_workstation(window, layout, palette, 3.0, 13.1, blue);
+    paint_combined_workstation(window, layout, palette, 11.7, 13.2, violet);
+    paint_combined_workstation(window, layout, palette, 17.3, 13.2, violet);
+    paint_combined_plant(window, layout, palette, 9.2, 17.4);
+
+    paint_combined_server_rack(window, layout, palette, 2.8, 21.0, 3.4);
+    paint_combined_server_rack(window, layout, palette, 4.1, 21.0, 3.4);
+    paint_combined_server_rack(window, layout, palette, 5.4, 21.0, 3.4);
+    paint_combined_server_rack(window, layout, palette, 11.9, 21.0, 3.4);
+    paint_combined_server_rack(window, layout, palette, 13.2, 21.0, 3.4);
+    paint_combined_server_rack(window, layout, palette, 14.5, 21.0, 3.4);
+    paint_combined_pc(window, layout, palette, 15.6, 22.3, 0.8);
+
+    paint_combined_bookshelf(window, layout, palette, 2.2, 27.5, 1.4);
+    paint_combined_desk(window, layout, palette, 4.2, 29.7, 3.6, 1.45);
+    paint_combined_pc(window, layout, palette, 5.2, 29.0, 0.86);
+    paint_combined_desk(window, layout, palette, 14.4, 29.4, 3.9, 1.5);
+    paint_combined_pc(window, layout, palette, 15.6, 28.7, 0.86);
+    paint_combined_bookshelf(window, layout, palette, 10.9, 27.4, 1.8);
+
+    paint_combined_whiteboard(window, layout, palette, 2.8, 35.0);
+    paint_combined_desk(window, layout, palette, 4.4, 36.1, 3.1, 1.3);
+    paint_combined_archive_shelves(window, layout, palette, 17.0, 35.0);
+
+    paint_combined_sofa(window, layout, palette, 28.8, 16.8, false);
+    paint_combined_sofa(window, layout, palette, 34.6, 16.8, false);
+    paint_combined_sofa(window, layout, palette, 28.4, 22.8, true);
+    paint_combined_sofa(window, layout, palette, 39.0, 22.8, true);
+    paint_combined_desk(window, layout, palette, 30.5, 18.4, 4.1, 1.6);
+    paint_combined_pc(window, layout, palette, 32.0, 17.75, 0.9);
+
+    paint_combined_workstation(window, layout, palette, 44.0, 13.2, blue);
+    paint_combined_workstation(window, layout, palette, 49.5, 13.2, blue);
+    paint_combined_whiteboard(window, layout, palette, 59.2, 11.8);
+    paint_combined_workstation(window, layout, palette, 57.0, 14.0, violet);
+    paint_combined_plant(window, layout, palette, 60.9, 17.5);
+
+    paint_combined_desk(window, layout, palette, 47.5, 24.0, 5.3, 1.45);
+    for idx in 0..3 {
+        paint_combined_chair(
+            window,
+            layout,
+            palette,
+            [violet, amber, Hsla::from(gpui::rgba(0xfbbf24ff))][idx],
+            48.2 + idx as f32 * 1.7,
+            23.2,
+        );
+    }
+    paint_combined_workstation(window, layout, palette, 57.0, 23.0, blue);
+    paint_combined_workstation(window, layout, palette, 57.0, 26.0, blue);
+
+    for row in 0..2 {
+        for col in 0..3 {
+            paint_combined_chair(
+                window,
+                layout,
+                palette,
+                blue,
+                45.0 + col as f32 * 1.8,
+                33.8 + row as f32 * 1.7,
+            );
+        }
+    }
+    paint_combined_camera(window, layout, palette, 53.7, 34.1);
+    paint_rect(
+        window,
+        layout.x(56.0),
+        layout.y(33.7),
+        layout.w(3.9),
+        layout.h(2.25),
+        Hsla::from(gpui::rgba(0x39b56dff)),
+    );
+    paint_rect(
+        window,
+        layout.x(56.0),
+        layout.y(33.7),
+        layout.w(3.9),
+        px(3.0),
+        with_alpha(palette.text, 0.16),
+    );
+    paint_combined_camera(window, layout, palette, 60.4, 34.0);
+
+    paint_combined_entrance(window, layout, palette);
+}
+
+fn combined_agent_spot(section_idx: usize, agent_idx: usize) -> (f32, f32) {
+    const CURRENT: [(f32, f32); 8] = [
+        (32.4, 17.1),
+        (32.2, 25.9),
+        (30.0, 17.7),
+        (34.6, 17.7),
+        (30.2, 26.6),
+        (34.0, 26.6),
+        (31.2, 14.0),
+        (35.0, 14.0),
+    ];
+    const LEFT: [(f32, f32); 9] = [
+        (4.6, 6.2),
+        (9.6, 6.2),
+        (12.9, 14.2),
+        (18.5, 14.2),
+        (5.2, 22.8),
+        (15.2, 22.8),
+        (5.6, 30.0),
+        (15.8, 30.0),
+        (6.0, 36.5),
+    ];
+    const RIGHT: [(f32, f32); 9] = [
+        (45.0, 14.2),
+        (50.6, 14.2),
+        (58.4, 14.6),
+        (48.5, 24.0),
+        (51.7, 24.0),
+        (58.4, 24.0),
+        (58.4, 27.0),
+        (45.8, 35.0),
+        (58.4, 35.3),
+    ];
+    const TOP: [(f32, f32); 8] = [
+        (20.0, 6.0),
+        (22.4, 6.0),
+        (33.1, 6.8),
+        (43.5, 6.0),
+        (46.0, 6.0),
+        (56.9, 6.4),
+        (33.1, 4.0),
+        (36.0, 4.0),
+    ];
+
+    let spots = if section_idx == 0 {
+        &CURRENT[..]
+    } else {
+        match (section_idx - 1) % 3 {
+            0 => &LEFT[..],
+            1 => &RIGHT[..],
+            _ => &TOP[..],
+        }
+    };
+    let base = spots[agent_idx % spots.len()];
+    let overflow = agent_idx / spots.len();
+    (
+        base.0 + (overflow % 3) as f32 * 0.42,
+        base.1 + ((overflow / 3) % 2) as f32 * 0.42,
+    )
+}
+
+fn paint_combined_agent(
+    window: &mut Window,
+    cx: &mut App,
+    layout: CombinedOfficeLayout,
+    palette: &OfficePalette,
+    agent: &CombinedOfficeAgent,
+    x: f32,
+    y: f32,
+    show_label: bool,
+) {
+    let bx = layout.x(x);
+    let by = layout.y(y);
+    let skin = Hsla::from(gpui::rgba(0xf2c8a2ff));
+    let status = combined_status_label(&agent.status);
+    let sc = status_color(&status);
+
+    paint_rounded_rect(
+        window,
+        layout.x(x - 0.48),
+        layout.y(y + 0.58),
+        layout.w(0.96),
+        layout.h(0.24),
+        layout.w(0.14),
+        with_alpha(palette.bg, 0.32),
+    );
+    paint_rounded_rect(
+        window,
+        layout.x(x - 0.54),
+        layout.y(y - 0.62),
+        layout.w(1.08),
+        layout.h(1.62),
+        layout.w(0.24),
+        with_alpha(sc, 0.12),
+    );
+    paint_rect(
+        window,
+        layout.x(x - 0.34),
+        layout.y(y + 0.26),
+        layout.w(0.22),
+        layout.h(0.52),
+        palette.pc_bezel,
+    );
+    paint_rect(
+        window,
+        layout.x(x + 0.12),
+        layout.y(y + 0.26),
+        layout.w(0.22),
+        layout.h(0.52),
+        palette.pc_bezel,
+    );
+    paint_rect(
+        window,
+        layout.x(x - 0.42),
+        layout.y(y + 0.68),
+        layout.w(0.34),
+        layout.h(0.16),
+        agent.color,
+    );
+    paint_rect(
+        window,
+        layout.x(x + 0.08),
+        layout.y(y + 0.68),
+        layout.w(0.34),
+        layout.h(0.16),
+        agent.color,
+    );
+    paint_rect(
+        window,
+        layout.x(x - 0.42),
+        layout.y(y - 0.18),
+        layout.w(0.84),
+        layout.h(0.54),
+        with_alpha(agent.color, 0.86),
+    );
+    paint_rect(
+        window,
+        layout.x(x - 0.60),
+        layout.y(y - 0.10),
+        layout.w(0.22),
+        layout.h(0.46),
+        with_alpha(agent.color, 0.7),
+    );
+    paint_rect(
+        window,
+        layout.x(x + 0.38),
+        layout.y(y - 0.10),
+        layout.w(0.22),
+        layout.h(0.46),
+        with_alpha(agent.color, 0.7),
+    );
+    paint_rect(
+        window,
+        layout.x(x - 0.12),
+        layout.y(y - 0.40),
+        layout.w(0.24),
+        layout.h(0.20),
+        skin,
+    );
+    paint_rect(
+        window,
+        layout.x(x - 0.38),
+        layout.y(y - 0.92),
+        layout.w(0.76),
+        layout.h(0.58),
+        skin,
+    );
+    paint_rect(
+        window,
+        layout.x(x - 0.46),
+        layout.y(y - 1.08),
+        layout.w(0.92),
+        layout.h(0.34),
+        agent.color,
+    );
+    paint_rect(
+        window,
+        layout.x(x - 0.32),
+        layout.y(y - 0.74),
+        layout.w(0.12),
+        layout.h(0.12),
+        Hsla::from(gpui::rgba(0x111827ff)),
+    );
+    paint_rect(
+        window,
+        layout.x(x + 0.20),
+        layout.y(y - 0.74),
+        layout.w(0.12),
+        layout.h(0.12),
+        Hsla::from(gpui::rgba(0x111827ff)),
+    );
+
+    paint_rounded_rect(
+        window,
+        layout.x(x + 0.34),
+        layout.y(y - 0.36),
+        layout.w(0.30),
+        layout.h(0.30),
+        layout.w(0.15),
+        sc,
+    );
+
+    if show_label {
+        let name = compact_label(&agent.name, 12);
+        let name_w = px(name.chars().count().max(4) as f32 * 5.4 + 14.0);
+        paint_rounded_rect(
+            window,
+            bx - name_w / 2.0,
+            by - layout.h(1.65),
+            name_w,
+            px(15.0),
+            px(3.0),
+            palette.label_bg,
+        );
+        paint_rect(
+            window,
+            bx - name_w / 2.0,
+            by - layout.h(1.65),
+            px(3.0),
+            px(15.0),
+            agent.color,
+        );
+        paint_text_centered(
+            window,
+            cx,
+            &name,
+            bx,
+            by - layout.h(1.36),
+            px(8.0),
+            palette.text,
+        );
+
+        let status_w = px(status.chars().count().max(5) as f32 * 4.9 + 10.0);
+        paint_rounded_rect(
+            window,
+            bx - status_w / 2.0,
+            by - layout.h(1.05),
+            status_w,
+            px(12.0),
+            px(5.0),
+            with_alpha(palette.label_bg, 0.86),
+        );
+        paint_text_centered(window, cx, &status, bx, by - layout.h(0.81), px(8.0), sc);
+    }
+}
+
+fn paint_combined_agents(
+    window: &mut Window,
+    cx: &mut App,
+    layout: CombinedOfficeLayout,
+    palette: &OfficePalette,
+    sections: &[CombinedOfficeSection],
+) {
+    let total_agents = sections
+        .iter()
+        .map(|section| section.agents.len())
+        .sum::<usize>();
+    if total_agents == 0 {
+        paint_text_centered(
+            window,
+            cx,
+            "NO AGENTS LINKED",
+            layout.x(32.0),
+            layout.y(20.0),
+            px(12.0),
+            with_alpha(palette.text, 0.65),
+        );
+        return;
+    }
+
+    for (section_idx, section) in sections.iter().enumerate() {
+        for (agent_idx, agent) in section.agents.iter().enumerate() {
+            let (x, y) = combined_agent_spot(section_idx, agent_idx);
+            let show_label = total_agents <= 18 || section.is_current || agent_idx == 0;
+            paint_combined_agent(window, cx, layout, palette, agent, x, y, show_label);
+        }
+    }
+}
+
+fn paint_combined_office(
+    bounds: Bounds<Pixels>,
+    sections: &[CombinedOfficeSection],
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let palette = OfficePalette::from_theme(cx.theme());
+    let layout = CombinedOfficeLayout::from_bounds(bounds);
+    let corridor = Hsla::from(gpui::rgba(0x264b6aff));
+    let room_blue = Hsla::from(gpui::rgba(0x2f5577ff));
+    let room_gray = Hsla::from(gpui::rgba(0x3b454cff));
+    let room_wood = Hsla::from(gpui::rgba(0x75421cff));
+    let room_product = Hsla::from(gpui::rgba(0x2b5878ff));
+
+    window.paint_quad(fill(bounds, palette.bg));
+    paint_combined_floor(
+        window,
+        layout,
+        &palette,
+        0.8,
+        0.8,
+        62.4,
+        38.6,
+        corridor,
+        CombinedFloorPattern::Tile,
+    );
+    paint_combined_wall_frame(window, layout, &palette, 0.8, 0.8, 62.4, 38.6);
+
+    paint_combined_room(
+        window,
+        cx,
+        layout,
+        &palette,
+        "DEV ROOM",
+        1.5,
+        1.5,
+        13.8,
+        8.0,
+        room_blue,
+        CombinedFloorPattern::Tile,
+    );
+    paint_combined_room(
+        window,
+        cx,
+        layout,
+        &palette,
+        "MEETING ROOM A",
+        16.0,
+        1.5,
+        9.7,
+        8.0,
+        room_gray,
+        CombinedFloorPattern::Tile,
+    );
+    paint_combined_room(
+        window,
+        cx,
+        layout,
+        &palette,
+        "BREAK AREA",
+        26.4,
+        1.5,
+        12.8,
+        8.0,
+        room_wood,
+        CombinedFloorPattern::Wood,
+    );
+    paint_combined_room(
+        window,
+        cx,
+        layout,
+        &palette,
+        "MEETING ROOM B",
+        40.0,
+        1.5,
+        9.7,
+        8.0,
+        room_gray,
+        CombinedFloorPattern::Tile,
+    );
+    paint_combined_room(
+        window,
+        cx,
+        layout,
+        &palette,
+        "MANAGER OFFICE",
+        50.5,
+        1.5,
+        12.0,
+        8.0,
+        room_blue,
+        CombinedFloorPattern::Tile,
+    );
+
+    paint_combined_room(
+        window,
+        cx,
+        layout,
+        &palette,
+        "DESIGN ROOM",
+        1.5,
+        10.2,
+        8.2,
+        8.0,
+        room_gray,
+        CombinedFloorPattern::Tile,
+    );
+    paint_combined_room(
+        window,
+        cx,
+        layout,
+        &palette,
+        "SERVER ROOM",
+        1.5,
+        19.5,
+        8.2,
+        6.2,
+        Hsla::from(gpui::rgba(0x273642ff)),
+        CombinedFloorPattern::Tile,
+    );
+    paint_combined_room(
+        window,
+        cx,
+        layout,
+        &palette,
+        "DATABASE ROOM",
+        10.4,
+        19.5,
+        8.2,
+        6.2,
+        Hsla::from(gpui::rgba(0x273642ff)),
+        CombinedFloorPattern::Tile,
+    );
+    paint_combined_room(
+        window,
+        cx,
+        layout,
+        &palette,
+        "HR OFFICE",
+        1.5,
+        26.5,
+        8.2,
+        6.6,
+        room_gray,
+        CombinedFloorPattern::Tile,
+    );
+    paint_combined_room(
+        window,
+        cx,
+        layout,
+        &palette,
+        "FINANCE OFFICE",
+        10.4,
+        26.5,
+        9.6,
+        6.6,
+        room_gray,
+        CombinedFloorPattern::Tile,
+    );
+    paint_combined_room(
+        window,
+        cx,
+        layout,
+        &palette,
+        "FOCUS ROOM",
+        1.5,
+        34.0,
+        9.8,
+        4.8,
+        room_gray,
+        CombinedFloorPattern::Tile,
+    );
+    paint_combined_room(
+        window,
+        cx,
+        layout,
+        &palette,
+        "ARCHIVE ROOM",
+        15.0,
+        34.0,
+        8.4,
+        4.8,
+        Hsla::from(gpui::rgba(0x31465aff)),
+        CombinedFloorPattern::Tile,
+    );
+
+    paint_combined_room(
+        window,
+        cx,
+        layout,
+        &palette,
+        "COORDINATION",
+        23.4,
+        11.2,
+        17.2,
+        10.8,
+        Hsla::from(gpui::rgba(0x7a431eff)),
+        CombinedFloorPattern::Wood,
+    );
+    paint_combined_room(
+        window,
+        cx,
+        layout,
+        &palette,
+        "DEV",
+        26.0,
+        22.0,
+        12.0,
+        10.8,
+        palette.floor_kitchen,
+        CombinedFloorPattern::Checker,
+    );
+
+    paint_combined_room(
+        window,
+        cx,
+        layout,
+        &palette,
+        "QA ROOM",
+        55.0,
+        10.2,
+        7.5,
+        8.0,
+        room_gray,
+        CombinedFloorPattern::Tile,
+    );
+    paint_combined_room(
+        window,
+        cx,
+        layout,
+        &palette,
+        "PRODUCT ROOM",
+        46.5,
+        20.2,
+        8.0,
+        8.0,
+        room_product,
+        CombinedFloorPattern::Tile,
+    );
+    paint_combined_room(
+        window,
+        cx,
+        layout,
+        &palette,
+        "SUPPORT ROOM",
+        55.2,
+        20.2,
+        7.3,
+        8.0,
+        room_blue,
+        CombinedFloorPattern::Tile,
+    );
+    paint_combined_room(
+        window,
+        cx,
+        layout,
+        &palette,
+        "TRAINING ROOM",
+        42.5,
+        32.0,
+        9.5,
+        6.8,
+        room_gray,
+        CombinedFloorPattern::Tile,
+    );
+    paint_combined_room(
+        window,
+        cx,
+        layout,
+        &palette,
+        "RECORDING STUDIO",
+        52.7,
+        32.0,
+        9.8,
+        6.8,
+        room_gray,
+        CombinedFloorPattern::Tile,
+    );
+
+    for (x, y, w, h) in [
+        (7.0, 9.1, 2.2, 0.24),
+        (20.0, 9.1, 2.2, 0.24),
+        (32.0, 9.1, 2.2, 0.24),
+        (44.0, 9.1, 2.2, 0.24),
+        (55.0, 9.1, 2.2, 0.24),
+        (9.3, 14.0, 0.24, 2.0),
+        (18.4, 22.0, 0.24, 2.0),
+        (20.0, 29.2, 0.24, 2.0),
+        (40.4, 16.4, 0.24, 2.0),
+        (54.5, 24.0, 0.24, 2.0),
+        (52.0, 35.2, 0.24, 2.0),
+    ] {
+        paint_combined_door(window, layout, &palette, x, y, w, h);
+    }
+
+    paint_combined_static_furniture(window, layout, &palette);
+    paint_combined_agents(window, cx, layout, &palette, sections);
+}
+
 impl super::TeamWorkspacePanel {
     fn render_office_chat_panel(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
@@ -2148,6 +3715,25 @@ impl super::TeamWorkspacePanel {
     ) -> impl IntoElement {
         let theme = cx.theme().clone();
         let view = cx.entity().clone();
+        let combined_available = self.cross_team_target_instance_id.is_some()
+            || self.cross_team_peer_instance_id.is_some();
+        if !combined_available && self.office_combined_mode {
+            self.office_combined_mode = false;
+        }
+        let show_combined_office = combined_available && self.office_combined_mode;
+        if show_combined_office {
+            self.office_quick_chat_agent_id = None;
+            self.office_state.dragged_agent_idx = None;
+        }
+        let combined_sections = if show_combined_office {
+            self.combined_office_sections(cx)
+        } else {
+            Vec::new()
+        };
+        let combined_agent_count = combined_sections
+            .iter()
+            .map(|section| section.agents.len())
+            .sum::<usize>();
 
         // Gather active agents for the sidebar
         let mut active_agents: Vec<(String, String, String, usize, Hsla)> = Vec::new();
@@ -2187,12 +3773,12 @@ impl super::TeamWorkspacePanel {
         });
 
         // Avoid competing with text input while the inline office chat is active.
-        let quick_chat_open = self.office_quick_chat_agent_id.is_some();
+        let quick_chat_open = !show_combined_office && self.office_quick_chat_agent_id.is_some();
         if !quick_chat_open {
             self.office_state.tick();
         }
         let should_continue_office_animation =
-            !quick_chat_open && self.office_state.needs_animation_tick();
+            !show_combined_office && !quick_chat_open && self.office_state.needs_animation_tick();
         let office_animation_delay = if self.office_state.has_active_motion() {
             std::time::Duration::from_millis(50)
         } else {
@@ -2408,6 +3994,115 @@ impl super::TeamWorkspacePanel {
                     .into_any_element()
             });
 
+            let mode_switch = combined_available.then(|| {
+                let mut team_list = v_flex().w_full().gap(px(5.0)).pt(px(6.0));
+                for (idx, section) in combined_sections.iter().enumerate() {
+                    let accent = if section.is_current {
+                        theme.primary
+                    } else {
+                        Hsla::from(gpui::rgba(
+                            [0xa78bfaff, 0x60a5faff, 0x34d399ff, 0xfbbf24ff, 0xf472b6ff][idx % 5],
+                        ))
+                    };
+                    team_list = team_list.child(
+                        h_flex()
+                            .w_full()
+                            .min_w_0()
+                            .items_center()
+                            .gap(px(7.0))
+                            .px(px(8.0))
+                            .py(px(5.0))
+                            .rounded(px(7.0))
+                            .bg(accent.opacity(0.08))
+                            .border_1()
+                            .border_color(accent.opacity(0.22))
+                            .child(div().w(px(7.0)).h(px(7.0)).rounded_full().bg(accent))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .overflow_hidden()
+                                    .truncate()
+                                    .text_size(px(10.0))
+                                    .text_color(theme.foreground)
+                                    .child(format!(
+                                        "{} / {}",
+                                        section.team_name, section.instance_name
+                                    )),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(10.0))
+                                    .text_color(theme.muted_foreground)
+                                    .child(section.agents.len().to_string()),
+                            ),
+                    );
+                }
+
+                v_flex()
+                    .w_full()
+                    .gap(px(8.0))
+                    .p(px(8.0))
+                    .rounded(px(10.0))
+                    .border_1()
+                    .border_color(theme.border)
+                    .bg(theme.secondary)
+                    .child(
+                        div()
+                            .text_size(px(10.0))
+                            .font_weight(gpui::FontWeight::BOLD)
+                            .text_color(theme.muted_foreground)
+                            .child("OFFICE VIEW"),
+                    )
+                    .child(
+                        h_flex()
+                            .w_full()
+                            .gap(px(6.0))
+                            .child(
+                                if show_combined_office {
+                                    Button::new("office-mode-normal")
+                                        .small()
+                                        .ghost()
+                                        .label("Office")
+                                } else {
+                                    Button::new("office-mode-normal")
+                                        .small()
+                                        .primary()
+                                        .label("Office")
+                                }
+                                .on_click(cx.listener(
+                                    |this, _, _, cx| {
+                                        this.office_combined_mode = false;
+                                        cx.notify();
+                                    },
+                                )),
+                            )
+                            .child(
+                                if show_combined_office {
+                                    Button::new("office-mode-combined")
+                                        .small()
+                                        .primary()
+                                        .label("Combined")
+                                } else {
+                                    Button::new("office-mode-combined")
+                                        .small()
+                                        .ghost()
+                                        .label("Combined")
+                                }
+                                .on_click(cx.listener(
+                                    |this, _, _, cx| {
+                                        this.office_combined_mode = true;
+                                        this.office_quick_chat_agent_id = None;
+                                        this.office_state.dragged_agent_idx = None;
+                                        cx.notify();
+                                    },
+                                )),
+                            ),
+                    )
+                    .when(show_combined_office, |panel| panel.child(team_list))
+                    .into_any_element()
+            });
+
             div()
                 .w(px(200.0))
                 .flex_shrink_0()
@@ -2422,6 +4117,7 @@ impl super::TeamWorkspacePanel {
                 .border_color(theme.border)
                 .id("office-sidebar")
                 .overflow_y_scrollbar()
+                .when_some(mode_switch, |sidebar, switch| sidebar.child(switch))
                 // Panel header
                 .child(
                     div()
@@ -2495,19 +4191,52 @@ impl super::TeamWorkspacePanel {
                                 .gap(px(8.0))
                                 .text_size(px(11.0))
                                 .text_color(theme.muted_foreground)
-                                .child("Agents")
+                                .child(if show_combined_office {
+                                    "Members"
+                                } else {
+                                    "Agents"
+                                })
                                 .child(
                                     div()
                                         .font_weight(gpui::FontWeight::BOLD)
                                         .text_color(theme.foreground)
-                                        .child(format!("{}", agent_count)),
+                                        .child(format!(
+                                            "{}",
+                                            if show_combined_office {
+                                                combined_agent_count
+                                            } else {
+                                                agent_count
+                                            }
+                                        )),
                                 ),
                         ),
                 )
         };
 
-        // Canvas area: the main map rendering
-        let canvas_element = {
+        let canvas_element = if show_combined_office {
+            let canvas_sections = combined_sections.clone();
+            div()
+                .relative()
+                .flex_1()
+                .w_full()
+                .min_w_0()
+                .min_h(px(280.0))
+                .id("combined-office-canvas")
+                .overflow_hidden()
+                .bg(Hsla::from(gpui::rgba(0x05080fff)))
+                .child(
+                    canvas(
+                        |_bounds, _window, _cx| {},
+                        move |bounds, _, window, cx| {
+                            window.with_content_mask(Some(ContentMask { bounds }), |window| {
+                                paint_combined_office(bounds, &canvas_sections, window, cx);
+                            });
+                        },
+                    )
+                    .size_full(),
+                )
+                .into_any_element()
+        } else {
             let state_snapshot = self.office_state.clone();
             let view_for_mouse = view.clone();
             let view_for_bounds = view.clone();
@@ -2586,6 +4315,7 @@ impl super::TeamWorkspacePanel {
                 .when_some(quick_chat_overlay, |container, overlay| {
                     container.child(overlay)
                 })
+                .into_any_element()
         };
         let chat_panel = self.render_office_chat_panel(cx);
 
@@ -2855,5 +4585,63 @@ impl super::TeamWorkspacePanel {
                 }
             }
         }
+    }
+
+    fn combined_office_sections(&self, cx: &mut Context<Self>) -> Vec<CombinedOfficeSection> {
+        let db = crate::AppState::global(cx).db.clone();
+        let instances = self.instances.clone();
+        let teams = self.teams.clone();
+        let agents = self.agents.clone();
+
+        let mut instance_ids: Vec<String> = Vec::new();
+        if let Some(ref id) = self.selected_instance_id {
+            instance_ids.push(id.clone());
+        }
+        if let Some(ref id) = self.cross_team_target_instance_id {
+            if !instance_ids.contains(id) {
+                instance_ids.push(id.clone());
+            }
+        }
+        if let Some(ref id) = self.cross_team_peer_instance_id {
+            if !instance_ids.contains(id) {
+                instance_ids.push(id.clone());
+            }
+        }
+
+        let current_instance_id = self.selected_instance_id.clone().unwrap_or_default();
+        let mut color_idx = 0usize;
+        let mut sections: Vec<CombinedOfficeSection> = Vec::new();
+
+        for iid in &instance_ids {
+            let inst = instances.iter().find(|i| i.id == *iid);
+            let instance_name = inst
+                .map(|i| i.name.clone())
+                .unwrap_or_else(|| iid.chars().take(8).collect::<String>());
+            let team_name = inst
+                .and_then(|i| teams.iter().find(|t| t.id == i.team_id))
+                .map(|t| t.name.clone())
+                .unwrap_or_else(|| "Unknown Team".to_string());
+
+            let agent_ids = db.get_instance_agents(iid).unwrap_or_default();
+            let mut section_agents = Vec::new();
+            for agent in agents.iter().filter(|a| agent_ids.contains(&a.id)) {
+                let color = Hsla::from(gpui::rgba(AGENT_COLORS[color_idx % AGENT_COLORS.len()]));
+                color_idx += 1;
+                section_agents.push(CombinedOfficeAgent {
+                    name: agent.name.clone(),
+                    status: agent.status.clone(),
+                    color,
+                });
+            }
+
+            sections.push(CombinedOfficeSection {
+                instance_name,
+                team_name,
+                is_current: *iid == current_instance_id,
+                agents: section_agents,
+            });
+        }
+
+        sections
     }
 }

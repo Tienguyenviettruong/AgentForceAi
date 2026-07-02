@@ -904,6 +904,28 @@ impl TeamWorkspacePanel {
                                                 cx.notify();
                                             }))
                                     )
+                                    .when(
+                                        self.cross_team_target_instance_id.is_some()
+                                            || self.cross_team_peer_instance_id.is_some(),
+                                        |header| {
+                                            header.child(
+                                                Button::new("open-combined-office")
+                                                    .ghost()
+                                                    .small()
+                                                    .icon(IconName::Building2)
+                                                    .label("Combined Office")
+                                                    .tooltip("Show Combined Office")
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.chat_active_tab = 1;
+                                                        this.office_combined_mode = true;
+                                                        this.office_quick_chat_agent_id = None;
+                                                        this.office_state.dragged_agent_idx = None;
+                                                        this.sync_office_agents(cx);
+                                                        cx.notify();
+                                                    })),
+                                            )
+                                        },
+                                    )
                                     .when_some(
                                         self.available_iflow_run_id.clone(),
                                         |header, run_id| {

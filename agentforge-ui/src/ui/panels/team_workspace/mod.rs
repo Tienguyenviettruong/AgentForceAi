@@ -70,6 +70,7 @@ pub struct TeamWorkspacePanel {
     pub(crate) office_chat_target_agent_id: Option<String>,
     pub(crate) office_canvas_bounds_cache: Option<gpui::Bounds<gpui::Pixels>>,
     pub(crate) office_animation_queued: bool,
+    pub(crate) office_combined_mode: bool,
 }
 
 impl TeamWorkspacePanel {
@@ -141,6 +142,7 @@ impl TeamWorkspacePanel {
             office_chat_target_agent_id: None,
             office_canvas_bounds_cache: None,
             office_animation_queued: false,
+            office_combined_mode: false,
         };
 
         panel.reload(cx);
