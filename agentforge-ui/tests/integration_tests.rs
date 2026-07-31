@@ -1,7 +1,9 @@
 use agentforge_ui::application::orchestration::tool_gateway::{
     PolicyDecision, ToolExecutionGateway, ToolRequest, LOCAL_DESKTOP_ACTOR_ID,
 };
-use agentforge_ui::core::models::{Agent, CapabilitySelectionRecord, OrchestrationRunRecord, Team};
+use agentforge_ui::core::models::{
+    Agent, CapabilitySelectionRecord, OrchestrationRunRecord, Provider, Team,
+};
 use agentforge_ui::core::traits::database::DatabasePort;
 use agentforge_ui::infrastructure::database::sqlite_adapter::Database;
 use agentforge_ui::mcp::registry::McpToolRegistry;
@@ -17,6 +19,50 @@ fn isolated_database() -> Arc<dyn DatabasePort> {
     let db = Database::new().expect("test database should initialize");
     std::env::remove_var("AGENTFORGE_DB_PATH");
     Arc::new(db)
+}
+
+#[test]
+fn provider_configuration_supports_update_and_delete() {
+    let db = isolated_database();
+    let provider_id = uuid::Uuid::new_v4().to_string();
+    let mut provider = Provider {
+        id: provider_id.clone(),
+        provider_name: "Initial Provider".to_string(),
+        model: "initial-model".to_string(),
+        adapter_type: "CustomAdapter".to_string(),
+        command: Some("https://initial.example/v1".to_string()),
+        api_key_ref: Some("env:INITIAL_KEY".to_string()),
+        status: "available".to_string(),
+        capabilities: None,
+    };
+    db.insert_provider(&provider).expect("provider insert");
+
+    provider.provider_name = "Updated Provider".to_string();
+    provider.model = "updated-model".to_string();
+    provider.command = Some("https://updated.example/v1".to_string());
+    provider.api_key_ref = Some("env:UPDATED_KEY".to_string());
+    db.update_provider(&provider).expect("provider update");
+
+    let updated = db
+        .list_providers()
+        .expect("provider list")
+        .into_iter()
+        .find(|candidate| candidate.id == provider_id)
+        .expect("updated provider should exist");
+    assert_eq!(updated.provider_name, "Updated Provider");
+    assert_eq!(updated.model, "updated-model");
+    assert_eq!(
+        updated.command.as_deref(),
+        Some("https://updated.example/v1")
+    );
+    assert_eq!(updated.api_key_ref.as_deref(), Some("env:UPDATED_KEY"));
+
+    db.delete_provider(&provider_id).expect("provider delete");
+    assert!(!db
+        .list_providers()
+        .expect("provider list after delete")
+        .into_iter()
+        .any(|candidate| candidate.id == provider_id));
 }
 
 #[test]

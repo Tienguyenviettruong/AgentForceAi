@@ -13,7 +13,7 @@ use gpui_component::{
     notification::NotificationType,
     select::{Select, SelectEvent, SelectState},
     theme::ActiveTheme,
-    v_flex, Sizable, WindowExt,
+    v_flex, IconName, IndexPath, Sizable, WindowExt,
 };
 
 fn sanitize_base_url(s: &str) -> String {
@@ -305,6 +305,7 @@ impl CustomProviderSection {
         let db = crate::AppState::global(cx).db.clone();
         if let Ok(_) = db.insert_provider(&provider) {
             self.custom_providers = db.list_providers().unwrap_or_default();
+            crate::AppState::notify_providers_changed(cx);
 
             // Reset form fields
             self.provider_select
@@ -358,6 +359,7 @@ impl CustomProviderSection {
         }
 
         let secret_account = secret_account_from_ref(existing_ref)
+            .filter(|account| account.starts_with("custom-provider-"))
             .unwrap_or_else(|| format!("custom-provider-{}", uuid::Uuid::new_v4()));
         let save_result = smol::block_on(async {
             let keychain = crate::infrastructure::security::keychain::Keychain::new().await?;
@@ -389,9 +391,13 @@ impl CustomProviderSection {
         }
     }
 
-    fn update_provider_key(
+    fn update_provider(
         &mut self,
         provider_id: String,
+        provider_type_select: Entity<SelectState<Vec<SharedString>>>,
+        display_name_input: Entity<InputState>,
+        model_input: Entity<InputState>,
+        endpoint_input: Entity<InputState>,
         key_input: Entity<InputState>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -406,27 +412,103 @@ impl CustomProviderSection {
             return;
         };
 
-        let api_key = key_input.read(cx).text().to_string();
-        let Some(api_key_ref) = self.build_api_key_ref(
-            &api_key,
-            existing_provider.api_key_ref.as_deref(),
-            window,
-            cx,
-        ) else {
+        let provider_name = sanitize_display_name(&display_name_input.read(cx).text().to_string());
+        let model = sanitize_model_id(&model_input.read(cx).text().to_string());
+        let endpoint = sanitize_base_url(&endpoint_input.read(cx).text().to_string());
+        let selected_provider_type = provider_type_select
+            .read(cx)
+            .selected_value()
+            .map(ToString::to_string)
+            .unwrap_or_default();
+        let adapter_type = self
+            .provider_templates
+            .iter()
+            .find(|template| template.label == selected_provider_type)
+            .map(|template| template.adapter.clone())
+            .unwrap_or_else(|| existing_provider.adapter_type.clone());
+
+        if provider_name.is_empty() || model.is_empty() {
+            window.push_notification(
+                (
+                    NotificationType::Error,
+                    "Display name and model/deployment ID are required.",
+                ),
+                cx,
+            );
             return;
+        }
+        if adapter_type == "CustomAdapter" && endpoint.is_empty() {
+            window.push_notification(
+                (
+                    NotificationType::Error,
+                    "A Base URL / endpoint is required for a custom provider.",
+                ),
+                cx,
+            );
+            return;
+        }
+        if self.custom_providers.iter().any(|provider| {
+            provider.id != existing_provider.id
+                && provider.provider_name.eq_ignore_ascii_case(&provider_name)
+                && provider.model.eq_ignore_ascii_case(&model)
+        }) {
+            window.push_notification(
+                (
+                    NotificationType::Error,
+                    "Another provider already uses this display name and model.",
+                ),
+                cx,
+            );
+            return;
+        }
+
+        let api_key = key_input.read(cx).text().to_string();
+        let api_key_ref = if api_key.trim().is_empty() {
+            existing_provider.api_key_ref.clone()
+        } else {
+            let Some(reference) = self.build_api_key_ref(
+                &api_key,
+                existing_provider.api_key_ref.as_deref(),
+                window,
+                cx,
+            ) else {
+                return;
+            };
+            Some(reference)
         };
 
-        let mut updated_provider = existing_provider;
-        updated_provider.api_key_ref = Some(api_key_ref);
+        let mut updated_provider = existing_provider.clone();
+        updated_provider.provider_name = provider_name;
+        updated_provider.model = model;
+        updated_provider.adapter_type = adapter_type;
+        updated_provider.command = (!endpoint.is_empty()).then_some(endpoint);
+        updated_provider.api_key_ref = api_key_ref;
         updated_provider.status = "available".to_string();
 
         let db = crate::AppState::global(cx).db.clone();
-        match db.insert_provider(&updated_provider) {
+        match db.update_provider(&updated_provider) {
             Ok(()) => {
                 self.custom_providers = db.list_providers().unwrap_or_default();
+                crate::AppState::notify_providers_changed(cx);
+                if existing_provider.api_key_ref != updated_provider.api_key_ref {
+                    if let Err(error) =
+                        Self::delete_owned_secret(existing_provider.api_key_ref.as_deref())
+                    {
+                        window.push_notification(
+                            (
+                                NotificationType::Warning,
+                                SharedString::from(format!(
+                                    "Provider updated, but the previous credential could not be removed: {}",
+                                    error
+                                )),
+                            ),
+                            cx,
+                        );
+                    }
+                }
                 window.close_dialog(cx);
                 window.push_notification(
-                    (NotificationType::Success, "Provider API key updated."),
+                    (NotificationType::Success, "Provider updated successfully."),
                     cx,
                 );
                 cx.notify();
@@ -435,15 +517,276 @@ impl CustomProviderSection {
                 window.push_notification(
                     (
                         NotificationType::Error,
-                        gpui::SharedString::from(format!(
-                            "Failed to update provider key: {}",
-                            error
-                        )),
+                        gpui::SharedString::from(format!("Failed to update provider: {}", error)),
                     ),
                     cx,
                 );
             }
         }
+    }
+
+    fn delete_owned_secret(api_key_ref: Option<&str>) -> anyhow::Result<()> {
+        let Some(account) = secret_account_from_ref(api_key_ref)
+            .filter(|account| account.starts_with("custom-provider-"))
+        else {
+            return Ok(());
+        };
+        smol::block_on(async {
+            let keychain = crate::infrastructure::security::keychain::Keychain::new().await?;
+            keychain
+                .delete_secret(
+                    crate::infrastructure::security::keychain::SECURE_SECRET_SERVICE,
+                    &account,
+                )
+                .await
+        })
+    }
+
+    fn delete_provider(
+        &mut self,
+        provider_id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(provider) = self
+            .custom_providers
+            .iter()
+            .find(|provider| provider.id == provider_id)
+            .cloned()
+        else {
+            window.push_notification((NotificationType::Error, "Provider was not found."), cx);
+            return;
+        };
+
+        let db = crate::AppState::global(cx).db.clone();
+        match db.delete_provider(&provider.id) {
+            Ok(()) => {
+                self.custom_providers = db.list_providers().unwrap_or_default();
+                crate::AppState::notify_providers_changed(cx);
+                let credential_cleanup = Self::delete_owned_secret(provider.api_key_ref.as_deref());
+                window.close_dialog(cx);
+                if let Err(error) = credential_cleanup {
+                    window.push_notification(
+                        (
+                            NotificationType::Warning,
+                            SharedString::from(format!(
+                                "Provider deleted, but its credential could not be removed: {}",
+                                error
+                            )),
+                        ),
+                        cx,
+                    );
+                } else {
+                    window.push_notification(
+                        (NotificationType::Success, "Provider deleted successfully."),
+                        cx,
+                    );
+                }
+                cx.notify();
+            }
+            Err(error) => window.push_notification(
+                (
+                    NotificationType::Error,
+                    SharedString::from(format!("Failed to delete provider: {}", error)),
+                ),
+                cx,
+            ),
+        }
+    }
+
+    fn open_edit_provider_dialog(
+        &self,
+        provider: Provider,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let mut provider_type_options = self
+            .provider_templates
+            .iter()
+            .map(|template| SharedString::from(template.label.clone()))
+            .collect::<Vec<_>>();
+        let selected_type_index = self
+            .provider_templates
+            .iter()
+            .position(|template| template.adapter == provider.adapter_type)
+            .unwrap_or_else(|| {
+                provider_type_options.push(SharedString::from(provider.adapter_type.clone()));
+                provider_type_options.len() - 1
+            });
+        let provider_type_select = cx.new(|cx| {
+            SelectState::new(
+                provider_type_options,
+                Some(IndexPath::new(selected_type_index)),
+                window,
+                cx,
+            )
+        });
+        let display_name_input = cx.new(|cx| {
+            let mut state = InputState::new(window, cx).placeholder("Provider display name");
+            state.set_value(provider.provider_name.clone(), window, cx);
+            state
+        });
+        let model_input = cx.new(|cx| {
+            let mut state = InputState::new(window, cx).placeholder("Model or deployment ID");
+            state.set_value(provider.model.clone(), window, cx);
+            state
+        });
+        let endpoint_input = cx.new(|cx| {
+            let mut state = InputState::new(window, cx).placeholder("Base URL / endpoint");
+            state.set_value(provider.command.clone().unwrap_or_default(), window, cx);
+            state
+        });
+        let key_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("Leave blank to keep the current credential")
+                .masked(true)
+        });
+        let current_credential = credential_label(provider.api_key_ref.as_deref());
+        let provider_id = provider.id.clone();
+        let view = cx.entity().clone();
+        let muted_foreground = cx.theme().muted_foreground;
+
+        window.open_dialog(cx, move |dialog, _window, _cx| {
+            let provider_type_select_for_footer = provider_type_select.clone();
+            let display_name_for_footer = display_name_input.clone();
+            let model_for_footer = model_input.clone();
+            let endpoint_for_footer = endpoint_input.clone();
+            let key_for_footer = key_input.clone();
+            let provider_id_for_footer = provider_id.clone();
+            let view_for_footer = view.clone();
+
+            dialog
+                .title("Edit AI Provider")
+                .w(px(560.))
+                .child(
+                    v_form()
+                        .gap(px(12.))
+                        .py(px(8.))
+                        .child(
+                            field()
+                                .label("Provider Type")
+                                .required(true)
+                                .child(Select::new(&provider_type_select)),
+                        )
+                        .child(
+                            field()
+                                .label("Display Name")
+                                .required(true)
+                                .child(Input::new(&display_name_input)),
+                        )
+                        .child(
+                            field()
+                                .label("Model / Deployment ID")
+                                .required(true)
+                                .child(Input::new(&model_input)),
+                        )
+                        .child(
+                            field()
+                                .label("Base URL / Endpoint")
+                                .child(Input::new(&endpoint_input)),
+                        )
+                        .child(
+                            field().label("New API Key / Reference").child(
+                                v_flex()
+                                    .gap(px(5.))
+                                    .child(Input::new(&key_input).mask_toggle())
+                                    .child(div().text_xs().text_color(muted_foreground).child(
+                                        format!(
+                                            "Current: {}. Leave blank to keep it.",
+                                            current_credential
+                                        ),
+                                    )),
+                            ),
+                        ),
+                )
+                .footer(move |_, _, _, _| {
+                    let provider_type_select = provider_type_select_for_footer.clone();
+                    let display_name_input = display_name_for_footer.clone();
+                    let model_input = model_for_footer.clone();
+                    let endpoint_input = endpoint_for_footer.clone();
+                    let key_input = key_for_footer.clone();
+                    let provider_id = provider_id_for_footer.clone();
+                    let view = view_for_footer.clone();
+                    vec![
+                        Button::new("cancel-edit-provider")
+                            .label("Cancel")
+                            .on_click(|_, window, cx| window.close_dialog(cx))
+                            .into_any_element(),
+                        Button::new("save-provider-changes")
+                            .primary()
+                            .label("Save Changes")
+                            .on_click(move |_, window, cx| {
+                                view.update(cx, |this, cx| {
+                                    this.update_provider(
+                                        provider_id.clone(),
+                                        provider_type_select.clone(),
+                                        display_name_input.clone(),
+                                        model_input.clone(),
+                                        endpoint_input.clone(),
+                                        key_input.clone(),
+                                        window,
+                                        cx,
+                                    );
+                                });
+                            })
+                            .into_any_element(),
+                    ]
+                })
+        });
+    }
+
+    fn open_delete_provider_dialog(
+        &self,
+        provider: Provider,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let provider_id = provider.id.clone();
+        let provider_identity = format!("{} / {}", provider.provider_name, provider.model);
+        let view = cx.entity().clone();
+        let muted_foreground = cx.theme().muted_foreground;
+        window.open_dialog(cx, move |dialog, _window, _cx| {
+            let provider_id_for_footer = provider_id.clone();
+            let view_for_footer = view.clone();
+            dialog
+                .title("Delete AI Provider")
+                .w(px(480.))
+                .child(
+                    v_flex()
+                        .gap(px(10.))
+                        .py(px(8.))
+                        .child(
+                            div()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(provider_identity.clone()),
+                        )
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(muted_foreground)
+                                .child("This removes the provider from every model picker. This action cannot be undone."),
+                        ),
+                )
+                .footer(move |_, _, _, _| {
+                    let provider_id = provider_id_for_footer.clone();
+                    let view = view_for_footer.clone();
+                    vec![
+                        Button::new("cancel-delete-provider")
+                            .label("Cancel")
+                            .on_click(|_, window, cx| window.close_dialog(cx))
+                            .into_any_element(),
+                        Button::new("confirm-delete-provider")
+                            .danger()
+                            .label("Delete Provider")
+                            .on_click(move |_, window, cx| {
+                                view.update(cx, |this, cx| {
+                                    this.delete_provider(provider_id.clone(), window, cx);
+                                });
+                            })
+                            .into_any_element(),
+                    ]
+                })
+        });
     }
 }
 
@@ -468,9 +811,8 @@ impl Render for CustomProviderSection {
                 let endpoint = endpoint_label(p.command.as_deref());
                 let credential = credential_label(p.api_key_ref.as_deref());
                 let (status_label, status_color) = provider_status(p);
-                let provider_for_key = p.clone();
-                let view_for_key = view.clone();
-                let dialog_muted_foreground = theme.muted_foreground;
+                let provider_for_edit = p.clone();
+                let provider_for_delete = p.clone();
                 provider_list = provider_list.child(
                     h_flex()
                         .w_full()
@@ -528,112 +870,37 @@ impl Render for CustomProviderSection {
                             ),
                         )
                         .child(
-                            div().w(px(110.)).child(
-                                Button::new(("update-key", ix))
-                                    .small()
-                                    .label("Update Key")
-                                    .on_click(move |_ev, window, cx| {
-                                        let provider = provider_for_key.clone();
-                                        let view_save = view_for_key.clone();
-                                        let key_input = cx.new(|cx| {
-                                            InputState::new(window, cx)
-                                                .placeholder("Paste new key, secret://..., or env:...")
-                                                .masked(true)
-                                        });
-                                        if let Some(env_ref) = provider
-                                            .api_key_ref
-                                            .as_deref()
-                                            .filter(|value| value.trim().starts_with("env:"))
-                                        {
-                                            key_input.update(cx, |state, cx| {
-                                                state.set_value(env_ref.to_string(), window, cx);
-                                            });
-                                        }
-                                        let key_input_for_save = key_input.clone();
-                                        window.open_dialog(cx, move |dialog, _window, _cx| {
-                                            let provider_id = provider.id.clone();
-                                            let provider_name = provider.provider_name.clone();
-                                            let provider_model = provider.model.clone();
-                                            let current_credential =
-                                                credential_label(provider.api_key_ref.as_deref());
-                                            let view_save2 = view_save.clone();
-                                            let key_input_for_footer = key_input_for_save.clone();
-
-                                            dialog
-                                                .title("Update Provider Key")
-                                                .w(px(520.))
-                                                .child(
-                                                    v_flex()
-                                                        .gap(px(12.))
-                                                        .py(px(8.))
-                                                        .child(
-                                                            div()
-                                                                .text_sm()
-                                                                .text_color(
-                                                                    dialog_muted_foreground,
-                                                                )
-                                                                .child(format!(
-                                                                    "{} / {}",
-                                                                    provider_name, provider_model
-                                                                )),
-                                                        )
-                                                        .child(
-                                                            div()
-                                                                .text_xs()
-                                                                .text_color(
-                                                                    dialog_muted_foreground,
-                                                                )
-                                                                .child(format!(
-                                                                    "Current credential: {}",
-                                                                    current_credential
-                                                                )),
-                                                        )
-                                                        .child(
-                                                            field()
-                                                                .label("New API Key / Reference")
-                                                                .required(true)
-                                                                .child(
-                                                                    Input::new(
-                                                                        &key_input_for_save,
-                                                                    )
-                                                                    .mask_toggle(),
-                                                                ),
-                                                        ),
-                                                )
-                                                .footer(move |_, _, _, _| {
-                                                    let provider_id = provider_id.clone();
-                                                    let view_save3 = view_save2.clone();
-                                                    let key_input_for_save =
-                                                        key_input_for_footer.clone();
-                                                    vec![
-                                                        Button::new("cancel-update-provider-key")
-                                                            .label("Cancel")
-                                                            .on_click(|_, window, cx| {
-                                                                window.close_dialog(cx);
-                                                            })
-                                                            .into_any_element(),
-                                                        Button::new("save-provider-key")
-                                                            .primary()
-                                                            .label("Save Key")
-                                                            .on_click(move |_ev, window, cx| {
-                                                                view_save3.update(
-                                                                    cx,
-                                                                    |this: &mut CustomProviderSection, cx| {
-                                                                        this.update_provider_key(
-                                                                            provider_id.clone(),
-                                                                            key_input_for_save.clone(),
-                                                                            window,
-                                                                            cx,
-                                                                        )
-                                                                    },
-                                                                );
-                                                            })
-                                                            .into_any_element(),
-                                                    ]
-                                                })
-                                        });
-                                    }),
-                            ),
+                            h_flex()
+                                .w(px(150.))
+                                .justify_end()
+                                .gap(px(6.))
+                                .child(
+                                    Button::new(("edit-provider", ix))
+                                        .small()
+                                        .icon(IconName::Settings2)
+                                        .label("Edit")
+                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                            this.open_edit_provider_dialog(
+                                                provider_for_edit.clone(),
+                                                window,
+                                                cx,
+                                            );
+                                        })),
+                                )
+                                .child(
+                                    Button::new(("delete-provider", ix))
+                                        .small()
+                                        .danger()
+                                        .icon(IconName::Delete)
+                                        .tooltip("Delete provider")
+                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                            this.open_delete_provider_dialog(
+                                                provider_for_delete.clone(),
+                                                window,
+                                                cx,
+                                            );
+                                        })),
+                                ),
                         ),
                 );
             }

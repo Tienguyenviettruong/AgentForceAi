@@ -1,15 +1,16 @@
 use crate::core::traits::database::DatabasePort;
 use crate::infrastructure::database::sqlite_adapter::Database;
 use gpui::{
-    actions, div, px, size, Action, Animation, AnimationExt, App, AppContext, Bounds, Context,
-    Entity, Global, InteractiveElement, IntoElement, KeyBinding, NoAction, ParentElement, Render,
-    SharedString, Styled, Window, WindowBounds, WindowKind, WindowOptions,
+    actions, div, img, px, size, Action, Animation, AnimationExt, App, AppContext, Bounds, Context,
+    Entity, Global, InteractiveElement, IntoElement, KeyBinding, MouseButton, NoAction, ObjectFit,
+    ParentElement, Render, SharedString, Styled, StyledImage, Window, WindowBounds, WindowKind,
+    WindowOptions,
 };
 use gpui_component::{
-    button::Button,
+    button::{Button, ButtonVariants},
     dock::register_panel,
     dock::{DockArea, DockEvent, DockItem},
-    h_flex, v_flex, ActiveTheme as _, Icon, IconName, Root, WindowExt,
+    h_flex, v_flex, ActiveTheme as _, Icon, IconName, Root, Sizable, WindowExt,
 };
 use serde::Deserialize;
 use std::sync::Arc;
@@ -64,6 +65,8 @@ actions!(
         ChatComposerConfirm,
         SlashCommandPrevious,
         SlashCommandNext,
+        MentionPrevious,
+        MentionNext,
     ]
 );
 
@@ -87,6 +90,7 @@ pub struct NotificationEntry {
 
 pub struct AppState {
     pub active_panel: Entity<String>,
+    pub providers_revision: Entity<u64>,
     pub selected_iflow_run_id: Entity<Option<String>>,
     pub selected_orchestration_run_id: Entity<Option<String>>,
     pub notifications: Entity<Vec<NotificationEntry>>,
@@ -103,6 +107,8 @@ pub struct AppState {
     pub team_service: std::sync::Arc<crate::application::services::team_service::TeamService>,
     pub knowledge_service:
         std::sync::Arc<crate::application::services::knowledge_service::KnowledgeService>,
+    pub memory_bank_service:
+        std::sync::Arc<crate::application::memory_bank::service::MemoryBankService>,
 }
 
 impl Global for AppState {}
@@ -110,6 +116,7 @@ impl Global for AppState {}
 impl AppState {
     pub fn init(cx: &mut App) {
         let active_panel = cx.new(|_| String::from("dashboard"));
+        let providers_revision = cx.new(|_| 0_u64);
         let notifications = cx.new(|_| Vec::new());
         let db: Arc<dyn DatabasePort> =
             Arc::new(Database::new().expect("Failed to initialize database"));
@@ -169,8 +176,12 @@ impl AppState {
         let knowledge_service = std::sync::Arc::new(
             crate::application::services::knowledge_service::KnowledgeService::new(db.clone()),
         );
+        let memory_bank_service = std::sync::Arc::new(
+            crate::application::memory_bank::service::MemoryBankService::new(db.clone()),
+        );
         cx.set_global::<AppState>(Self {
             active_panel,
+            providers_revision,
             selected_iflow_run_id,
             selected_orchestration_run_id,
             notifications,
@@ -184,6 +195,7 @@ impl AppState {
             chat_service,
             team_service,
             knowledge_service,
+            memory_bank_service,
         });
     }
 
@@ -193,6 +205,14 @@ impl AppState {
 
     pub fn global_mut(cx: &mut App) -> &mut Self {
         cx.global_mut::<Self>()
+    }
+
+    pub fn notify_providers_changed(cx: &mut App) {
+        let revision = Self::global(cx).providers_revision.clone();
+        revision.update(cx, |revision, cx| {
+            *revision = revision.wrapping_add(1);
+            cx.notify();
+        });
     }
 }
 
@@ -205,6 +225,7 @@ const PANEL_MONITORING: &str = "Monitoring";
 const PANEL_SETTINGS: &str = "Settings";
 const PANEL_MCP_MARKETPLACE: &str = "McpMarketplace";
 const PANEL_RESEARCH_NOTEBOOK: &str = "ResearchNotebook";
+const PANEL_MEMORY_BANK: &str = "MemoryBank";
 
 // ── Init Function ────────────────────────────────────────
 
@@ -332,6 +353,11 @@ pub fn init(cx: &mut App) {
             }),
         )
     });
+    register_panel(cx, PANEL_MEMORY_BANK, |_, _, _, window, cx| {
+        Box::new(cx.new(|cx| {
+            crate::ui::panels::memory_bank_canvas::MemoryBankCanvasPanel::new(window, cx)
+        }))
+    });
 
     // 5. Register key bindings
     cx.bind_keys([
@@ -358,6 +384,16 @@ pub fn init(cx: &mut App) {
             ChatComposerConfirm,
             Some("SoloChatComposer > Input"),
         ),
+        KeyBinding::new("enter", NoAction, Some("SoloChatMentions > Input")),
+        KeyBinding::new(
+            "enter",
+            ChatComposerConfirm,
+            Some("SoloChatMentions > Input"),
+        ),
+        KeyBinding::new("up", NoAction, Some("SoloChatMentions > Input")),
+        KeyBinding::new("up", MentionPrevious, Some("SoloChatMentions > Input")),
+        KeyBinding::new("down", NoAction, Some("SoloChatMentions > Input")),
+        KeyBinding::new("down", MentionNext, Some("SoloChatMentions > Input")),
         KeyBinding::new(
             "enter",
             NoAction,
@@ -492,6 +528,13 @@ where
 
 // ── MainWindow Component ─────────────────────────────────
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum GlobalPetAction {
+    Idle,
+    Pet,
+    Whip,
+}
+
 pub struct MainWindow {
     title_bar: Entity<AgentForgeTitleBar>,
     activity_bar: Entity<crate::ui::shell::activity_bar::ActivityBar>,
@@ -501,10 +544,19 @@ pub struct MainWindow {
     dock_areas: std::collections::HashMap<SharedString, Entity<DockArea>>,
     team_workspace: Entity<crate::ui::panels::team_workspace::TeamWorkspacePanel>,
     solo_workspace: Entity<crate::ui::panels::solo_workspace::SoloWorkspacePanel>,
+    pet_menu_open: bool,
+    pet_action: GlobalPetAction,
+    pet_action_generation: usize,
+    pet_position: Option<(f32, f32)>,
+    pet_dragging: bool,
+    pet_drag_last: Option<(f32, f32)>,
 }
 
 const SOLO_MODE_TRANSITION_SECS: f64 = 0.24;
 const SOLO_MODE_SLIDE_OFFSET: f32 = 220.0;
+const GLOBAL_PET_IDLE_SIZE: f32 = 112.0;
+const GLOBAL_PET_ACTION_SIZE: f32 = 144.0;
+const GLOBAL_PET_EDGE_GAP: f32 = 8.0;
 
 impl MainWindow {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -548,6 +600,7 @@ impl MainWindow {
             "mcp_marketplace",
             "iflow_builder",
             "research_notebook",
+            "memory_bank",
             "orchestration",
         ];
         for page in pages {
@@ -680,6 +733,18 @@ impl MainWindow {
                             cx,
                         );
                     }
+                    "memory_bank" => {
+                        let panel = Arc::new(cx.new(|cx| {
+                            crate::ui::panels::memory_bank_canvas::MemoryBankCanvasPanel::new(
+                                window, cx,
+                            )
+                        }));
+                        dock.set_center(
+                            DockItem::tabs(vec![panel], &weak_dock, window, cx),
+                            window,
+                            cx,
+                        );
+                    }
                     _ => {}
                 }
             });
@@ -767,7 +832,230 @@ impl MainWindow {
             dock_areas,
             team_workspace,
             solo_workspace,
+            pet_menu_open: false,
+            pet_action: GlobalPetAction::Idle,
+            pet_action_generation: 0,
+            pet_position: None,
+            pet_dragging: false,
+            pet_drag_last: None,
         }
+    }
+
+    fn pet_size(&self) -> f32 {
+        if self.pet_action == GlobalPetAction::Idle {
+            GLOBAL_PET_IDLE_SIZE
+        } else {
+            GLOBAL_PET_ACTION_SIZE
+        }
+    }
+
+    fn pet_asset(&self) -> &'static str {
+        match self.pet_action {
+            GlobalPetAction::Idle => "pet/idle.gif",
+            GlobalPetAction::Pet => "pet/pet-v2.gif",
+            GlobalPetAction::Whip => "pet/whip-v2.gif",
+        }
+    }
+
+    fn default_pet_position(&self, window: &Window) -> (f32, f32) {
+        let width: f32 = window.bounds().size.width.into();
+        let height: f32 = window.bounds().size.height.into();
+        let size = self.pet_size();
+        (
+            (width - size - 30.0).max(GLOBAL_PET_EDGE_GAP),
+            (height - size - 54.0).max(GLOBAL_PET_EDGE_GAP),
+        )
+    }
+
+    fn clamp_pet_position(&self, left: f32, top: f32, window: &Window) -> (f32, f32) {
+        let width: f32 = window.bounds().size.width.into();
+        let height: f32 = window.bounds().size.height.into();
+        let size = self.pet_size();
+        (
+            left.clamp(
+                GLOBAL_PET_EDGE_GAP,
+                (width - size - GLOBAL_PET_EDGE_GAP).max(GLOBAL_PET_EDGE_GAP),
+            ),
+            top.clamp(
+                GLOBAL_PET_EDGE_GAP,
+                (height - size - GLOBAL_PET_EDGE_GAP).max(GLOBAL_PET_EDGE_GAP),
+            ),
+        )
+    }
+
+    fn move_pet(&mut self, mouse_x: f32, mouse_y: f32, window: &Window, cx: &mut Context<Self>) {
+        if !self.pet_dragging {
+            return;
+        }
+        let Some((last_x, last_y)) = self.pet_drag_last else {
+            self.pet_drag_last = Some((mouse_x, mouse_y));
+            return;
+        };
+        let (left, top) = self
+            .pet_position
+            .unwrap_or_else(|| self.default_pet_position(window));
+        self.pet_position =
+            Some(self.clamp_pet_position(left + mouse_x - last_x, top + mouse_y - last_y, window));
+        self.pet_drag_last = Some((mouse_x, mouse_y));
+        self.pet_menu_open = false;
+        cx.notify();
+    }
+
+    fn play_pet_action(
+        &mut self,
+        action: GlobalPetAction,
+        duration: Duration,
+        cx: &mut Context<Self>,
+    ) {
+        self.pet_action = action;
+        self.pet_menu_open = false;
+        self.pet_action_generation = self.pet_action_generation.wrapping_add(1);
+        let generation = self.pet_action_generation;
+        let view = cx.entity().clone();
+        cx.notify();
+
+        cx.spawn(async move |_, cx| {
+            smol::Timer::after(duration).await;
+            let _ = cx.update(|cx| {
+                let _ = view.update(cx, |this, cx| {
+                    if this.pet_action_generation == generation {
+                        this.pet_action = GlobalPetAction::Idle;
+                        cx.notify();
+                    }
+                });
+            });
+        })
+        .detach();
+    }
+
+    fn render_pet(&mut self, window: &Window, cx: &Context<Self>) -> gpui::AnyElement {
+        let theme = cx.theme().clone();
+        let size = self.pet_size();
+        let initial = self
+            .pet_position
+            .unwrap_or_else(|| self.default_pet_position(window));
+        let (left, top) = self.clamp_pet_position(initial.0, initial.1, window);
+        self.pet_position = Some((left, top));
+        let window_width: f32 = window.bounds().size.width.into();
+        let action_key: usize = match self.pet_action {
+            GlobalPetAction::Idle => 0,
+            GlobalPetAction::Pet => 1,
+            GlobalPetAction::Whip => 2,
+        };
+
+        let mut menu = v_flex()
+            .absolute()
+            .w(px(164.0))
+            .gap(px(4.0))
+            .p(px(6.0))
+            .rounded(px(8.0))
+            .border_1()
+            .border_color(theme.border)
+            .bg(theme.background)
+            .shadow_lg()
+            .child(
+                div()
+                    .px(px(6.0))
+                    .py(px(4.0))
+                    .text_size(px(11.0))
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_color(theme.foreground)
+                    .child("Tương tác với pet"),
+            )
+            .child(
+                Button::new("global-pet-action-pet")
+                    .small()
+                    .ghost()
+                    .w_full()
+                    .label("Vuốt ve")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.play_pet_action(
+                            GlobalPetAction::Pet,
+                            Duration::from_millis(1_750),
+                            cx,
+                        );
+                    })),
+            )
+            .child(
+                Button::new("global-pet-action-whip")
+                    .small()
+                    .ghost()
+                    .w_full()
+                    .label("Quất roi")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.play_pet_action(
+                            GlobalPetAction::Whip,
+                            Duration::from_millis(1_650),
+                            cx,
+                        );
+                    })),
+            )
+            .child(
+                Button::new("global-pet-reset-position")
+                    .small()
+                    .ghost()
+                    .w_full()
+                    .label("Đặt lại vị trí")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.pet_position = None;
+                        this.pet_menu_open = false;
+                        cx.notify();
+                    })),
+            );
+        menu = if top > 190.0 {
+            menu.bottom(px(size + 4.0))
+        } else {
+            menu.top(px(size + 4.0))
+        };
+        menu = if left > window_width / 2.0 {
+            menu.right(px(0.0))
+        } else {
+            menu.left(px(0.0))
+        };
+
+        let mut pet = div()
+            .absolute()
+            .left(px(left))
+            .top(px(top))
+            .w(px(size))
+            .h(px(size))
+            .child(
+                div()
+                    .id("global-pet-character")
+                    .size_full()
+                    .cursor_pointer()
+                    .child(
+                        img(self.pet_asset())
+                            .id(("global-pet-gif", action_key))
+                            .size_full()
+                            .object_fit(ObjectFit::Contain),
+                    )
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
+                            let mouse_x: f32 = event.position.x.into();
+                            let mouse_y: f32 = event.position.y.into();
+                            this.pet_dragging = true;
+                            this.pet_drag_last = Some((mouse_x, mouse_y));
+                            this.pet_menu_open = false;
+                            cx.stop_propagation();
+                        }),
+                    )
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(|this, _, _, cx| {
+                            this.pet_menu_open = !this.pet_menu_open;
+                            this.pet_dragging = false;
+                            this.pet_drag_last = None;
+                            cx.notify();
+                            cx.stop_propagation();
+                        }),
+                    ),
+            );
+        if self.pet_menu_open {
+            pet = pet.child(menu);
+        }
+        pet.into_any_element()
     }
 
     fn open_about_dialog(&self, window: &mut Window, cx: &mut Context<Self>) {
@@ -959,9 +1247,29 @@ impl Render for MainWindow {
         let dialog_layer = Root::render_dialog_layer(window, cx);
         let notification_layer = Root::render_notification_layer(window, cx);
         let sheet_layer = Root::render_sheet_layer(window, cx);
+        let pet = self.render_pet(window, cx);
 
         v_flex()
             .size_full()
+            .relative()
+            .overflow_hidden()
+            .on_mouse_move(
+                cx.listener(|this, event: &gpui::MouseMoveEvent, window, cx| {
+                    let mouse_x: f32 = event.position.x.into();
+                    let mouse_y: f32 = event.position.y.into();
+                    this.move_pet(mouse_x, mouse_y, window, cx);
+                }),
+            )
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    if this.pet_dragging {
+                        this.pet_dragging = false;
+                        this.pet_drag_last = None;
+                        cx.notify();
+                    }
+                }),
+            )
             .on_action(cx.listener(|this, _: &NewTeam, window, cx| {
                 crate::ui::components::dialogs::open_new_team_dialog(
                     crate::AppState::global(cx).db.clone(),
@@ -991,6 +1299,7 @@ impl Render for MainWindow {
             } else {
                 self.render_workspace_mode(cx)
             })
+            .child(pet)
             .children(dialog_layer)
             .children(notification_layer)
             .children(sheet_layer)

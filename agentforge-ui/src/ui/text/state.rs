@@ -1,5 +1,5 @@
 use futures::Stream as _;
-use std::{future::Future, pin::Pin, task::Poll};
+use std::{future::Future, pin::Pin, rc::Rc, task::Poll};
 
 use gpui::{
     prelude::FluentBuilder as _, px, App, AppContext as _, Bounds, ClipboardItem, Context,
@@ -11,7 +11,7 @@ use crate::ui::text::{
     document::ParsedDocument,
     format,
     node::{self, NodeContext},
-    CodeBlockActionsFn, TextViewStyle,
+    CodeBlockActionsFn, LinkClickHandler, TextViewStyle,
 };
 use gpui_component::{
     highlighter::HighlightTheme,
@@ -51,6 +51,7 @@ pub struct TextViewState {
     pub(super) scrollable: bool,
     pub(super) text_view_style: TextViewStyle,
     pub(super) code_block_actions: Option<std::sync::Arc<CodeBlockActionsFn>>,
+    pub(super) link_click_handler: Option<Rc<LinkClickHandler>>,
 
     pub(super) is_selecting: bool,
     /// The local (in TextView) position of the selection.
@@ -123,6 +124,7 @@ impl TextViewState {
             list_state: ListState::new(0, gpui::ListAlignment::Top, px(1000.)),
             text_view_style: TextViewStyle::default(),
             code_block_actions: None,
+            link_click_handler: None,
             is_selecting: false,
             parsed_content,
             parsed_error,

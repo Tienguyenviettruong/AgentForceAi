@@ -1433,9 +1433,29 @@ impl AgentExecutor {
                 .push_str(&self.bounded_governed_context("---\n", &mut remaining_governed_tokens));
         }
 
+        let memory_bank =
+            crate::application::memory_bank::service::MemoryBankService::new(self.db.clone());
+        let memory_bank_context = memory_bank
+            .build_context_for_instance(&self.team_instance_id, 3000)
+            .unwrap_or_default();
+
+        if !memory_bank_context.is_empty() {
+            context_sources.push(crate::core::models::LlmContextSourceRecord {
+                id: uuid::Uuid::new_v4().to_string(),
+                snapshot_id: String::new(),
+                source_kind: "memory_bank".to_string(),
+                source_id: self.team_instance_id.clone(),
+                source_hash: Self::context_hash(&memory_bank_context),
+                rank: None,
+                character_count: memory_bank_context.chars().count(),
+                trust_level: "system_policy".to_string(),
+                created_at: chrono::Utc::now().to_rfc3339(),
+            });
+        }
+
         let injection = format!(
-            "\n\n[SYSTEM INJECTION]\nYou have access to the following tools. MCP capabilities appear only when explicitly enabled for this context:\n{}\n\nTo use a tool, you MUST return ONLY a JSON object wrapped in `<tool_call>` tags like this:\n<tool_call>{{\"id\":\"call_1\",\"name\":\"tool_name\",\"arguments\":{{\"key\":\"value\"}}}}</tool_call>\nDo not output any other text when making a tool call.{}{}{}",
-            tools_schema_str, orchestration_context, rag_context, skills_context
+            "\n\n[SYSTEM INJECTION]\nYou have access to the following tools. MCP capabilities appear only when explicitly enabled for this context:\n{}\n\nTo use a tool, you MUST return ONLY a JSON object wrapped in `<tool_call>` tags like this:\n<tool_call>{{\"id\":\"call_1\",\"name\":\"tool_name\",\"arguments\":{{\"key\":\"value\"}}}}</tool_call>\nDo not output any other text when making a tool call.{}{}{}{}",
+            tools_schema_str, memory_bank_context, orchestration_context, rag_context, skills_context
         );
         let selected_capabilities = serde_json::json!({
             "mcp_tools": mcp_tools.iter().map(|tool| tool.id.clone()).collect::<Vec<_>>(),
@@ -3009,7 +3029,15 @@ impl AgentExecutor {
                             return "Tool denied: task is outside this instance scope.".to_string();
                         }
                         return match self.db.mark_task_completed(task_id) {
-                            Ok(()) => format!("Task '{}' completed.", task_id),
+                            Ok(()) => {
+                                let _ = crate::application::memory_bank::service::MemoryBankService::new(self.db.clone())
+                                    .auto_update_progress(
+                                        &self.team_instance_id,
+                                        &format!("Completed task '{}'", task_id),
+                                        &self.agent_id,
+                                    );
+                                format!("Task '{}' completed.", task_id)
+                            }
                             Err(error) => format!("Unable to complete task: {}", error),
                         };
                     }

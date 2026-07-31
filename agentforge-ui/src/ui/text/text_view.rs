@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{rc::Rc, sync::Arc};
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
@@ -19,6 +19,7 @@ use gpui_component::StyledExt;
 /// Type for code block actions generator function.
 pub(crate) type CodeBlockActionsFn =
     dyn Fn(&CodeBlock, &mut Window, &mut App) -> AnyElement + Send + Sync;
+pub(crate) type LinkClickHandler = dyn Fn(&str, &mut Window, &mut App) -> bool;
 
 /// A text view that can render Markdown or HTML.
 ///
@@ -47,6 +48,7 @@ pub struct TextView {
     selectable: bool,
     scrollable: bool,
     code_block_actions: Option<Arc<CodeBlockActionsFn>>,
+    link_click_handler: Option<Rc<LinkClickHandler>>,
 }
 
 impl Styled for TextView {
@@ -68,6 +70,7 @@ impl TextView {
             selectable: false,
             scrollable: false,
             code_block_actions: None,
+            link_click_handler: None,
         }
     }
 
@@ -83,6 +86,7 @@ impl TextView {
             selectable: false,
             scrollable: false,
             code_block_actions: None,
+            link_click_handler: None,
         }
     }
 
@@ -98,6 +102,7 @@ impl TextView {
             selectable: false,
             scrollable: false,
             code_block_actions: None,
+            link_click_handler: None,
         }
     }
 
@@ -142,6 +147,15 @@ impl TextView {
         self.code_block_actions = Some(Arc::new(move |code_block, window, cx| {
             f(&code_block, window, cx).into_any_element()
         }));
+        self
+    }
+
+    /// Override link navigation. Return true when the callback handled the URL.
+    pub fn on_link_click<F>(mut self, handler: F) -> Self
+    where
+        F: Fn(&str, &mut Window, &mut App) -> bool + 'static,
+    {
+        self.link_click_handler = Some(Rc::new(handler));
         self
     }
 }
@@ -201,6 +215,7 @@ impl Element for TextView {
 
         state.update(cx, |state, cx| {
             state.code_block_actions = self.code_block_actions.clone();
+            state.link_click_handler = self.link_click_handler.clone();
             state.selectable = self.selectable;
             state.scrollable = self.scrollable;
             state.text_view_style = self.text_view_style.clone();

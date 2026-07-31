@@ -1,29 +1,32 @@
 use gpui::{
-    div, px, Context, InteractiveElement, IntoElement, ParentElement, StatefulInteractiveElement,
-    Styled,
+    div, px, AppContext, Context, InteractiveElement, IntoElement, ParentElement,
+    StatefulInteractiveElement, Styled, Window,
 };
 use gpui_component::{
     button::{Button, ButtonVariants},
+    form::{field, v_form},
     h_flex,
+    input::{Input, InputState},
+    notification::NotificationType,
     scroll::ScrollableElement,
-    v_flex, ActiveTheme as _, Icon, IconName, Sizable,
+    v_flex, ActiveTheme as _, Icon, IconName, Sizable, WindowExt,
 };
 
 use super::{
-    model::{solo_projects, SoloConversation, SoloProject, SoloSection},
+    model::{SoloConversation, SoloProject, SoloSection},
     SoloWorkspacePanel,
 };
 
 impl SoloWorkspacePanel {
-    fn active_project_name(&self) -> &'static str {
-        let Some(active_project_id) = self.active_project_id else {
+    fn active_project_name(&self) -> &str {
+        let Some(active_project_id) = self.active_project_id.as_deref() else {
             return "Conversations";
         };
 
-        solo_projects()
+        self.projects
             .iter()
             .find(|project| project.id == active_project_id)
-            .map(|project| project.name)
+            .map(|project| project.name.as_str())
             .unwrap_or("Project")
     }
 
@@ -32,8 +35,18 @@ impl SoloWorkspacePanel {
         cx.notify();
     }
 
-    fn open_project_history(&mut self, project_id: &'static str, cx: &mut Context<Self>) {
-        self.upsert_active_conversation();
+    fn open_project_history(&mut self, project_id: String, cx: &mut Context<Self>) {
+        self.upsert_active_conversation(cx);
+        if self.active_project_id.as_deref() != Some(project_id.as_str()) {
+            self.messages.clear();
+            self.active_conversation_id = None;
+            self.solo_attachments.clear();
+            self.solo_expanded_messages.clear();
+            self.reset_solo_chat_list_state();
+        }
+        self.solo_webview_open = false;
+        self.solo_webview = None;
+        self.solo_webview_generation = self.solo_webview_generation.wrapping_add(1);
         self.active_project_id = Some(project_id);
         self.active_section = SoloSection::Chat;
         self.history_sidebar_open = true;
@@ -41,7 +54,17 @@ impl SoloWorkspacePanel {
     }
 
     fn open_standalone_history(&mut self, cx: &mut Context<Self>) {
-        self.upsert_active_conversation();
+        self.upsert_active_conversation(cx);
+        if self.active_project_id.is_some() {
+            self.messages.clear();
+            self.active_conversation_id = None;
+            self.solo_attachments.clear();
+            self.solo_expanded_messages.clear();
+            self.reset_solo_chat_list_state();
+        }
+        self.solo_webview_open = false;
+        self.solo_webview = None;
+        self.solo_webview_generation = self.solo_webview_generation.wrapping_add(1);
         self.active_project_id = None;
         self.active_section = SoloSection::Chat;
         self.history_sidebar_open = true;
@@ -49,10 +72,18 @@ impl SoloWorkspacePanel {
     }
 
     fn open_section(&mut self, section: SoloSection, cx: &mut Context<Self>) {
-        self.upsert_active_conversation();
+        self.upsert_active_conversation(cx);
         self.active_section = section;
         if section != SoloSection::Chat {
             self.history_sidebar_open = false;
+            self.solo_webview_open = false;
+            self.solo_webview = None;
+            self.solo_webview_generation = self.solo_webview_generation.wrapping_add(1);
+        }
+        if section == SoloSection::Remote {
+            self.refresh_remote_windows(cx);
+        } else {
+            self.stop_remote_stream(cx);
         }
         cx.notify();
     }
@@ -116,8 +147,9 @@ impl SoloWorkspacePanel {
 
     fn project_row(&self, project: SoloProject, cx: &Context<Self>) -> gpui::AnyElement {
         let theme = cx.theme().clone();
-        let active =
-            self.active_section == SoloSection::Chat && self.active_project_id == Some(project.id);
+        let active = self.active_section == SoloSection::Chat
+            && self.active_project_id.as_deref() == Some(project.id.as_str());
+        let project_id = project.id.clone();
         h_flex()
             .id(gpui::ElementId::Name(
                 format!("solo-project-{}", project.id).into(),
@@ -135,7 +167,7 @@ impl SoloWorkspacePanel {
             .items_center()
             .cursor_pointer()
             .on_click(cx.listener(move |this, _, _, cx| {
-                this.open_project_history(project.id, cx);
+                this.open_project_history(project_id.clone(), cx);
             }))
             .child(
                 div()
@@ -160,6 +192,77 @@ impl SoloWorkspacePanel {
                     .child(project.name),
             )
             .into_any_element()
+    }
+
+    fn open_new_project_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let name_input = cx.new(|cx| InputState::new(window, cx).placeholder("Project name"));
+        let view = cx.entity().clone();
+        let db = crate::AppState::global(cx).db.clone();
+
+        window.open_dialog(cx, move |dialog, _, _| {
+            let name_input_footer = name_input.clone();
+            let view_footer = view.clone();
+            let db_footer = db.clone();
+            dialog
+                .title("Create Project")
+                .w(px(440.0))
+                .child(
+                    v_form().py(px(8.0)).child(
+                        field()
+                            .label("Name")
+                            .required(true)
+                            .child(Input::new(&name_input).w_full()),
+                    ),
+                )
+                .footer(move |_, _, _, _| {
+                    let name_input = name_input_footer.clone();
+                    let view = view_footer.clone();
+                    let db = db_footer.clone();
+                    vec![
+                        Button::new("solo-project-cancel")
+                            .label("Cancel")
+                            .on_click(|_, window, cx| window.close_dialog(cx))
+                            .into_any_element(),
+                        Button::new("solo-project-create")
+                            .primary()
+                            .label("Create Project")
+                            .on_click(move |_, window, cx| {
+                                let name = name_input.read(cx).text().to_string();
+                                let name = name.trim().to_string();
+                                if name.is_empty() {
+                                    window.push_notification(
+                                        (NotificationType::Error, "Project name is required."),
+                                        cx,
+                                    );
+                                    return;
+                                }
+                                match db.create_solo_project(&name) {
+                                    Ok(project) => {
+                                        let project_id = project.id.clone();
+                                        view.update(cx, |this, cx| {
+                                            this.projects.push(SoloProject {
+                                                id: project.id,
+                                                name: project.name,
+                                            });
+                                            this.open_project_history(project_id, cx);
+                                        });
+                                        window.close_dialog(cx);
+                                    }
+                                    Err(error) => window.push_notification(
+                                        (
+                                            NotificationType::Error,
+                                            gpui::SharedString::from(format!(
+                                                "Could not create project: {error}"
+                                            )),
+                                        ),
+                                        cx,
+                                    ),
+                                }
+                            })
+                            .into_any_element(),
+                    ]
+                })
+        });
     }
 
     fn standalone_conversation_row(&self, cx: &Context<Self>) -> gpui::AnyElement {
@@ -210,7 +313,7 @@ impl SoloWorkspacePanel {
     pub(super) fn primary_sidebar(&self, cx: &Context<Self>) -> gpui::AnyElement {
         let theme = cx.theme().clone();
         let mut project_list = v_flex().gap(px(4.));
-        for project in solo_projects() {
+        for project in self.projects.iter().cloned() {
             project_list = project_list.child(self.project_row(project, cx));
         }
 
@@ -289,9 +392,15 @@ impl SoloWorkspacePanel {
                                     .child("PROJECTS"),
                             )
                             .child(
-                                div()
-                                    .text_color(theme.muted_foreground)
-                                    .child(Icon::new(IconName::Plus).size(px(13.))),
+                                Button::new("solo-new-project")
+                                    .small()
+                                    .compact()
+                                    .ghost()
+                                    .icon(IconName::Plus)
+                                    .tooltip("Create project")
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.open_new_project_dialog(window, cx);
+                                    })),
                             ),
                     )
                     .child(project_list),
@@ -305,7 +414,9 @@ impl SoloWorkspacePanel {
         let project_conversations: Vec<&SoloConversation> = self
             .conversations
             .iter()
-            .filter(|conversation| conversation.project_id == self.active_project_id)
+            .filter(|conversation| {
+                conversation.project_id.as_deref() == self.active_project_id.as_deref()
+            })
             .collect();
 
         if project_conversations.is_empty() {
@@ -392,7 +503,7 @@ impl SoloWorkspacePanel {
                             .text_size(px(12.))
                             .font_weight(gpui::FontWeight::BOLD)
                             .text_color(theme.foreground)
-                            .child(self.active_project_name()),
+                            .child(self.active_project_name().to_string()),
                     )
                     .child(
                         Button::new("solo-history-close")

@@ -59,6 +59,7 @@ impl ActivityBar {
                     "mcp_marketplace" => "MCP Marketplace",
                     "iflow_builder" => "iFlow Builder",
                     "research_notebook" => "Research Notebook",
+                    "memory_bank" => "Memory Bank",
                     "orchestration" => "Orchestration",
                     "settings" => "Settings",
                     "profile" => "Profile",
@@ -143,6 +144,12 @@ impl Render for ActivityBar {
                         "research_notebook",
                         Icon::empty().path("icons/notebooklm.svg").size_4(),
                         self.active_item == "research_notebook",
+                        cx,
+                    ))
+                    .child(self.render_icon(
+                        "memory_bank",
+                        IconName::BookOpen,
+                        self.active_item == "memory_bank",
                         cx,
                     ))
                     .child(self.render_icon(

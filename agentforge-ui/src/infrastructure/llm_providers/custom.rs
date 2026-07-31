@@ -225,7 +225,7 @@ impl CustomAdapterSDK {
 
     fn content_value_to_text(value: &serde_json::Value) -> Option<String> {
         if let Some(text) = value.as_str() {
-            return (!text.trim().is_empty()).then(|| text.to_string());
+            return (!text.is_empty()).then(|| text.to_string());
         }
 
         if let Some(parts) = value.as_array() {
@@ -238,7 +238,7 @@ impl CustomAdapterSDK {
                 })
                 .collect::<Vec<_>>()
                 .join("\n");
-            return (!text.trim().is_empty()).then_some(text);
+            return (!text.is_empty()).then_some(text);
         }
 
         None
@@ -1094,5 +1094,28 @@ mod tests {
             &mut usage,
         );
         assert_eq!(text.as_deref(), Some("xin chao"));
+    }
+
+    #[test]
+    fn provider_payload_parser_preserves_streamed_markdown_whitespace() {
+        let payloads = [
+            r####"{"choices":[{"delta":{"content":"### Part 1"}}]}"####,
+            r#"{"choices":[{"delta":{"content":"\n\n"}}]}"#,
+            r#"{"choices":[{"delta":{"content":"| Framework | Type |"}}]}"#,
+            r#"{"choices":[{"delta":{"content":"\n"}}]}"#,
+            r#"{"choices":[{"delta":{"content":"| --- | --- |"}}]}"#,
+            r#"{"choices":[{"delta":{"content":"\n"}}]}"#,
+            r#"{"choices":[{"delta":{"content":"| Gin | Micro |"}}]}"#,
+        ];
+        let mut usage = crate::providers::TokenUsage::default();
+        let markdown = payloads
+            .iter()
+            .filter_map(|payload| CustomAdapterSDK::text_from_provider_payload(payload, &mut usage))
+            .collect::<String>();
+
+        assert_eq!(
+            markdown,
+            "### Part 1\n\n| Framework | Type |\n| --- | --- |\n| Gin | Micro |"
+        );
     }
 }

@@ -3,6 +3,7 @@ pub mod custom_provider;
 pub mod iflow_builder;
 pub mod knowledge;
 pub mod mcp_marketplace;
+pub mod memory_bank_canvas;
 pub mod monitoring;
 pub mod office_view;
 pub mod orchestration;

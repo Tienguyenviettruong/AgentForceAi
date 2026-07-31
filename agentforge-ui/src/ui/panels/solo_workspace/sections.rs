@@ -1,9 +1,12 @@
-use gpui::{div, px, Context, Hsla, IntoElement, ParentElement, Styled, Window};
+use gpui::{
+    div, img, px, Context, Hsla, InteractiveElement, IntoElement, ObjectFit, ParentElement,
+    StatefulInteractiveElement, Styled, StyledImage, Window,
+};
 use gpui_component::{
     button::{Button, ButtonVariants},
     h_flex,
     scroll::ScrollableElement,
-    v_flex, ActiveTheme as _, Icon, IconName, Sizable,
+    v_flex, ActiveTheme as _, Disableable, Icon, IconName, Sizable,
 };
 
 use super::SoloWorkspacePanel;
@@ -215,18 +218,19 @@ impl SoloWorkspacePanel {
         cx: &Context<Self>,
     ) -> gpui::AnyElement {
         let theme = cx.theme().clone();
+        let is_remote = title == "Remote";
         div()
             .flex_1()
             .min_w_0()
             .h_full()
             .overflow_y_scrollbar()
-            .px(px(32.))
-            .py(px(28.))
+            .px(px(if is_remote { 20.0 } else { 32.0 }))
+            .py(px(if is_remote { 18.0 } else { 28.0 }))
             .child(
                 v_flex()
                     .w_full()
-                    .max_w(px(1020.))
-                    .gap(px(18.))
+                    .max_w(px(if is_remote { 10_000.0 } else { 1020.0 }))
+                    .gap(px(if is_remote { 12.0 } else { 18.0 }))
                     .child(
                         h_flex()
                             .items_center()
@@ -536,85 +540,472 @@ impl SoloWorkspacePanel {
         )
     }
 
-    pub(super) fn remote_page(&self, cx: &Context<Self>) -> gpui::AnyElement {
-        let cards = h_flex()
-            .w_full()
-            .gap(px(12.))
-            .flex_wrap()
-            .child(self.summary_card(
-                "Observe",
-                "On",
-                "Read screen state before suggesting actions.",
-                IconName::Eye,
-                Hsla::from(gpui::rgb(0x14b8a6)),
-                cx,
-            ))
-            .child(self.summary_card(
-                "Control Gate",
-                "Ask",
-                "Clicks, typing, installs, and deletes require approval.",
-                IconName::Settings2,
-                Hsla::from(gpui::rgb(0xf59e0b)),
-                cx,
-            ))
-            .child(self.summary_card(
-                "Trusted Routines",
-                "02",
-                "Low-risk local flows prepared for later automation.",
-                IconName::SquareTerminal,
-                Hsla::from(gpui::rgb(0x6366f1)),
-                cx,
-            ));
+    pub(super) fn refresh_remote_windows(&mut self, cx: &mut Context<Self>) {
+        if self.remote_refreshing {
+            return;
+        }
+        self.remote_refreshing = true;
+        cx.notify();
+        let view = cx.entity().clone();
+        cx.spawn(async move |_, cx| {
+            let windows =
+                smol::unblock(crate::infrastructure::desktop_monitor::list_desktop_windows).await;
+            let _ = cx.update(|cx| {
+                let _ = view.update(cx, |this, cx| {
+                    this.remote_windows = windows;
+                    this.remote_refreshing = false;
+                    this.remote_last_refreshed =
+                        Some(chrono::Local::now().format("%H:%M:%S").to_string());
+                    cx.notify();
+                });
+            });
+        })
+        .detach();
+    }
 
+    fn start_remote_stream(&mut self, window_id: isize, cx: &mut Context<Self>) {
+        if self.remote_selected_window == Some(window_id) && self.remote_streaming {
+            return;
+        }
+        self.remote_selected_window = Some(window_id);
+        self.remote_stream_frame = None;
+        self.remote_stream_error = None;
+        self.remote_streaming = true;
+        self.remote_viewer_expanded = false;
+        self.remote_stream_generation = self.remote_stream_generation.wrapping_add(1);
+        let generation = self.remote_stream_generation;
+        let view = cx.entity().clone();
+        cx.notify();
+
+        cx.spawn(async move |_, cx| {
+            let session = smol::unblock(move || {
+                crate::infrastructure::desktop_monitor::start_desktop_window_stream(window_id)
+            })
+            .await;
+            let session = match session {
+                Ok(session) => session,
+                Err(error) => {
+                    let _ = cx.update(|cx| {
+                        let _ = view.update(cx, |this, cx| {
+                            if this.remote_stream_generation == generation {
+                                this.remote_streaming = false;
+                                this.remote_stream_error = Some(error);
+                                cx.notify();
+                            }
+                        });
+                    });
+                    return;
+                }
+            };
+
+            loop {
+                let event = session.take_latest();
+                let keep_streaming = cx
+                    .update(|cx| {
+                        let active = {
+                            let this = view.read(cx);
+                            this.active_section == super::model::SoloSection::Remote
+                                && this.remote_streaming
+                                && this.remote_stream_generation == generation
+                                && this.remote_selected_window == Some(window_id)
+                        };
+                        if active {
+                            if let Some(event) = event {
+                                let _ = view.update(cx, |this, cx| {
+                                    match event {
+                                        crate::infrastructure::desktop_monitor::DesktopStreamEvent::Frame(frame) => {
+                                            this.remote_stream_frame = Some(frame);
+                                            this.remote_stream_error = None;
+                                        }
+                                        crate::infrastructure::desktop_monitor::DesktopStreamEvent::Closed => {
+                                            this.remote_streaming = false;
+                                            this.remote_stream_error =
+                                                Some("The source window was closed.".to_string());
+                                        }
+                                        crate::infrastructure::desktop_monitor::DesktopStreamEvent::Error(error) => {
+                                            this.remote_streaming = false;
+                                            this.remote_stream_error = Some(error);
+                                        }
+                                    }
+                                    cx.notify();
+                                });
+                            }
+                        }
+                        active
+                    })
+                    .unwrap_or(false);
+                if !keep_streaming {
+                    break;
+                }
+                smol::Timer::after(std::time::Duration::from_millis(16)).await;
+            }
+        })
+        .detach();
+    }
+
+    pub(super) fn stop_remote_stream(&mut self, cx: &mut Context<Self>) {
+        self.remote_streaming = false;
+        self.remote_stream_generation = self.remote_stream_generation.wrapping_add(1);
+        self.remote_selected_window = None;
+        self.remote_stream_frame = None;
+        self.remote_stream_error = None;
+        self.remote_viewer_expanded = false;
+        cx.notify();
+    }
+
+    pub(super) fn remote_page(&self, cx: &Context<Self>) -> gpui::AnyElement {
+        let theme = cx.theme().clone();
+        let selected_window = self.remote_selected_window.and_then(|window_id| {
+            self.remote_windows
+                .iter()
+                .find(|window| window.window_id == window_id)
+        });
+        let viewer = selected_window.map(|desktop_window| {
+            let viewer_height = if self.remote_viewer_expanded {
+                900.0
+            } else {
+                720.0
+            };
+            let frame = if let Some(frame) = self.remote_stream_frame.clone() {
+                div()
+                    .size_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(img(frame).h_full().object_fit(ObjectFit::Contain))
+                    .into_any_element()
+            } else {
+                let (title, detail) = if let Some(error) = self.remote_stream_error.as_deref() {
+                    ("Live stream stopped".to_string(), error.to_string())
+                } else if desktop_window.minimized {
+                    (
+                        "Window is minimized".to_string(),
+                        "Restore it on the desktop so Windows can deliver new GPU frames."
+                            .to_string(),
+                    )
+                } else {
+                    (
+                        "Starting GPU live stream...".to_string(),
+                        "Waiting for the first complete Windows Graphics Capture frame."
+                            .to_string(),
+                    )
+                };
+                v_flex()
+                    .size_full()
+                    .items_center()
+                    .justify_center()
+                    .gap(px(10.0))
+                    .text_color(theme.muted_foreground)
+                    .child(
+                        div()
+                            .w(px(48.0))
+                            .h(px(48.0))
+                            .rounded_full()
+                            .bg(theme.primary.opacity(0.12))
+                            .text_color(theme.primary)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(Icon::new(IconName::Eye).size(px(22.0))),
+                    )
+                    .child(
+                        div()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(theme.foreground)
+                            .child(title),
+                    )
+                    .child(
+                        div()
+                            .max_w(px(520.0))
+                            .text_align(gpui::TextAlign::Center)
+                            .text_size(px(11.0))
+                            .line_height(gpui::relative(1.45))
+                            .child(detail),
+                    )
+                    .into_any_element()
+            };
+            v_flex()
+                .w_full()
+                .overflow_hidden()
+                .rounded_lg()
+                .border_1()
+                .border_color(theme.primary.opacity(0.42))
+                .bg(theme.secondary.opacity(0.35))
+                .child(
+                    h_flex()
+                        .w_full()
+                        .h(px(42.0))
+                        .flex_shrink_0()
+                        .px(px(12.0))
+                        .justify_between()
+                        .items_center()
+                        .bg(theme.background)
+                        .child(
+                            h_flex()
+                                .min_w_0()
+                                .gap(px(8.0))
+                                .items_center()
+                                .child(div().w(px(8.0)).h(px(8.0)).rounded_full().bg(gpui::green()))
+                                .child(
+                                    div()
+                                        .min_w_0()
+                                        .truncate()
+                                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                                        .child(desktop_window.title.clone()),
+                                )
+                                .child(
+                                    div()
+                                        .flex_shrink_0()
+                                        .text_size(px(10.0))
+                                        .text_color(theme.muted_foreground)
+                                        .child("LIVE · WINDOWS GRAPHICS CAPTURE"),
+                                ),
+                        )
+                        .child(
+                            h_flex()
+                                .gap(px(4.0))
+                                .child(
+                                    Button::new("solo-remote-expand-viewer")
+                                        .small()
+                                        .compact()
+                                        .ghost()
+                                        .icon(if self.remote_viewer_expanded {
+                                            IconName::Minimize
+                                        } else {
+                                            IconName::Maximize
+                                        })
+                                        .tooltip(if self.remote_viewer_expanded {
+                                            "Reduce viewer"
+                                        } else {
+                                            "Enlarge viewer"
+                                        })
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.remote_viewer_expanded =
+                                                !this.remote_viewer_expanded;
+                                            cx.notify();
+                                        })),
+                                )
+                                .child(
+                                    Button::new("solo-remote-close-viewer")
+                                        .small()
+                                        .compact()
+                                        .ghost()
+                                        .icon(IconName::Close)
+                                        .tooltip("Close live viewer")
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.stop_remote_stream(cx);
+                                        })),
+                                ),
+                        ),
+                )
+                .child(
+                    div()
+                        .w_full()
+                        .h(px(viewer_height))
+                        .p(px(8.0))
+                        .bg(theme.secondary.opacity(0.22))
+                        .child(
+                            div()
+                                .size_full()
+                                .overflow_hidden()
+                                .rounded_md()
+                                .bg(gpui::black())
+                                .child(frame),
+                        ),
+                )
+                .into_any_element()
+        });
+
+        let mut window_grid = h_flex().w_full().gap(px(8.0)).flex_wrap();
+        if self.remote_windows.is_empty() {
+            window_grid = window_grid.child(
+                v_flex()
+                    .w_full()
+                    .items_center()
+                    .gap(px(8.0))
+                    .rounded_lg()
+                    .border_1()
+                    .border_color(theme.border)
+                    .bg(theme.secondary.opacity(0.2))
+                    .p(px(20.0))
+                    .text_color(theme.muted_foreground)
+                    .child(Icon::new(IconName::Eye).size(px(24.0)))
+                    .child(if self.remote_refreshing {
+                        "Reading the current desktop..."
+                    } else {
+                        "No visible application windows were found."
+                    }),
+            );
+        } else {
+            for desktop_window in &self.remote_windows {
+                let selected = self.remote_selected_window == Some(desktop_window.window_id);
+                let window_id = desktop_window.window_id;
+                let preview = if let Some(path) = desktop_window.thumbnail_path.clone() {
+                    img(path)
+                        .w_full()
+                        .h(px(106.0))
+                        .object_fit(ObjectFit::Cover)
+                        .into_any_element()
+                } else {
+                    v_flex()
+                        .w_full()
+                        .h(px(106.0))
+                        .items_center()
+                        .justify_center()
+                        .gap(px(6.0))
+                        .bg(theme.secondary.opacity(0.45))
+                        .text_color(theme.muted_foreground)
+                        .child(Icon::new(IconName::Eye).size(px(22.0)))
+                        .child(if desktop_window.minimized {
+                            "Minimized"
+                        } else {
+                            "Preview unavailable"
+                        })
+                        .into_any_element()
+                };
+                window_grid = window_grid.child(
+                    v_flex()
+                        .id(gpui::ElementId::Name(
+                            format!("remote-window-{}", desktop_window.window_id).into(),
+                        ))
+                        .w(px(220.0))
+                        .overflow_hidden()
+                        .rounded_lg()
+                        .border_1()
+                        .border_color(if selected {
+                            theme.primary
+                        } else {
+                            theme.border
+                        })
+                        .bg(if selected {
+                            theme.primary.opacity(0.08)
+                        } else {
+                            theme.background
+                        })
+                        .cursor_pointer()
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.start_remote_stream(window_id, cx);
+                        }))
+                        .child(preview)
+                        .child(
+                            v_flex()
+                                .gap(px(3.0))
+                                .p(px(8.0))
+                                .child(
+                                    div()
+                                        .truncate()
+                                        .text_size(px(11.0))
+                                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                                        .text_color(theme.foreground)
+                                        .child(desktop_window.title.clone()),
+                                )
+                                .child(
+                                    div()
+                                        .truncate()
+                                        .text_size(px(10.0))
+                                        .text_color(theme.muted_foreground)
+                                        .child(desktop_window.application.clone()),
+                                ),
+                        ),
+                );
+            }
+        }
+
+        let status = self
+            .remote_last_refreshed
+            .as_ref()
+            .map(|time| format!("Scanned {time}"))
+            .unwrap_or_else(|| "Not scanned yet".to_string());
         let body = v_flex()
-            .gap(px(14.))
-            .child(cards)
+            .gap(px(10.0))
             .child(
                 h_flex()
-                    .gap(px(8.))
+                    .w_full()
+                    .justify_between()
                     .items_center()
-                    .child(self.prompt_button(
-                        "solo-remote-plan",
-                        "Plan remote action",
-                        "Plan a guarded remote desktop action. Include observations, approval points, and stop conditions: ",
-                        cx,
-                    ))
-                    .child(self.prompt_button(
-                        "solo-remote-policy",
-                        "Review policy",
-                        "Review my Solo Mode remote-control policy and tighten risky permissions.",
-                        cx,
-                    )),
+                    .border_1()
+                    .border_color(theme.primary.opacity(0.25))
+                    .bg(theme.primary.opacity(0.07))
+                    .rounded_md()
+                    .px(px(10.0))
+                    .py(px(7.0))
+                    .child(
+                        h_flex()
+                            .min_w_0()
+                            .gap(px(8.0))
+                            .items_center()
+                            .child(
+                                div()
+                                    .flex_shrink_0()
+                                    .text_color(theme.primary)
+                                    .child(Icon::new(IconName::Eye).size(px(14.0))),
+                            )
+                            .child(
+                                div()
+                                    .truncate()
+                                    .text_size(px(11.0))
+                                    .text_color(theme.muted_foreground)
+                                    .child("Local monitor only · live frames stay on this computer · no clicks or typing"),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .text_size(px(10.0))
+                            .text_color(theme.muted_foreground)
+                            .child(status.clone()),
+                    ),
             )
-            .child(self.list_panel(
-                "Remote Control Gates",
-                "Solo Mode can prepare actions, but sensitive steps remain permissioned.",
-                &[
-                    (
-                        "Screen understanding",
-                        "Allowed for visual inspection and UI diagnosis.",
-                        IconName::Eye,
-                        "Enabled",
+            .children(viewer)
+            .child(
+                h_flex()
+                    .w_full()
+                    .justify_between()
+                    .items_center()
+                    .child(
+                        v_flex()
+                            .gap(px(2.0))
+                            .child(
+                                div()
+                                    .font_weight(gpui::FontWeight::BOLD)
+                                    .child(format!("Windows ({})", self.remote_windows.len())),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(10.0))
+                                    .text_color(theme.muted_foreground)
+                                    .child("Select a window to open its live viewer"),
+                            ),
+                    )
+                    .child(
+                        Button::new("solo-remote-refresh")
+                            .small()
+                            .ghost()
+                            .disabled(self.remote_refreshing)
+                            .label(if self.remote_refreshing {
+                                "Refreshing..."
+                            } else {
+                                "Rescan windows"
+                            })
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.refresh_remote_windows(cx);
+                            })),
                     ),
-                    (
-                        "Text input",
-                        "Ask first before typing into apps, terminals, or browsers.",
-                        IconName::SquareTerminal,
-                        "Ask",
-                    ),
-                    (
-                        "System changes",
-                        "Install, delete, move, or credential actions are blocked by default.",
-                        IconName::Settings2,
-                        "Guarded",
-                    ),
-                ],
-                cx,
-            ));
+            )
+            .child(window_grid)
+            .child(
+                h_flex()
+                    .gap(px(8.0))
+                    .text_size(px(10.0))
+                    .text_color(theme.muted_foreground)
+                    .child(self.badge("Observe: enabled", theme.primary, cx))
+                    .child(self.badge("Control: ask first", theme.primary, cx))
+                    .child(self.badge("Sensitive changes: guarded", theme.primary, cx)),
+            );
 
         self.section_page(
             "Remote",
-            "Guarded desktop control for personal work, separate from team execution.",
+            "Monitor open desktop windows and enlarge one local live view.",
             IconName::Eye,
             body.into_any_element(),
             cx,

@@ -7,6 +7,7 @@ pub mod file_intelligence;
 pub mod iflow_engine;
 pub mod knowledge;
 pub mod marketplace_service;
+pub mod memory_bank;
 pub mod orchestration;
 pub mod output_tools;
 pub mod research;

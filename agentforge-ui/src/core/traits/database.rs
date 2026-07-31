@@ -3,6 +3,8 @@ pub trait DatabasePort: Send + Sync {
     fn list_provider_templates(&self)
         -> anyhow::Result<Vec<crate::core::models::ProviderTemplate>>;
     fn insert_provider(&self, p: &crate::core::models::Provider) -> anyhow::Result<()>;
+    fn update_provider(&self, p: &crate::core::models::Provider) -> anyhow::Result<()>;
+    fn delete_provider(&self, provider_id: &str) -> anyhow::Result<()>;
     fn list_providers(&self) -> anyhow::Result<Vec<crate::core::models::Provider>>;
     fn get_provider_by_name(
         &self,
@@ -140,6 +142,29 @@ pub trait DatabasePort: Send + Sync {
         &self,
         session_id: &str,
     ) -> anyhow::Result<Vec<crate::core::models::ChatMessage>>;
+    fn create_solo_project(
+        &self,
+        name: &str,
+    ) -> anyhow::Result<crate::core::models::SoloProjectRecord>;
+    fn list_solo_projects(&self) -> anyhow::Result<Vec<crate::core::models::SoloProjectRecord>>;
+    fn list_solo_conversations(
+        &self,
+    ) -> anyhow::Result<Vec<crate::core::models::SoloConversationRecord>>;
+    fn upsert_solo_conversation(
+        &self,
+        id: i64,
+        project_id: Option<&str>,
+        title: &str,
+    ) -> anyhow::Result<()>;
+    fn replace_solo_messages(
+        &self,
+        conversation_id: i64,
+        messages: &[crate::core::models::SoloMessageRecord],
+    ) -> anyhow::Result<()>;
+    fn get_solo_messages(
+        &self,
+        conversation_id: i64,
+    ) -> anyhow::Result<Vec<crate::core::models::SoloMessageRecord>>;
     fn save_message(
         &self,
         team_id: &str,
@@ -719,4 +744,50 @@ pub trait DatabasePort: Send + Sync {
         query: &str,
         limit: u32,
     ) -> anyhow::Result<Vec<crate::core::models::knowledge::KnowledgeEntry>>;
+
+    // ── Memory Bank ──
+    fn create_memory_bank_item(
+        &self,
+        item: &crate::core::models::MemoryBankItem,
+    ) -> anyhow::Result<()>;
+    fn update_memory_bank_item(
+        &self,
+        item: &crate::core::models::MemoryBankItem,
+    ) -> anyhow::Result<()>;
+    fn delete_memory_bank_item(&self, id: &str) -> anyhow::Result<()>;
+    fn get_memory_bank_item(
+        &self,
+        id: &str,
+    ) -> anyhow::Result<Option<crate::core::models::MemoryBankItem>>;
+    fn list_memory_bank_items(
+        &self,
+        instance_id: &str,
+    ) -> anyhow::Result<Vec<crate::core::models::MemoryBankItem>>;
+    fn list_memory_bank_items_by_category(
+        &self,
+        instance_id: &str,
+        category: &str,
+    ) -> anyhow::Result<Vec<crate::core::models::MemoryBankItem>>;
+    fn list_active_memory_bank_items(
+        &self,
+        instance_id: &str,
+    ) -> anyhow::Result<Vec<crate::core::models::MemoryBankItem>>;
+    fn update_memory_bank_item_position(&self, id: &str, x: f32, y: f32) -> anyhow::Result<()>;
+    fn create_memory_bank_link(
+        &self,
+        link: &crate::core::models::MemoryBankLink,
+    ) -> anyhow::Result<()>;
+    fn delete_memory_bank_link(&self, id: &str) -> anyhow::Result<()>;
+    fn list_memory_bank_links(
+        &self,
+        instance_id: &str,
+    ) -> anyhow::Result<Vec<crate::core::models::MemoryBankLink>>;
+    fn create_memory_bank_snapshot(
+        &self,
+        snapshot: &crate::core::models::MemoryBankSnapshot,
+    ) -> anyhow::Result<()>;
+    fn list_memory_bank_snapshots(
+        &self,
+        instance_id: &str,
+    ) -> anyhow::Result<Vec<crate::core::models::MemoryBankSnapshot>>;
 }

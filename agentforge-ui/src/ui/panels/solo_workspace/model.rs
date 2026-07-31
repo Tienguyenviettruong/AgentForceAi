@@ -1,10 +1,71 @@
 use gpui::Hsla;
 use gpui_component::IconName;
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone)]
 pub(super) struct SoloMessage {
     pub(super) role: &'static str,
     pub(super) content: String,
+    pub(super) attachments: Vec<String>,
+    pub(super) model: Option<String>,
+    pub(super) speed: Option<String>,
+    pub(super) tools: Vec<String>,
+    pub(super) activities: Vec<SoloActivity>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub(super) struct SoloMessageMetadata {
+    pub(super) attachments: Vec<String>,
+    pub(super) model: Option<String>,
+    pub(super) speed: Option<String>,
+    pub(super) tools: Vec<String>,
+    pub(super) activities: Vec<SoloActivity>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub(super) enum SoloActivityKind {
+    Search,
+    Tool,
+    Command,
+    File,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub(super) enum SoloActivityStatus {
+    Running,
+    Completed,
+    Failed,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub(super) struct SoloActivity {
+    pub(super) id: String,
+    pub(super) kind: SoloActivityKind,
+    pub(super) label: String,
+    pub(super) detail: Option<String>,
+    pub(super) status: SoloActivityStatus,
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum SoloTool {
+    Build,
+    Skills,
+}
+
+impl SoloTool {
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            Self::Build => "Build",
+            Self::Skills => "Skills",
+        }
+    }
+
+    pub(super) fn icon(self) -> IconName {
+        match self {
+            Self::Build => IconName::SquareTerminal,
+            Self::Skills => IconName::Settings2,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -20,15 +81,15 @@ pub(super) struct SoloTemplate {
 #[derive(Clone)]
 pub(super) struct SoloConversation {
     pub(super) id: usize,
-    pub(super) project_id: Option<&'static str>,
+    pub(super) project_id: Option<String>,
     pub(super) title: String,
     pub(super) messages: Vec<SoloMessage>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(super) struct SoloProject {
-    pub(super) id: &'static str,
-    pub(super) name: &'static str,
+    pub(super) id: String,
+    pub(super) name: String,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -38,23 +99,6 @@ pub(super) enum SoloSection {
     Automations,
     Triggers,
     Remote,
-}
-
-pub(super) fn solo_projects() -> [SoloProject; 3] {
-    [
-        SoloProject {
-            id: "agentforce-ui",
-            name: "AgentForce UI",
-        },
-        SoloProject {
-            id: "research-notes",
-            name: "Research Notes",
-        },
-        SoloProject {
-            id: "personal-ops",
-            name: "Personal Ops",
-        },
-    ]
 }
 
 pub(super) fn solo_templates() -> Vec<SoloTemplate> {

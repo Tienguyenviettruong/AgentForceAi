@@ -1,4 +1,5 @@
 pub mod database;
+pub mod desktop_monitor;
 pub mod fs;
 pub mod llm_providers;
 pub mod mcp;

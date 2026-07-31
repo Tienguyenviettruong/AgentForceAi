@@ -1,0 +1,135 @@
+{
+  "version": 1,
+  "assets": [
+    {
+      "id": "project-core",
+      "file": "project-core.png",
+      "width": 1024,
+      "height": 985,
+      "alpha_bbox": [
+        41,
+        41,
+        984,
+        945
+      ],
+      "bytes": 1517756
+    },
+    {
+      "id": "project-brief",
+      "file": "project-brief.png",
+      "width": 1024,
+      "height": 1014,
+      "alpha_bbox": [
+        40,
+        40,
+        984,
+        974
+      ],
+      "bytes": 1482499
+    },
+    {
+      "id": "architecture",
+      "file": "architecture.png",
+      "width": 806,
+      "height": 1024,
+      "alpha_bbox": [
+        40,
+        40,
+        765,
+        984
+      ],
+      "bytes": 1053235
+    },
+    {
+      "id": "context",
+      "file": "context.png",
+      "width": 905,
+      "height": 1024,
+      "alpha_bbox": [
+        40,
+        41,
+        865,
+        984
+      ],
+      "bytes": 1426292
+    },
+    {
+      "id": "progress",
+      "file": "progress.png",
+      "width": 1024,
+      "height": 1008,
+      "alpha_bbox": [
+        40,
+        40,
+        984,
+        968
+      ],
+      "bytes": 1475370
+    },
+    {
+      "id": "lessons",
+      "file": "lessons.png",
+      "width": 1022,
+      "height": 1024,
+      "alpha_bbox": [
+        40,
+        42,
+        982,
+        984
+      ],
+      "bytes": 1421028
+    },
+    {
+      "id": "decisions",
+      "file": "decisions.png",
+      "width": 1023,
+      "height": 1024,
+      "alpha_bbox": [
+        40,
+        40,
+        983,
+        983
+      ],
+      "bytes": 1380395
+    },
+    {
+      "id": "data-bridge-ne",
+      "file": "data-bridge-ne.png",
+      "width": 1024,
+      "height": 844,
+      "alpha_bbox": [
+        40,
+        40,
+        984,
+        804
+      ],
+      "bytes": 546988
+    },
+    {
+      "id": "memory-sentinel",
+      "file": "memory-sentinel.png",
+      "width": 506,
+      "height": 629,
+      "alpha_bbox": [
+        26,
+        26,
+        480,
+        603
+      ],
+      "bytes": 297606
+    },
+    {
+      "id": "data-bridge-nw",
+      "file": "data-bridge-nw.png",
+      "width": 1024,
+      "height": 844,
+      "alpha_bbox": [
+        40,
+        40,
+        984,
+        804
+      ],
+      "bytes": 537171
+    }
+  ]
+}

@@ -5,9 +5,11 @@ pub mod collaboration;
 pub mod cross_team;
 pub mod knowledge;
 pub mod learning;
+pub mod memory_bank;
 pub mod orchestration;
 pub mod provider;
 pub mod session;
+pub mod solo;
 pub mod task;
 pub mod team;
 pub mod workflow;
@@ -28,6 +30,10 @@ pub use learning::{
     FeedbackRecord, LearningCandidateRecord, LessonRecord, PromotionDecisionRecord, RollbackRecord,
     RunEvaluationRecord, SkillVersionRecord,
 };
+pub use memory_bank::{
+    ContextPriority, MemoryBankCategory, MemoryBankItem, MemoryBankLink, MemoryBankLinkType,
+    MemoryBankSnapshot, MemoryBankStatus,
+};
 pub use orchestration::{
     ApprovalRequestRecord, ArtifactRecord, CapabilitySelectionRecord, LlmContextSnapshotRecord,
     LlmContextSourceRecord, ModeTransitionRecord, OrchestrationRunRecord, RunEventRecord,
@@ -35,6 +41,7 @@ pub use orchestration::{
 };
 pub use provider::{Provider, ProviderTemplate};
 pub use session::SessionRecord;
+pub use solo::{SoloConversationRecord, SoloMessageRecord, SoloProjectRecord};
 pub use task::Task;
 pub use team::{Instance, Team};
 pub use workflow::{WorkflowExecutionRecord, WorkflowRecord, WorkflowVersionRecord};

@@ -8,6 +8,7 @@ pub use core::*;
 pub use framework::*;
 pub use research::*;
 
+use crate::application::memory_bank::skills::{ReadMemoryBankSkill, UpdateMemoryBankSkill};
 use std::sync::Arc;
 
 pub fn builtin_skill_catalog() -> Vec<SkillMetadata> {
@@ -21,6 +22,8 @@ pub fn builtin_skill_catalog() -> Vec<SkillMetadata> {
         SummarizeSkill.metadata(),
         TranslateSkill.metadata(),
         ExplainSkill.metadata(),
+        UpdateMemoryBankSkill.metadata(),
+        ReadMemoryBankSkill.metadata(),
     ]
 }
 
@@ -41,6 +44,10 @@ pub async fn initialize_skills() -> SkillRegistry {
     registry.register(Arc::new(SummarizeSkill)).await;
     registry.register(Arc::new(TranslateSkill)).await;
     registry.register(Arc::new(ExplainSkill)).await;
+
+    // Memory Bank Skills
+    registry.register(Arc::new(UpdateMemoryBankSkill)).await;
+    registry.register(Arc::new(ReadMemoryBankSkill)).await;
 
     registry
 }

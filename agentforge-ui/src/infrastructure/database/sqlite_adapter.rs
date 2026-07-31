@@ -1,5 +1,6 @@
 use crate::core::models::{
-    Agent, Instance, Provider, ProviderTemplate, SessionRecord, Team, WorkflowRecord,
+    Agent, Instance, Provider, ProviderTemplate, SessionRecord, SoloConversationRecord,
+    SoloMessageRecord, SoloProjectRecord, Team, WorkflowRecord,
 };
 use crate::core::traits::database::DatabasePort;
 use crate::knowledge::core::KnowledgeItem;
@@ -323,6 +324,46 @@ impl Database {
             );
 
             CREATE INDEX IF NOT EXISTS idx_conversations_session_time ON conversations(session_id, created_at);
+
+            -- 11b. Solo Mode projects and conversations
+            CREATE TABLE IF NOT EXISTS solo_projects (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS solo_conversations (
+                id INTEGER PRIMARY KEY,
+                project_id TEXT REFERENCES solo_projects(id) ON DELETE SET NULL,
+                title TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_solo_conversations_project_time
+                ON solo_conversations(project_id, updated_at DESC);
+
+            CREATE TABLE IF NOT EXISTS solo_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                conversation_id INTEGER NOT NULL REFERENCES solo_conversations(id) ON DELETE CASCADE,
+                ordinal INTEGER NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                metadata TEXT,
+                created_at TEXT NOT NULL,
+                UNIQUE(conversation_id, ordinal)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_solo_messages_conversation
+                ON solo_messages(conversation_id, ordinal);
+
+            INSERT OR IGNORE INTO solo_projects (id, name, created_at, updated_at)
+                VALUES ('agentforce-ui', 'AgentForce UI', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+            INSERT OR IGNORE INTO solo_projects (id, name, created_at, updated_at)
+                VALUES ('research-notes', 'Research Notes', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+            INSERT OR IGNORE INTO solo_projects (id, name, created_at, updated_at)
+                VALUES ('personal-ops', 'Personal Ops', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
 
             -- 12. Workflows (iFlows)
             CREATE TABLE IF NOT EXISTS workflows (
@@ -1002,6 +1043,47 @@ impl Database {
                 ON benchmark_runner_jobs(candidate_id, created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_canary_candidate_time
                 ON canary_deployments(candidate_id, started_at DESC);
+
+            CREATE TABLE IF NOT EXISTS memory_bank_items (
+                id TEXT PRIMARY KEY,
+                instance_id TEXT NOT NULL,
+                category TEXT NOT NULL,
+                title TEXT NOT NULL,
+                content TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active',
+                context_priority TEXT NOT NULL DEFAULT 'medium',
+                version INTEGER NOT NULL DEFAULT 1,
+                parent_id TEXT,
+                position_x REAL NOT NULL DEFAULT 0.0,
+                position_y REAL NOT NULL DEFAULT 0.0,
+                color_hex TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                created_by TEXT NOT NULL,
+                content_hash TEXT,
+                token_count INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS idx_mb_items_instance ON memory_bank_items(instance_id);
+            CREATE INDEX IF NOT EXISTS idx_mb_items_category ON memory_bank_items(instance_id, category);
+
+            CREATE TABLE IF NOT EXISTS memory_bank_links (
+                id TEXT PRIMARY KEY,
+                source_id TEXT NOT NULL,
+                target_id TEXT NOT NULL,
+                link_type TEXT NOT NULL,
+                label TEXT,
+                instance_id TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_mb_links_instance ON memory_bank_links(instance_id);
+
+            CREATE TABLE IF NOT EXISTS memory_bank_snapshots (
+                id TEXT PRIMARY KEY,
+                instance_id TEXT NOT NULL,
+                summary TEXT NOT NULL,
+                items_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                consolidated_to_knowledge_id TEXT
+            );
 
             ",
         )?;
@@ -1691,6 +1773,45 @@ impl crate::core::traits::database::DatabasePort for Database {
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, ?9, ?10)",
             params![p.id, p.provider_name, p.model, p.adapter_type, p.command, p.api_key_ref, p.status, cap_json, now, now],
         )?;
+        Ok(())
+    }
+
+    fn update_provider(&self, p: &Provider) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().to_rfc3339();
+        let cap_json = p.capabilities.as_ref().map(|c| c.to_json());
+        let changed = conn.execute(
+            "UPDATE provider_configs
+             SET provider_name = ?2, model = ?3, adapter_type = ?4, command = ?5,
+                 api_key_ref = ?6, status = ?7, capabilities = ?8, updated_at = ?9
+             WHERE id = ?1 AND is_builtin = 0",
+            params![
+                p.id,
+                p.provider_name,
+                p.model,
+                p.adapter_type,
+                p.command,
+                p.api_key_ref,
+                p.status,
+                cap_json,
+                now
+            ],
+        )?;
+        if changed == 0 {
+            anyhow::bail!("Provider was not found or cannot be edited");
+        }
+        Ok(())
+    }
+
+    fn delete_provider(&self, provider_id: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let changed = conn.execute(
+            "DELETE FROM provider_configs WHERE id = ?1 AND is_builtin = 0",
+            params![provider_id],
+        )?;
+        if changed == 0 {
+            anyhow::bail!("Provider was not found or cannot be deleted");
+        }
         Ok(())
     }
 
@@ -3081,6 +3202,134 @@ impl crate::core::traits::database::DatabasePort for Database {
             });
         }
         Ok(msgs)
+    }
+
+    fn create_solo_project(&self, name: &str) -> Result<SoloProjectRecord> {
+        let conn = self.conn.lock().unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO solo_projects (id, name, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![id, name, now, now],
+        )?;
+        Ok(SoloProjectRecord {
+            id,
+            name: name.to_string(),
+            created_at: now.clone(),
+            updated_at: now,
+        })
+    }
+
+    fn list_solo_projects(&self) -> Result<Vec<SoloProjectRecord>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, name, created_at, updated_at
+             FROM solo_projects
+             ORDER BY created_at ASC, name COLLATE NOCASE ASC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(SoloProjectRecord {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                created_at: row.get(2)?,
+                updated_at: row.get(3)?,
+            })
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    fn list_solo_conversations(&self) -> Result<Vec<SoloConversationRecord>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, project_id, title, created_at, updated_at
+             FROM solo_conversations
+             ORDER BY updated_at DESC, id DESC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(SoloConversationRecord {
+                id: row.get(0)?,
+                project_id: row.get(1)?,
+                title: row.get(2)?,
+                created_at: row.get(3)?,
+                updated_at: row.get(4)?,
+            })
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    fn upsert_solo_conversation(
+        &self,
+        id: i64,
+        project_id: Option<&str>,
+        title: &str,
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO solo_conversations (id, project_id, title, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?4)
+             ON CONFLICT(id) DO UPDATE SET
+                project_id = excluded.project_id,
+                title = excluded.title,
+                updated_at = excluded.updated_at",
+            params![id, project_id, title, now],
+        )?;
+        Ok(())
+    }
+
+    fn replace_solo_messages(
+        &self,
+        conversation_id: i64,
+        messages: &[SoloMessageRecord],
+    ) -> Result<()> {
+        let mut conn = self.conn.lock().unwrap();
+        let transaction = conn.transaction()?;
+        transaction.execute(
+            "DELETE FROM solo_messages WHERE conversation_id = ?1",
+            params![conversation_id],
+        )?;
+        let now = chrono::Utc::now().to_rfc3339();
+        {
+            let mut stmt = transaction.prepare(
+                "INSERT INTO solo_messages
+                    (conversation_id, ordinal, role, content, metadata, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            )?;
+            for (ordinal, message) in messages.iter().enumerate() {
+                stmt.execute(params![
+                    conversation_id,
+                    ordinal as i64,
+                    message.role,
+                    message.content,
+                    message.metadata,
+                    now
+                ])?;
+            }
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    fn get_solo_messages(&self, conversation_id: i64) -> Result<Vec<SoloMessageRecord>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT role, content, metadata
+             FROM solo_messages
+             WHERE conversation_id = ?1
+             ORDER BY ordinal ASC",
+        )?;
+        let rows = stmt.query_map(params![conversation_id], |row| {
+            Ok(SoloMessageRecord {
+                role: row.get(0)?,
+                content: row.get(1)?,
+                metadata: row.get(2)?,
+            })
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
     }
 
     fn save_message(
@@ -6970,11 +7219,286 @@ impl crate::core::traits::database::DatabasePort for Database {
         rows.collect::<std::result::Result<Vec<_>, _>>()
             .map_err(Into::into)
     }
+
+    // ── Memory Bank ──
+
+    fn create_memory_bank_item(&self, item: &crate::core::models::MemoryBankItem) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO memory_bank_items
+                (id, instance_id, category, title, content, status, context_priority,
+                 version, parent_id, position_x, position_y, color_hex,
+                 created_at, updated_at, created_by, content_hash, token_count)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+            params![
+                item.id.to_string(),
+                item.instance_id,
+                item.category.as_str(),
+                item.title,
+                item.content,
+                item.status.as_str(),
+                item.context_priority.as_str(),
+                item.version,
+                item.parent_id.map(|u| u.to_string()),
+                item.position_x,
+                item.position_y,
+                item.color_hex,
+                item.created_at.to_rfc3339(),
+                item.updated_at.to_rfc3339(),
+                item.created_by,
+                item.content_hash,
+                item.token_count as i64
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn update_memory_bank_item(&self, item: &crate::core::models::MemoryBankItem) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE memory_bank_items SET
+                category = ?2, title = ?3, content = ?4, status = ?5,
+                context_priority = ?6, version = ?7, parent_id = ?8,
+                position_x = ?9, position_y = ?10, color_hex = ?11,
+                updated_at = ?12, content_hash = ?13, token_count = ?14
+             WHERE id = ?1",
+            params![
+                item.id.to_string(),
+                item.category.as_str(),
+                item.title,
+                item.content,
+                item.status.as_str(),
+                item.context_priority.as_str(),
+                item.version,
+                item.parent_id.map(|u| u.to_string()),
+                item.position_x,
+                item.position_y,
+                item.color_hex,
+                item.updated_at.to_rfc3339(),
+                item.content_hash,
+                item.token_count as i64
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn delete_memory_bank_item(&self, id: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM memory_bank_items WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    fn get_memory_bank_item(
+        &self,
+        id: &str,
+    ) -> Result<Option<crate::core::models::MemoryBankItem>> {
+        let conn = self.conn.lock().unwrap();
+        let result = conn
+            .query_row(
+                "SELECT id, instance_id, category, title, content, status,
+                        context_priority, version, parent_id, position_x, position_y,
+                        color_hex, created_at, updated_at, created_by, content_hash, token_count
+                 FROM memory_bank_items WHERE id = ?1",
+                params![id],
+                parse_memory_bank_item_row,
+            )
+            .optional()?;
+        Ok(result)
+    }
+
+    fn list_memory_bank_items(
+        &self,
+        instance_id: &str,
+    ) -> Result<Vec<crate::core::models::MemoryBankItem>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, instance_id, category, title, content, status,
+                    context_priority, version, parent_id, position_x, position_y,
+                    color_hex, created_at, updated_at, created_by, content_hash, token_count
+             FROM memory_bank_items WHERE instance_id = ?1 ORDER BY updated_at DESC",
+        )?;
+        let rows = stmt.query_map(params![instance_id], parse_memory_bank_item_row)?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    fn list_memory_bank_items_by_category(
+        &self,
+        instance_id: &str,
+        category: &str,
+    ) -> Result<Vec<crate::core::models::MemoryBankItem>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, instance_id, category, title, content, status,
+                    context_priority, version, parent_id, position_x, position_y,
+                    color_hex, created_at, updated_at, created_by, content_hash, token_count
+             FROM memory_bank_items WHERE instance_id = ?1 AND category = ?2 ORDER BY updated_at DESC",
+        )?;
+        let rows = stmt.query_map(params![instance_id, category], parse_memory_bank_item_row)?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    fn list_active_memory_bank_items(
+        &self,
+        instance_id: &str,
+    ) -> Result<Vec<crate::core::models::MemoryBankItem>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, instance_id, category, title, content, status,
+                    context_priority, version, parent_id, position_x, position_y,
+                    color_hex, created_at, updated_at, created_by, content_hash, token_count
+             FROM memory_bank_items WHERE instance_id = ?1 AND status = 'active' ORDER BY updated_at DESC",
+        )?;
+        let rows = stmt.query_map(params![instance_id], parse_memory_bank_item_row)?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    fn update_memory_bank_item_position(&self, id: &str, x: f32, y: f32) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE memory_bank_items SET position_x = ?2, position_y = ?3 WHERE id = ?1",
+            params![id, x, y],
+        )?;
+        Ok(())
+    }
+
+    fn create_memory_bank_link(&self, link: &crate::core::models::MemoryBankLink) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO memory_bank_links (id, source_id, target_id, link_type, label, instance_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                link.id.to_string(),
+                link.source_id.to_string(),
+                link.target_id.to_string(),
+                link.link_type.as_str(),
+                link.label,
+                link.instance_id
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn delete_memory_bank_link(&self, id: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM memory_bank_links WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    fn list_memory_bank_links(
+        &self,
+        instance_id: &str,
+    ) -> Result<Vec<crate::core::models::MemoryBankLink>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, source_id, target_id, link_type, label, instance_id
+             FROM memory_bank_links WHERE instance_id = ?1",
+        )?;
+        let rows = stmt.query_map(params![instance_id], |row| {
+            use crate::core::models::memory_bank::*;
+            Ok(crate::core::models::MemoryBankLink {
+                id: uuid::Uuid::parse_str(&row.get::<_, String>(0)?).unwrap_or_default(),
+                source_id: uuid::Uuid::parse_str(&row.get::<_, String>(1)?).unwrap_or_default(),
+                target_id: uuid::Uuid::parse_str(&row.get::<_, String>(2)?).unwrap_or_default(),
+                link_type: MemoryBankLinkType::from_str(&row.get::<_, String>(3)?),
+                label: row.get(4)?,
+                instance_id: row.get(5)?,
+            })
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    fn create_memory_bank_snapshot(
+        &self,
+        snapshot: &crate::core::models::MemoryBankSnapshot,
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO memory_bank_snapshots
+                (id, instance_id, summary, items_json, created_at, consolidated_to_knowledge_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                snapshot.id.to_string(),
+                snapshot.instance_id,
+                snapshot.summary,
+                snapshot.items_json,
+                snapshot.created_at.to_rfc3339(),
+                snapshot.consolidated_to_knowledge_id.map(|u| u.to_string())
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn list_memory_bank_snapshots(
+        &self,
+        instance_id: &str,
+    ) -> Result<Vec<crate::core::models::MemoryBankSnapshot>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, instance_id, summary, items_json, created_at, consolidated_to_knowledge_id
+             FROM memory_bank_snapshots WHERE instance_id = ?1 ORDER BY created_at DESC",
+        )?;
+        let rows = stmt.query_map(params![instance_id], |row| {
+            Ok(crate::core::models::MemoryBankSnapshot {
+                id: uuid::Uuid::parse_str(&row.get::<_, String>(0)?).unwrap_or_default(),
+                instance_id: row.get(1)?,
+                summary: row.get(2)?,
+                items_json: row.get(3)?,
+                created_at: chrono::DateTime::parse_from_rfc3339(&row.get::<_, String>(4)?)
+                    .map(|dt| dt.with_timezone(&chrono::Utc))
+                    .unwrap_or_else(|_| chrono::Utc::now()),
+                consolidated_to_knowledge_id: row
+                    .get::<_, Option<String>>(5)?
+                    .and_then(|s| uuid::Uuid::parse_str(&s).ok()),
+            })
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+}
+
+fn parse_memory_bank_item_row(
+    row: &rusqlite::Row,
+) -> rusqlite::Result<crate::core::models::MemoryBankItem> {
+    use crate::core::models::memory_bank::*;
+    Ok(crate::core::models::MemoryBankItem {
+        id: uuid::Uuid::parse_str(&row.get::<_, String>(0)?).unwrap_or_default(),
+        instance_id: row.get(1)?,
+        category: MemoryBankCategory::from_str(&row.get::<_, String>(2)?),
+        title: row.get(3)?,
+        content: row.get(4)?,
+        status: MemoryBankStatus::from_str(&row.get::<_, String>(5)?),
+        context_priority: ContextPriority::from_str(&row.get::<_, String>(6)?),
+        version: row.get(7)?,
+        parent_id: row
+            .get::<_, Option<String>>(8)?
+            .and_then(|s| uuid::Uuid::parse_str(&s).ok()),
+        position_x: row.get(9)?,
+        position_y: row.get(10)?,
+        color_hex: row.get(11)?,
+        created_at: chrono::DateTime::parse_from_rfc3339(&row.get::<_, String>(12)?)
+            .map(|dt| dt.with_timezone(&chrono::Utc))
+            .unwrap_or_else(|_| chrono::Utc::now()),
+        updated_at: chrono::DateTime::parse_from_rfc3339(&row.get::<_, String>(13)?)
+            .map(|dt| dt.with_timezone(&chrono::Utc))
+            .unwrap_or_else(|_| chrono::Utc::now()),
+        created_by: row.get(14)?,
+        content_hash: row.get::<_, Option<String>>(15)?.unwrap_or_default(),
+        token_count: row.get::<_, i64>(16)? as usize,
+    })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_permission_list;
+    use super::{normalize_permission_list, Database};
+    use crate::core::models::SoloMessageRecord;
+    use crate::core::traits::database::DatabasePort;
+    use std::sync::Mutex;
+
+    static DATABASE_ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn normalizes_legacy_all_permission_to_json_array() {
@@ -6990,5 +7514,70 @@ mod tests {
             normalize_permission_list(Some("not-json")),
             Some("[]".to_string())
         );
+    }
+
+    #[test]
+    fn persists_solo_projects_conversations_and_messages() {
+        let _guard = DATABASE_ENV_LOCK.lock().unwrap();
+        let path = std::env::temp_dir().join(format!(
+            "agentforge-solo-persistence-{}.db",
+            uuid::Uuid::new_v4()
+        ));
+        std::env::set_var("AGENTFORGE_DB_PATH", &path);
+
+        let project_id;
+        {
+            let database = Database::new().unwrap();
+            let project = database.create_solo_project("Persistence Test").unwrap();
+            project_id = project.id;
+            database
+                .upsert_solo_conversation(42, Some(&project_id), "Saved chat")
+                .unwrap();
+            database
+                .replace_solo_messages(
+                    42,
+                    &[
+                        SoloMessageRecord {
+                            role: "user".to_string(),
+                            content: "hello".to_string(),
+                            metadata: None,
+                        },
+                        SoloMessageRecord {
+                            role: "assistant".to_string(),
+                            content: "world".to_string(),
+                            metadata: Some("{\"model\":\"test\"}".to_string()),
+                        },
+                    ],
+                )
+                .unwrap();
+        }
+
+        {
+            let database = Database::new().unwrap();
+            assert!(database
+                .list_solo_projects()
+                .unwrap()
+                .iter()
+                .any(|project| project.id == project_id));
+            let conversation = database
+                .list_solo_conversations()
+                .unwrap()
+                .into_iter()
+                .find(|conversation| conversation.id == 42)
+                .unwrap();
+            assert_eq!(
+                conversation.project_id.as_deref(),
+                Some(project_id.as_str())
+            );
+            let messages = database.get_solo_messages(42).unwrap();
+            assert_eq!(messages.len(), 2);
+            assert_eq!(messages[0].content, "hello");
+            assert_eq!(messages[1].content, "world");
+        }
+
+        std::env::remove_var("AGENTFORGE_DB_PATH");
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("db-shm"));
+        let _ = std::fs::remove_file(path.with_extension("db-wal"));
     }
 }
