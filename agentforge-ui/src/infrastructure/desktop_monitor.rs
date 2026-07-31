@@ -11,7 +11,11 @@ pub struct DesktopWindowPreview {
 
 #[derive(Clone)]
 pub enum DesktopStreamEvent {
-    Frame(std::sync::Arc<gpui::RenderImage>),
+    Frame {
+        image: std::sync::Arc<gpui::RenderImage>,
+        width: u32,
+        height: u32,
+    },
     Closed,
     Error(String),
 }
@@ -52,11 +56,11 @@ mod platform {
     };
     use windows_capture::window::Window;
     use windows_sys::core::BOOL;
-    use windows_sys::Win32::Foundation::{CloseHandle, HWND, LPARAM, RECT};
+    use windows_sys::Win32::Foundation::{CloseHandle, HWND, LPARAM, POINT, RECT};
     use windows_sys::Win32::Graphics::Gdi::{
         BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDIBits,
-        GetWindowDC, ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS,
-        SRCCOPY,
+        GetWindowDC, ReleaseDC, ScreenToClient, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB,
+        DIB_RGB_COLORS, SRCCOPY,
     };
     use windows_sys::Win32::Storage::Xps::PrintWindow;
     use windows_sys::Win32::System::Threading::{
@@ -65,7 +69,8 @@ mod platform {
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         EnumWindows, GetWindowRect, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
-        IsIconic, IsWindow, IsWindowVisible, PW_RENDERFULLCONTENT,
+        IsIconic, IsWindow, IsWindowVisible, PostMessageW, PW_RENDERFULLCONTENT, WM_LBUTTONDOWN,
+        WM_LBUTTONUP, WM_MOUSEMOVE,
     };
 
     struct EnumContext {
@@ -213,7 +218,7 @@ mod platform {
         ) -> Result<(), Self::Error> {
             let now = std::time::Instant::now();
             if self.last_frame_at.is_some_and(|last_frame_at| {
-                now.duration_since(last_frame_at) < Duration::from_millis(83)
+                now.duration_since(last_frame_at) < Duration::from_millis(100)
             }) {
                 return Ok(());
             }
@@ -234,29 +239,19 @@ mod platform {
             let source_width = buffer.width();
             let source_height = buffer.height();
             let row_pitch = buffer.row_pitch() as usize;
-            let (width, height) = fit_stream_frame(source_width, source_height, 1_280, 720);
+            let (width, height) = fit_stream_frame(source_width, source_height, 1_600, 900);
             let raw = buffer.as_raw_buffer();
-            let mut pixels = vec![0u8; width as usize * height as usize * 4];
-            for target_y in 0..height {
-                let source_y = target_y as usize * source_height as usize / height as usize;
-                for target_x in 0..width {
-                    let source_x = target_x as usize * source_width as usize / width as usize;
-                    let source_offset = source_y * row_pitch + source_x * 4;
-                    let target_offset =
-                        (target_y as usize * width as usize + target_x as usize) * 4;
-                    if source_offset + 4 > raw.len() {
-                        if let Ok(mut latest) = self.latest.lock() {
-                            *latest = Some(DesktopStreamEvent::Error(
-                                "The captured frame buffer was incomplete.".to_string(),
-                            ));
-                        }
-                        capture_control.stop();
-                        return Ok(());
-                    }
-                    pixels[target_offset..target_offset + 4]
-                        .copy_from_slice(&raw[source_offset..source_offset + 4]);
+            let Some(pixels) =
+                scale_rgba_bilinear(raw, row_pitch, source_width, source_height, width, height)
+            else {
+                if let Ok(mut latest) = self.latest.lock() {
+                    *latest = Some(DesktopStreamEvent::Error(
+                        "The captured frame buffer was incomplete.".to_string(),
+                    ));
                 }
-            }
+                capture_control.stop();
+                return Ok(());
+            };
             let Some(image) = RgbaImage::from_raw(width, height, pixels) else {
                 if let Ok(mut latest) = self.latest.lock() {
                     *latest = Some(DesktopStreamEvent::Error(
@@ -268,7 +263,11 @@ mod platform {
             };
             let render_image = Arc::new(gpui::RenderImage::new(vec![image::Frame::new(image)]));
             if let Ok(mut latest) = self.latest.lock() {
-                *latest = Some(DesktopStreamEvent::Frame(render_image));
+                *latest = Some(DesktopStreamEvent::Frame {
+                    image: render_image,
+                    width,
+                    height,
+                });
             }
             Ok(())
         }
@@ -299,6 +298,60 @@ mod platform {
         )
     }
 
+    fn scale_rgba_bilinear(
+        source: &[u8],
+        row_pitch: usize,
+        source_width: u32,
+        source_height: u32,
+        target_width: u32,
+        target_height: u32,
+    ) -> Option<Vec<u8>> {
+        if source_width == 0 || source_height == 0 || target_width == 0 || target_height == 0 {
+            return None;
+        }
+        let required_source_len =
+            (source_height as usize - 1) * row_pitch + source_width as usize * 4;
+        if required_source_len > source.len() {
+            return None;
+        }
+
+        let mut target = vec![0u8; target_width as usize * target_height as usize * 4];
+        let x_scale = source_width as f32 / target_width as f32;
+        let y_scale = source_height as f32 / target_height as f32;
+        for target_y in 0..target_height {
+            let source_y = ((target_y as f32 + 0.5) * y_scale - 0.5)
+                .clamp(0.0, source_height.saturating_sub(1) as f32);
+            let y0 = source_y.floor() as usize;
+            let y1 = (y0 + 1).min(source_height as usize - 1);
+            let y_weight = source_y - y0 as f32;
+
+            for target_x in 0..target_width {
+                let source_x = ((target_x as f32 + 0.5) * x_scale - 0.5)
+                    .clamp(0.0, source_width.saturating_sub(1) as f32);
+                let x0 = source_x.floor() as usize;
+                let x1 = (x0 + 1).min(source_width as usize - 1);
+                let x_weight = source_x - x0 as f32;
+                let offsets = [
+                    y0 * row_pitch + x0 * 4,
+                    y0 * row_pitch + x1 * 4,
+                    y1 * row_pitch + x0 * 4,
+                    y1 * row_pitch + x1 * 4,
+                ];
+                let target_offset =
+                    (target_y as usize * target_width as usize + target_x as usize) * 4;
+                for channel in 0..4 {
+                    let top = source[offsets[0] + channel] as f32 * (1.0 - x_weight)
+                        + source[offsets[1] + channel] as f32 * x_weight;
+                    let bottom = source[offsets[2] + channel] as f32 * (1.0 - x_weight)
+                        + source[offsets[3] + channel] as f32 * x_weight;
+                    target[target_offset + channel] =
+                        (top * (1.0 - y_weight) + bottom * y_weight).round() as u8;
+                }
+            }
+        }
+        Some(target)
+    }
+
     pub fn start_window_stream(window_id: isize) -> Result<DesktopCaptureStream, String> {
         let hwnd = window_id as HWND;
         unsafe {
@@ -312,7 +365,7 @@ mod platform {
         let window = Window::from_raw_hwnd(hwnd.cast());
         let settings = Settings::new(
             window,
-            CursorCaptureSettings::WithCursor,
+            CursorCaptureSettings::WithoutCursor,
             DrawBorderSettings::Default,
             SecondaryWindowSettings::Default,
             MinimumUpdateIntervalSettings::Default,
@@ -346,6 +399,40 @@ mod platform {
         });
 
         Ok(DesktopCaptureStream { latest, stop })
+    }
+
+    pub fn send_window_click(
+        window_id: isize,
+        normalized_x: f32,
+        normalized_y: f32,
+    ) -> Result<(), String> {
+        let hwnd = window_id as HWND;
+        unsafe {
+            if IsWindow(hwnd) == 0 {
+                return Err("The controlled window no longer exists.".to_string());
+            }
+            let mut rect: RECT = zeroed();
+            if GetWindowRect(hwnd, &mut rect) == 0 {
+                return Err("Unable to read the controlled window bounds.".to_string());
+            }
+            let width = (rect.right - rect.left).max(1);
+            let height = (rect.bottom - rect.top).max(1);
+            let mut point = POINT {
+                x: rect.left + (normalized_x.clamp(0.0, 1.0) * width as f32) as i32,
+                y: rect.top + (normalized_y.clamp(0.0, 1.0) * height as f32) as i32,
+            };
+            if ScreenToClient(hwnd, &mut point) == 0 {
+                return Err("Unable to map the viewer position to the source window.".to_string());
+            }
+            let position = ((point.y as u32 & 0xffff) << 16 | (point.x as u32 & 0xffff)) as LPARAM;
+            if PostMessageW(hwnd, WM_MOUSEMOVE, 0, position) == 0
+                || PostMessageW(hwnd, WM_LBUTTONDOWN, 1, position) == 0
+                || PostMessageW(hwnd, WM_LBUTTONUP, 0, position) == 0
+            {
+                return Err("Windows rejected the remote click.".to_string());
+            }
+        }
+        Ok(())
     }
 
     fn frame_has_visual_content(image: &RgbaImage) -> bool {
@@ -455,6 +542,15 @@ pub fn start_desktop_window_stream(window_id: isize) -> Result<DesktopCaptureStr
     platform::start_window_stream(window_id)
 }
 
+#[cfg(target_os = "windows")]
+pub fn send_desktop_window_click(
+    window_id: isize,
+    normalized_x: f32,
+    normalized_y: f32,
+) -> Result<(), String> {
+    platform::send_window_click(window_id, normalized_x, normalized_y)
+}
+
 #[cfg(not(target_os = "windows"))]
 pub fn list_desktop_windows() -> Vec<DesktopWindowPreview> {
     Vec::new()
@@ -468,6 +564,15 @@ pub fn capture_desktop_window(_window_id: isize) -> Option<std::sync::Arc<gpui::
 #[cfg(not(target_os = "windows"))]
 pub fn start_desktop_window_stream(_window_id: isize) -> Result<DesktopCaptureStream, String> {
     Err("Live desktop capture is currently supported on Windows only.".to_string())
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn send_desktop_window_click(
+    _window_id: isize,
+    _normalized_x: f32,
+    _normalized_y: f32,
+) -> Result<(), String> {
+    Err("Remote window control is currently supported on Windows only.".to_string())
 }
 
 #[cfg(all(test, target_os = "windows"))]

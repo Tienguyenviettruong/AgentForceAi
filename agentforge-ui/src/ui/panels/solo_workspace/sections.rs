@@ -1,12 +1,12 @@
 use gpui::{
-    div, img, px, Context, Hsla, InteractiveElement, IntoElement, ObjectFit, ParentElement,
-    StatefulInteractiveElement, Styled, StyledImage, Window,
+    canvas, div, img, px, Context, Hsla, InteractiveElement, IntoElement, MouseButton, ObjectFit,
+    ParentElement, StatefulInteractiveElement, Styled, StyledImage, Window,
 };
 use gpui_component::{
     button::{Button, ButtonVariants},
     h_flex,
     scroll::ScrollableElement,
-    v_flex, ActiveTheme as _, Disableable, Icon, IconName, Sizable,
+    v_flex, ActiveTheme as _, Disableable, Icon, IconName, Selectable, Sizable,
 };
 
 use super::SoloWorkspacePanel;
@@ -569,7 +569,11 @@ impl SoloWorkspacePanel {
         }
         self.remote_selected_window = Some(window_id);
         self.remote_stream_frame = None;
+        self.remote_stream_frame_size = None;
         self.remote_stream_error = None;
+        self.remote_control_enabled = false;
+        self.remote_viewer_bounds = None;
+        self.remote_control_message = None;
         self.remote_streaming = true;
         self.remote_viewer_expanded = false;
         self.remote_stream_generation = self.remote_stream_generation.wrapping_add(1);
@@ -613,8 +617,9 @@ impl SoloWorkspacePanel {
                             if let Some(event) = event {
                                 let _ = view.update(cx, |this, cx| {
                                     match event {
-                                        crate::infrastructure::desktop_monitor::DesktopStreamEvent::Frame(frame) => {
-                                            this.remote_stream_frame = Some(frame);
+                                        crate::infrastructure::desktop_monitor::DesktopStreamEvent::Frame { image, width, height } => {
+                                            this.remote_stream_frame = Some(image);
+                                            this.remote_stream_frame_size = Some((width, height));
                                             this.remote_stream_error = None;
                                         }
                                         crate::infrastructure::desktop_monitor::DesktopStreamEvent::Closed => {
@@ -648,8 +653,59 @@ impl SoloWorkspacePanel {
         self.remote_stream_generation = self.remote_stream_generation.wrapping_add(1);
         self.remote_selected_window = None;
         self.remote_stream_frame = None;
+        self.remote_stream_frame_size = None;
         self.remote_stream_error = None;
         self.remote_viewer_expanded = false;
+        self.remote_control_enabled = false;
+        self.remote_viewer_bounds = None;
+        self.remote_control_message = None;
+        cx.notify();
+    }
+
+    fn forward_remote_click(
+        &mut self,
+        position: gpui::Point<gpui::Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.remote_control_enabled {
+            return;
+        }
+        let (Some(window_id), Some(bounds), Some((frame_width, frame_height))) = (
+            self.remote_selected_window,
+            self.remote_viewer_bounds,
+            self.remote_stream_frame_size,
+        ) else {
+            return;
+        };
+        let bounds_width: f32 = bounds.size.width.into();
+        let bounds_height: f32 = bounds.size.height.into();
+        let bounds_x: f32 = bounds.origin.x.into();
+        let bounds_y: f32 = bounds.origin.y.into();
+        let scale = (bounds_width / frame_width as f32).min(bounds_height / frame_height as f32);
+        let display_width = frame_width as f32 * scale;
+        let display_height = frame_height as f32 * scale;
+        let display_x = bounds_x + (bounds_width - display_width) * 0.5;
+        let display_y = bounds_y + (bounds_height - display_height) * 0.5;
+        let mouse_x: f32 = position.x.into();
+        let mouse_y: f32 = position.y.into();
+        if mouse_x < display_x
+            || mouse_x > display_x + display_width
+            || mouse_y < display_y
+            || mouse_y > display_y + display_height
+        {
+            return;
+        }
+        let normalized_x = (mouse_x - display_x) / display_width;
+        let normalized_y = (mouse_y - display_y) / display_height;
+        self.remote_control_message =
+            match crate::infrastructure::desktop_monitor::send_desktop_window_click(
+                window_id,
+                normalized_x,
+                normalized_y,
+            ) {
+                Ok(()) => Some("Click sent to the source window".to_string()),
+                Err(error) => Some(error),
+            };
         cx.notify();
     }
 
@@ -666,6 +722,7 @@ impl SoloWorkspacePanel {
             } else {
                 720.0
             };
+            let view_for_bounds = cx.entity().clone();
             let frame = if let Some(frame) = self.remote_stream_frame.clone() {
                 div()
                     .size_full()
@@ -765,6 +822,35 @@ impl SoloWorkspacePanel {
                             h_flex()
                                 .gap(px(4.0))
                                 .child(
+                                    Button::new("solo-remote-control-mode")
+                                        .small()
+                                        .compact()
+                                        .label(if self.remote_control_enabled {
+                                            "Control on"
+                                        } else {
+                                            "Observe"
+                                        })
+                                        .selected(self.remote_control_enabled)
+                                        .tooltip(if self.remote_control_enabled {
+                                            "Clicks inside the viewer are forwarded to the source window"
+                                        } else {
+                                            "Enable guarded click control for this viewer"
+                                        })
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.remote_control_enabled =
+                                                !this.remote_control_enabled;
+                                            this.remote_control_message = Some(
+                                                if this.remote_control_enabled {
+                                                    "Control enabled for this session; click inside the live frame"
+                                                } else {
+                                                    "Viewer returned to observe-only mode"
+                                                }
+                                                .to_string(),
+                                            );
+                                            cx.notify();
+                                        })),
+                                )
+                                .child(
                                     Button::new("solo-remote-expand-viewer")
                                         .small()
                                         .compact()
@@ -806,11 +892,34 @@ impl SoloWorkspacePanel {
                         .bg(theme.secondary.opacity(0.22))
                         .child(
                             div()
+                                .relative()
                                 .size_full()
                                 .overflow_hidden()
                                 .rounded_md()
                                 .bg(gpui::black())
-                                .child(frame),
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(
+                                        |this, event: &gpui::MouseDownEvent, _, cx| {
+                                            this.forward_remote_click(event.position, cx);
+                                        },
+                                    ),
+                                )
+                                .child(frame)
+                                .child(
+                                    canvas(
+                                        move |bounds, _, cx| {
+                                            let _ = view_for_bounds.update(cx, |this, _| {
+                                                this.remote_viewer_bounds = Some(bounds);
+                                            });
+                                        },
+                                        |_, _, _, _| {},
+                                    )
+                                    .absolute()
+                                    .top_0()
+                                    .left_0()
+                                    .size_full(),
+                                ),
                         ),
                 )
                 .into_any_element()
@@ -916,6 +1025,14 @@ impl SoloWorkspacePanel {
             .as_ref()
             .map(|time| format!("Scanned {time}"))
             .unwrap_or_else(|| "Not scanned yet".to_string());
+        let remote_mode_text = if self.remote_control_enabled {
+            self.remote_control_message.clone().unwrap_or_else(|| {
+                "Control enabled · clicks are forwarded locally · keyboard input is not enabled"
+                    .to_string()
+            })
+        } else {
+            "Observe only · cursor hidden · no clicks or typing are forwarded".to_string()
+        };
         let body = v_flex()
             .gap(px(10.0))
             .child(
@@ -945,7 +1062,7 @@ impl SoloWorkspacePanel {
                                     .truncate()
                                     .text_size(px(11.0))
                                     .text_color(theme.muted_foreground)
-                                    .child("Local monitor only · live frames stay on this computer · no clicks or typing"),
+                                    .child(remote_mode_text),
                             ),
                     )
                     .child(

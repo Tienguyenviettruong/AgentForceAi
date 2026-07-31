@@ -69,10 +69,14 @@ pub struct SoloWorkspacePanel {
     remote_last_refreshed: Option<String>,
     remote_selected_window: Option<isize>,
     remote_stream_frame: Option<std::sync::Arc<gpui::RenderImage>>,
+    remote_stream_frame_size: Option<(u32, u32)>,
     remote_stream_error: Option<String>,
     remote_streaming: bool,
     remote_stream_generation: usize,
     remote_viewer_expanded: bool,
+    remote_control_enabled: bool,
+    remote_viewer_bounds: Option<gpui::Bounds<gpui::Pixels>>,
+    remote_control_message: Option<String>,
     _solo_subscriptions: Vec<Subscription>,
 }
 
@@ -202,10 +206,14 @@ impl SoloWorkspacePanel {
             remote_last_refreshed: None,
             remote_selected_window: None,
             remote_stream_frame: None,
+            remote_stream_frame_size: None,
             remote_stream_error: None,
             remote_streaming: false,
             remote_stream_generation: 0,
             remote_viewer_expanded: false,
+            remote_control_enabled: false,
+            remote_viewer_bounds: None,
+            remote_control_message: None,
             _solo_subscriptions: vec![effort_subscription],
         };
         let prompt_subscription = cx.subscribe_in(
