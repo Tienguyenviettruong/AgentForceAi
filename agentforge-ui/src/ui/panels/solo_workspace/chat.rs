@@ -188,10 +188,10 @@ impl SoloWorkspacePanel {
         self.upsert_active_conversation(cx);
         cx.notify();
 
-        let (stream_tx, mut stream_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (stream_tx, stream_rx) = async_channel::bounded(64);
         let view = cx.entity().clone();
         cx.spawn(async move |_, cx| {
-            while let Some(event) = stream_rx.recv().await {
+            while let Ok(event) = stream_rx.recv().await {
                 let finished = matches!(&event, SoloStreamEvent::Finished(_));
                 let _ = cx.update(|cx| {
                     let _ = view.update(cx, |this, cx| {
@@ -260,13 +260,15 @@ impl SoloWorkspacePanel {
 
         let _stream_task = runtime.spawn(async move {
             if !attachments.is_empty() {
-                let _ = stream_tx.send(SoloStreamEvent::Activity(SoloActivity {
-                    id: "attachments".to_string(),
-                    kind: SoloActivityKind::File,
-                    label: format!("Reading {} attachment(s)", attachments.len()),
-                    detail: Some(attachments.join("\n")),
-                    status: SoloActivityStatus::Running,
-                }));
+                let _ = stream_tx
+                    .send(SoloStreamEvent::Activity(SoloActivity {
+                        id: "attachments".to_string(),
+                        kind: SoloActivityKind::File,
+                        label: format!("Reading {} attachment(s)", attachments.len()),
+                        detail: Some(attachments.join("\n")),
+                        status: SoloActivityStatus::Running,
+                    }))
+                    .await;
             }
             let attachment_context =
                 crate::application::file_intelligence::build_chat_context(
@@ -281,13 +283,15 @@ impl SoloWorkspacePanel {
                 )
                 .await;
             if !attachments.is_empty() {
-                let _ = stream_tx.send(SoloStreamEvent::Activity(SoloActivity {
-                    id: "attachments".to_string(),
-                    kind: SoloActivityKind::File,
-                    label: format!("Read {} attachment(s)", attachments.len()),
-                    detail: Some(attachments.join("\n")),
-                    status: SoloActivityStatus::Completed,
-                }));
+                let _ = stream_tx
+                    .send(SoloStreamEvent::Activity(SoloActivity {
+                        id: "attachments".to_string(),
+                        kind: SoloActivityKind::File,
+                        label: format!("Read {} attachment(s)", attachments.len()),
+                        detail: Some(attachments.join("\n")),
+                        status: SoloActivityStatus::Completed,
+                    }))
+                    .await;
             }
             if !attachment_context.is_empty() {
                 if let Some(last_user_message) = history
@@ -323,6 +327,7 @@ impl SoloWorkspacePanel {
                     );
                     if stream_tx
                         .send(SoloStreamEvent::ProviderSelected(provider_label.clone()))
+                        .await
                         .is_err()
                     {
                         return;
@@ -389,6 +394,7 @@ impl SoloWorkspacePanel {
                                             received_text = true;
                                             if stream_tx
                                                 .send(SoloStreamEvent::Delta(text))
+                                                .await
                                                 .is_err()
                                             {
                                                 return;
@@ -458,7 +464,7 @@ impl SoloWorkspacePanel {
                     ))
                 })
             };
-            let _ = stream_tx.send(SoloStreamEvent::Finished(result));
+            let _ = stream_tx.send(SoloStreamEvent::Finished(result)).await;
         });
     }
 
@@ -616,7 +622,7 @@ impl SoloWorkspacePanel {
         mut history: Vec<crate::providers::ChatMessage>,
         tools: &[crate::infrastructure::mcp::registry::McpTool],
         servers: &[crate::infrastructure::mcp::registry::McpServerRecord],
-        stream_tx: &tokio::sync::mpsc::UnboundedSender<SoloStreamEvent>,
+        stream_tx: &async_channel::Sender<SoloStreamEvent>,
     ) -> Result<(), String> {
         const MAX_TOOL_ITERATIONS: usize = 4;
 
@@ -643,6 +649,7 @@ impl SoloWorkspacePanel {
             if tool_calls.is_empty() {
                 stream_tx
                     .send(SoloStreamEvent::Delta(response_text))
+                    .await
                     .map_err(|_| "Solo response was closed before completion.".to_string())?;
                 return Ok(());
             }
@@ -673,6 +680,7 @@ impl SoloWorkspacePanel {
                         detail: Some(Self::solo_activity_detail(&arguments)),
                         status: SoloActivityStatus::Running,
                     }))
+                    .await
                     .map_err(|_| "Solo response was closed before tool execution.".to_string())?;
 
                 let tool_result = if let Some(tool) =
@@ -718,6 +726,7 @@ impl SoloWorkspacePanel {
                         detail: Some(Self::solo_activity_detail(&result_text)),
                         status,
                     }))
+                    .await
                     .map_err(|_| "Solo response was closed after tool execution.".to_string())?;
 
                 let result_for_model =

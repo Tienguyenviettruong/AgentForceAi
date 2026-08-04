@@ -43,6 +43,7 @@ name = "agentforge-ui"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-channel 2.5.0",
  "async-stream",
  "async-trait",
  "base64 0.22.1",
@@ -8038,7 +8039,6 @@ dependencies = [
  "bytes",
  "libc",
  "mio 1.2.0",
- "parking_lot",
  "pin-project-lite",
  "signal-hook-registry",
  "socket2",

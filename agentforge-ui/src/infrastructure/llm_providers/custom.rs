@@ -668,7 +668,7 @@ impl BaseProviderAdapter for CustomAdapterSDK {
                     "max_tokens": 4096
                 });
 
-                let (tx, rx) = futures::channel::mpsc::unbounded();
+                let (tx, rx) = super::runtime::stream_channel();
                 tracing::debug!("Custom Claude-compatible stream opening SSE connection");
                 tokio::spawn(async move {
                     let mut usage = TokenUsage::default();
@@ -706,15 +706,16 @@ impl BaseProviderAdapter for CustomAdapterSDK {
                                     CustomAdapterSDK::retry_delay(attempt).await;
                                     continue;
                                 }
-                                let _ =
-                                    tx.unbounded_send(Err(CustomAdapterSDK::stream_context_error(
+                                let _ = tx
+                                    .send(Err(CustomAdapterSDK::stream_context_error(
                                         &provider_name_for_error,
                                         "claude-compatible",
                                         &endpoint_for_error,
                                         &model_for_error,
                                         &credential_source_for_error,
                                         CustomAdapterSDK::http_status_error(status, &body),
-                                    )));
+                                    )))
+                                    .await;
                                 return;
                             }
                             Err(e) if attempt < 2 => {
@@ -727,29 +728,32 @@ impl BaseProviderAdapter for CustomAdapterSDK {
                                 continue;
                             }
                             Err(e) => {
-                                let _ =
-                                    tx.unbounded_send(Err(CustomAdapterSDK::stream_context_error(
+                                let _ = tx
+                                    .send(Err(CustomAdapterSDK::stream_context_error(
                                         &provider_name_for_error,
                                         "claude-compatible",
                                         &endpoint_for_error,
                                         &model_for_error,
                                         &credential_source_for_error,
                                         e,
-                                    )));
+                                    )))
+                                    .await;
                                 return;
                             }
                         }
                     }
 
                     let Some(response) = response else {
-                        let _ = tx.unbounded_send(Err(CustomAdapterSDK::stream_context_error(
-                            &provider_name_for_error,
-                            "claude-compatible",
-                            &endpoint_for_error,
-                            &model_for_error,
-                            &credential_source_for_error,
-                            anyhow!("Stream connection failed before receiving a response"),
-                        )));
+                        let _ = tx
+                            .send(Err(CustomAdapterSDK::stream_context_error(
+                                &provider_name_for_error,
+                                "claude-compatible",
+                                &endpoint_for_error,
+                                &model_for_error,
+                                &credential_source_for_error,
+                                anyhow!("Stream connection failed before receiving a response"),
+                            )))
+                            .await;
                         return;
                     };
 
@@ -759,15 +763,16 @@ impl BaseProviderAdapter for CustomAdapterSDK {
                         let bytes = match chunk {
                             Ok(bytes) => bytes,
                             Err(err) => {
-                                let _ =
-                                    tx.unbounded_send(Err(CustomAdapterSDK::stream_context_error(
+                                let _ = tx
+                                    .send(Err(CustomAdapterSDK::stream_context_error(
                                         &provider_name_for_error,
                                         "claude-compatible",
                                         &endpoint_for_error,
                                         &model_for_error,
                                         &credential_source_for_error,
                                         err,
-                                    )));
+                                    )))
+                                    .await;
                                 return;
                             }
                         };
@@ -777,30 +782,32 @@ impl BaseProviderAdapter for CustomAdapterSDK {
                         for data in events {
                             if data == "[DONE]" {
                                 usage.total_tokens = usage.input_tokens + usage.output_tokens;
-                                let _ = tx.unbounded_send(Ok(crate::providers::StreamChunk::Done(
-                                    usage.clone(),
-                                )));
+                                let _ = tx
+                                    .send(Ok(crate::providers::StreamChunk::Done(usage.clone())))
+                                    .await;
                                 return;
                             }
                             if let Some(text) =
                                 CustomAdapterSDK::text_from_provider_payload(&data, &mut usage)
                             {
-                                let _ = tx
-                                    .unbounded_send(Ok(crate::providers::StreamChunk::Text(text)));
+                                let _ =
+                                    tx.send(Ok(crate::providers::StreamChunk::Text(text))).await;
                             }
                         }
                     }
                     if let Some(text) =
                         CustomAdapterSDK::text_from_provider_payload(&buffer, &mut usage)
                     {
-                        let _ = tx.unbounded_send(Ok(crate::providers::StreamChunk::Text(text)));
+                        let _ = tx.send(Ok(crate::providers::StreamChunk::Text(text))).await;
                     }
                     usage.total_tokens = usage.input_tokens + usage.output_tokens;
-                    let _ = tx.unbounded_send(Ok(crate::providers::StreamChunk::Done(usage)));
+                    let _ = tx
+                        .send(Ok(crate::providers::StreamChunk::Done(usage)))
+                        .await;
                 });
                 tracing::debug!("Custom Claude-compatible stream task spawned");
 
-                Ok(Box::new(rx)
+                Ok(Box::new(Box::pin(rx))
                     as Box<
                         dyn futures::Stream<
                                 Item = Result<crate::providers::StreamChunk, anyhow::Error>,
@@ -848,7 +855,7 @@ impl BaseProviderAdapter for CustomAdapterSDK {
                 let model_for_error = model.clone();
                 let credential_source_for_error = credential_source.clone();
 
-                let (tx, rx) = futures::channel::mpsc::unbounded();
+                let (tx, rx) = super::runtime::stream_channel();
                 tokio::spawn(async move {
                     let mut response = None;
                     for attempt in 0..3 {
@@ -882,15 +889,16 @@ impl BaseProviderAdapter for CustomAdapterSDK {
                                     CustomAdapterSDK::retry_delay(attempt).await;
                                     continue;
                                 }
-                                let _ =
-                                    tx.unbounded_send(Err(CustomAdapterSDK::stream_context_error(
+                                let _ = tx
+                                    .send(Err(CustomAdapterSDK::stream_context_error(
                                         &provider_name_for_error,
                                         "openai-compatible",
                                         &endpoint_for_error,
                                         &model_for_error,
                                         &credential_source_for_error,
                                         CustomAdapterSDK::http_status_error(status, &body),
-                                    )));
+                                    )))
+                                    .await;
                                 return;
                             }
                             Err(e) if attempt < 2 => {
@@ -903,29 +911,32 @@ impl BaseProviderAdapter for CustomAdapterSDK {
                                 continue;
                             }
                             Err(e) => {
-                                let _ =
-                                    tx.unbounded_send(Err(CustomAdapterSDK::stream_context_error(
+                                let _ = tx
+                                    .send(Err(CustomAdapterSDK::stream_context_error(
                                         &provider_name_for_error,
                                         "openai-compatible",
                                         &endpoint_for_error,
                                         &model_for_error,
                                         &credential_source_for_error,
                                         e,
-                                    )));
+                                    )))
+                                    .await;
                                 return;
                             }
                         }
                     }
 
                     let Some(response) = response else {
-                        let _ = tx.unbounded_send(Err(CustomAdapterSDK::stream_context_error(
-                            &provider_name_for_error,
-                            "openai-compatible",
-                            &endpoint_for_error,
-                            &model_for_error,
-                            &credential_source_for_error,
-                            anyhow!("Stream connection failed before receiving a response"),
-                        )));
+                        let _ = tx
+                            .send(Err(CustomAdapterSDK::stream_context_error(
+                                &provider_name_for_error,
+                                "openai-compatible",
+                                &endpoint_for_error,
+                                &model_for_error,
+                                &credential_source_for_error,
+                                anyhow!("Stream connection failed before receiving a response"),
+                            )))
+                            .await;
                         return;
                     };
 
@@ -936,15 +947,16 @@ impl BaseProviderAdapter for CustomAdapterSDK {
                         let bytes = match chunk {
                             Ok(bytes) => bytes,
                             Err(err) => {
-                                let _ =
-                                    tx.unbounded_send(Err(CustomAdapterSDK::stream_context_error(
+                                let _ = tx
+                                    .send(Err(CustomAdapterSDK::stream_context_error(
                                         &provider_name_for_error,
                                         "openai-compatible",
                                         &endpoint_for_error,
                                         &model_for_error,
                                         &credential_source_for_error,
                                         err,
-                                    )));
+                                    )))
+                                    .await;
                                 return;
                             }
                         };
@@ -953,28 +965,30 @@ impl BaseProviderAdapter for CustomAdapterSDK {
                         events.extend(CustomAdapterSDK::drain_line_delimited_events(&mut buffer));
                         for data in events {
                             if data == "[DONE]" {
-                                let _ = tx.unbounded_send(Ok(crate::providers::StreamChunk::Done(
-                                    usage.clone(),
-                                )));
+                                let _ = tx
+                                    .send(Ok(crate::providers::StreamChunk::Done(usage.clone())))
+                                    .await;
                                 return;
                             }
                             if let Some(text) =
                                 CustomAdapterSDK::text_from_provider_payload(&data, &mut usage)
                             {
-                                let _ = tx
-                                    .unbounded_send(Ok(crate::providers::StreamChunk::Text(text)));
+                                let _ =
+                                    tx.send(Ok(crate::providers::StreamChunk::Text(text))).await;
                             }
                         }
                     }
                     if let Some(text) =
                         CustomAdapterSDK::text_from_provider_payload(&buffer, &mut usage)
                     {
-                        let _ = tx.unbounded_send(Ok(crate::providers::StreamChunk::Text(text)));
+                        let _ = tx.send(Ok(crate::providers::StreamChunk::Text(text))).await;
                     }
-                    let _ = tx.unbounded_send(Ok(crate::providers::StreamChunk::Done(usage)));
+                    let _ = tx
+                        .send(Ok(crate::providers::StreamChunk::Done(usage)))
+                        .await;
                 });
 
-                Ok(Box::new(rx)
+                Ok(Box::new(Box::pin(rx))
                     as Box<
                         dyn futures::Stream<
                                 Item = Result<crate::providers::StreamChunk, anyhow::Error>,

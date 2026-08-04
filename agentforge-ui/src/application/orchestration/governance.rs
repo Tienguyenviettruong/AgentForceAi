@@ -1,7 +1,7 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
 use uuid::Uuid;
@@ -88,7 +88,7 @@ pub enum OrchestrationState {
 pub struct GovernanceManager {
     policy: Arc<RwLock<GovernancePolicy>>,
     approval_requests: Arc<RwLock<HashMap<Uuid, ApprovalRequest>>>,
-    audit_trail: Arc<RwLock<Vec<AuditEvent>>>,
+    audit_trail: Arc<RwLock<VecDeque<AuditEvent>>>,
     budgets: Arc<RwLock<HashMap<Uuid, TokenBudget>>>,
     templates: Arc<RwLock<HashMap<Uuid, OrchestrationTemplate>>>,
     metrics: Arc<RwLock<OrchestrationMetrics>>,
@@ -99,12 +99,14 @@ pub struct GovernanceManager {
     db: Option<Arc<dyn crate::core::traits::database::DatabasePort>>,
 }
 
+const MAX_IN_MEMORY_AUDIT_EVENTS: usize = 2_048;
+
 impl GovernanceManager {
     pub fn new(policy: GovernancePolicy) -> Self {
         Self {
             policy: Arc::new(RwLock::new(policy)),
             approval_requests: Arc::new(RwLock::new(HashMap::new())),
-            audit_trail: Arc::new(RwLock::new(Vec::new())),
+            audit_trail: Arc::new(RwLock::new(VecDeque::new())),
             budgets: Arc::new(RwLock::new(HashMap::new())),
             templates: Arc::new(RwLock::new(HashMap::new())),
             metrics: Arc::new(RwLock::new(OrchestrationMetrics::default())),
@@ -188,7 +190,12 @@ impl GovernanceManager {
             description: description.clone(),
             timestamp: Utc::now(),
         };
-        self.audit_trail.write().await.push(event);
+        let mut audit_trail = self.audit_trail.write().await;
+        if audit_trail.len() == MAX_IN_MEMORY_AUDIT_EVENTS {
+            audit_trail.pop_front();
+        }
+        audit_trail.push_back(event);
+        drop(audit_trail);
 
         // Also persist to database if available
         if let Some(ref db) = self.db {
@@ -204,7 +211,7 @@ impl GovernanceManager {
     }
 
     pub async fn get_audit_trail(&self) -> Vec<AuditEvent> {
-        self.audit_trail.read().await.clone()
+        self.audit_trail.read().await.iter().cloned().collect()
     }
 
     // 3.33 Token budget enforcement
@@ -288,14 +295,8 @@ impl GovernanceManager {
             *active -= 1;
         }
 
-        let mut states = self.orchestration_states.write().await;
-        if let Some(state) = states.get_mut(&run_id) {
-            *state = if success {
-                OrchestrationState::Completed
-            } else {
-                OrchestrationState::Failed
-            };
-        }
+        self.orchestration_states.write().await.remove(&run_id);
+        self.budgets.write().await.remove(&run_id);
 
         let mut metrics = self.metrics.write().await;
         if success {

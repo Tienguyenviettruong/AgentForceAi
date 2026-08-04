@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -11,8 +11,10 @@ pub struct ProfilerRecord {
 
 #[derive(Clone)]
 pub struct Profiler {
-    records: Arc<Mutex<HashMap<String, Vec<ProfilerRecord>>>>,
+    records: Arc<Mutex<HashMap<String, VecDeque<ProfilerRecord>>>>,
 }
+
+const MAX_RECORDS_PER_TRACE: usize = 1_024;
 
 impl Default for Profiler {
     fn default() -> Self {
@@ -38,10 +40,11 @@ impl Profiler {
     pub async fn end_trace(&self, mut record: ProfilerRecord) {
         record.duration = Some(record.start_time.elapsed());
         if let Ok(mut records) = self.records.lock() {
-            records
-                .entry(record.name.clone())
-                .or_insert_with(Vec::new)
-                .push(record);
+            let traces = records.entry(record.name.clone()).or_default();
+            if traces.len() == MAX_RECORDS_PER_TRACE {
+                traces.pop_front();
+            }
+            traces.push_back(record);
         }
     }
 
@@ -49,18 +52,38 @@ impl Profiler {
         let records = self.records.lock().ok()?;
         let traces = records.get(name)?;
 
-        let valid_traces: Vec<_> = traces.iter().filter_map(|r| r.duration).collect();
-        if valid_traces.is_empty() {
+        let (total, count) = traces
+            .iter()
+            .filter_map(|record| record.duration)
+            .fold((Duration::ZERO, 0_u32), |(total, count), duration| {
+                (total + duration, count + 1)
+            });
+        if count == 0 {
             return None;
         }
-
-        let total: Duration = valid_traces.iter().sum();
-        Some(total / valid_traces.len() as u32)
+        Some(total / count)
     }
 
     pub async fn clear(&self) {
         if let Ok(mut records) = self.records.lock() {
             records.clear();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn trace_history_is_bounded() {
+        let profiler = Profiler::new();
+        for _ in 0..MAX_RECORDS_PER_TRACE + 10 {
+            let trace = profiler.start_trace("render").await;
+            profiler.end_trace(trace).await;
+        }
+
+        let records = profiler.records.lock().unwrap();
+        assert_eq!(records["render"].len(), MAX_RECORDS_PER_TRACE);
     }
 }

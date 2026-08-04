@@ -18,9 +18,7 @@ use gpui_component::{
     input::{self, Copy},
     v_flex, ActiveTheme,
 };
-use smol::channel::{unbounded, Receiver, Sender};
-
-const CONTEXT: &'static str = "TextView";
+const CONTEXT: &str = "TextView";
 pub(crate) fn init(cx: &mut App) {
     cx.bind_keys(vec![
         #[cfg(target_os = "macos")]
@@ -60,7 +58,7 @@ pub struct TextViewState {
     pub(super) parsed_content: ParsedContent,
     text: String,
     parsed_error: Option<SharedString>,
-    tx: Sender<UpdateOptions>,
+    update_mailbox: std::sync::Arc<UpdateMailbox>,
     _parse_task: Task<()>,
     _receive_task: Task<()>,
 }
@@ -80,8 +78,13 @@ impl TextViewState {
     fn new(format: TextViewFormat, text: &str, cx: &mut Context<Self>) -> Self {
         let focus_handle = cx.focus_handle();
 
-        let (tx, rx) = unbounded::<UpdateOptions>();
-        let (tx_result, rx_result) = unbounded::<Result<ParsedContent, SharedString>>();
+        let (signal_tx, signal_rx) = async_channel::bounded(1);
+        let update_mailbox = std::sync::Arc::new(UpdateMailbox {
+            pending: std::sync::Mutex::new(None),
+            signal_tx,
+        });
+        let (tx_result, rx_result) = async_channel::bounded(1);
+        let rx_result_for_parse = rx_result.clone();
         let _receive_task = cx.spawn({
             async move |weak_self, cx| {
                 while let Ok(parsed_result) = rx_result.recv().await {
@@ -102,7 +105,14 @@ impl TextViewState {
             }
         });
 
-        let _parse_task = cx.background_spawn(UpdateFuture::new(format, rx, tx_result, cx));
+        let _parse_task = cx.background_spawn(UpdateFuture::new(
+            format,
+            update_mailbox.clone(),
+            signal_rx,
+            tx_result,
+            rx_result_for_parse,
+            cx,
+        ));
 
         let initial_options = UpdateOptions {
             append: false,
@@ -129,7 +139,7 @@ impl TextViewState {
             parsed_content,
             parsed_error,
             text: text.to_string(),
-            tx,
+            update_mailbox,
             _parse_task,
             _receive_task,
         }
@@ -198,7 +208,7 @@ impl TextViewState {
             highlight_theme: cx.theme().highlight_theme.clone(),
         };
 
-        _ = self.tx.try_send(update_options);
+        self.update_mailbox.submit(update_options);
     }
 
     /// Save bounds and unselect if bounds changed.
@@ -324,15 +334,19 @@ struct UpdateFuture {
     content: ParsedContent,
     options: UpdateOptions,
     pending_text: String,
-    rx: Pin<Box<Receiver<UpdateOptions>>>,
-    tx_result: Sender<Result<ParsedContent, SharedString>>,
+    update_mailbox: std::sync::Arc<UpdateMailbox>,
+    signal_rx: Pin<Box<async_channel::Receiver<()>>>,
+    tx_result: async_channel::Sender<Result<ParsedContent, SharedString>>,
+    rx_result: Pin<Box<async_channel::Receiver<Result<ParsedContent, SharedString>>>>,
 }
 
 impl UpdateFuture {
     fn new(
         format: TextViewFormat,
-        rx: Receiver<UpdateOptions>,
-        tx_result: Sender<Result<ParsedContent, SharedString>>,
+        update_mailbox: std::sync::Arc<UpdateMailbox>,
+        signal_rx: async_channel::Receiver<()>,
+        tx_result: async_channel::Sender<Result<ParsedContent, SharedString>>,
+        rx_result: async_channel::Receiver<Result<ParsedContent, SharedString>>,
         cx: &App,
     ) -> Self {
         Self {
@@ -344,8 +358,10 @@ impl UpdateFuture {
                 pending_text: String::new(),
                 highlight_theme: cx.theme().highlight_theme.clone(),
             },
-            rx: Box::pin(rx),
+            update_mailbox,
+            signal_rx: Box::pin(signal_rx),
             tx_result,
+            rx_result: Box::pin(rx_result),
         }
     }
 }
@@ -355,8 +371,11 @@ impl Future for UpdateFuture {
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
         loop {
-            match self.rx.as_mut().poll_next(cx) {
-                Poll::Ready(Some(options)) => {
+            match self.signal_rx.as_mut().poll_next(cx) {
+                Poll::Ready(Some(())) => {
+                    let Some(options) = self.update_mailbox.take() else {
+                        continue;
+                    };
                     if options.append {
                         self.pending_text.push_str(options.pending_text.as_str());
                     } else {
@@ -374,7 +393,12 @@ impl Future for UpdateFuture {
                     if let Ok(content) = &res {
                         self.content = content.clone();
                     }
-                    _ = self.tx_result.try_send(res);
+                    if let Err(async_channel::TrySendError::Full(res)) =
+                        self.tx_result.try_send(res)
+                    {
+                        let _ = self.rx_result.try_recv();
+                        let _ = self.tx_result.try_send(res);
+                    }
                     continue;
                 }
                 Poll::Ready(None) => return Poll::Ready(()),
@@ -389,6 +413,30 @@ struct UpdateOptions {
     pending_text: String,
     append: bool,
     highlight_theme: std::sync::Arc<HighlightTheme>,
+}
+
+struct UpdateMailbox {
+    pending: std::sync::Mutex<Option<UpdateOptions>>,
+    signal_tx: async_channel::Sender<()>,
+}
+
+impl UpdateMailbox {
+    fn submit(&self, next: UpdateOptions) {
+        if let Ok(mut pending) = self.pending.lock() {
+            match pending.as_mut() {
+                Some(current) if next.append => {
+                    current.pending_text.push_str(&next.pending_text);
+                    current.highlight_theme = next.highlight_theme;
+                }
+                _ => *pending = Some(next),
+            }
+        }
+        let _ = self.signal_tx.try_send(());
+    }
+
+    fn take(&self) -> Option<UpdateOptions> {
+        self.pending.lock().ok()?.take()
+    }
 }
 
 fn parse_content(

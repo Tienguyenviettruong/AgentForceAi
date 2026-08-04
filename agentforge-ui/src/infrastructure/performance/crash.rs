@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::panic;
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
@@ -11,13 +12,15 @@ pub struct CrashReport {
 
 #[derive(Clone)]
 pub struct CrashHandler {
-    reports: Arc<Mutex<Vec<CrashReport>>>,
+    reports: Arc<Mutex<VecDeque<CrashReport>>>,
 }
+
+const MAX_CRASH_REPORTS: usize = 32;
 
 impl CrashHandler {
     pub fn new() -> Self {
         Self {
-            reports: Arc::new(Mutex::new(Vec::new())),
+            reports: Arc::new(Mutex::new(VecDeque::new())),
         }
     }
 
@@ -45,7 +48,10 @@ impl CrashHandler {
             let backtrace = "Backtrace captured (placeholder)".to_string();
 
             if let Ok(mut r) = reports.lock() {
-                r.push(CrashReport {
+                if r.len() == MAX_CRASH_REPORTS {
+                    r.pop_front();
+                }
+                r.push_back(CrashReport {
                     timestamp: SystemTime::now(),
                     message: full_message,
                     backtrace,
@@ -56,7 +62,7 @@ impl CrashHandler {
 
     pub async fn get_reports(&self) -> Vec<CrashReport> {
         if let Ok(reports) = self.reports.lock() {
-            reports.clone()
+            reports.iter().cloned().collect()
         } else {
             Vec::new()
         }

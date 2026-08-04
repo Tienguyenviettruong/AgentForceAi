@@ -115,8 +115,9 @@ impl TeamBusRouter {
         role: &str,
     ) -> mpsc::Receiver<TeamMessage> {
         let (tx, rx) = mpsc::channel(100);
-        let mut direct_guard = self.direct_channels.write().await;
-        direct_guard
+        self.direct_channels
+            .write()
+            .await
             .entry(member_id.to_string())
             .or_default()
             .push((team_instance_id.to_string(), tx));
@@ -170,18 +171,22 @@ impl TeamBusRouter {
         match message.message_type {
             MessageType::Direct => {
                 if let Some(recipient) = &message.recipient_member_id {
-                    let channels = self.direct_channels.read().await;
-                    if let Some(txs) = channels.get(recipient) {
-                        let mut delivered = false;
-                        for (iid, tx) in txs {
-                            if iid == &message.team_instance_id {
-                                tx.send(message.clone()).await.map_err(|e| e.to_string())?;
-                                delivered = true;
-                            }
-                        }
-                        if delivered {
-                            return Ok(());
-                        }
+                    let targets = self
+                        .direct_channels
+                        .read()
+                        .await
+                        .get(recipient)
+                        .into_iter()
+                        .flatten()
+                        .filter(|(instance_id, _)| instance_id == &message.team_instance_id)
+                        .map(|(_, sender)| sender.clone())
+                        .collect::<Vec<_>>();
+                    let mut delivered = false;
+                    for sender in targets {
+                        delivered |= sender.send(message.clone()).await.is_ok();
+                    }
+                    if delivered {
+                        return Ok(());
                     }
                     return Err("Recipient not found".to_string());
                 }
@@ -215,14 +220,21 @@ impl TeamBusRouter {
                     }
 
                     let channels = self.direct_channels.read().await;
-                    for recipient in recipients {
-                        if let Some(txs) = channels.get(&recipient) {
-                            for (iid, tx) in txs {
-                                if iid == &message.team_instance_id {
-                                    let _ = tx.send(message.clone()).await;
-                                }
-                            }
-                        }
+                    let targets = recipients
+                        .into_iter()
+                        .flat_map(|recipient| {
+                            channels
+                                .get(&recipient)
+                                .into_iter()
+                                .flatten()
+                                .filter(|(instance_id, _)| instance_id == &message.team_instance_id)
+                                .map(|(_, sender)| sender.clone())
+                                .collect::<Vec<_>>()
+                        })
+                        .collect::<Vec<_>>();
+                    drop(channels);
+                    for sender in targets {
+                        let _ = sender.send(message.clone()).await;
                     }
                     return Ok(());
                 }

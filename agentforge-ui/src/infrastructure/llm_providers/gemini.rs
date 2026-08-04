@@ -19,20 +19,12 @@ impl Default for GeminiAdapter {
     }
 }
 
-static RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
-
 fn get_runtime() -> &'static tokio::runtime::Runtime {
-    RUNTIME.get_or_init(|| {
-        tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .expect("Failed to initialize Tokio runtime")
-    })
+    super::runtime::shared_runtime()
 }
 
 impl GeminiAdapter {
     pub fn new() -> Self {
-        let _guard = get_runtime().enter();
         Self {
             config: None,
             client: reqwest::Client::new(),
@@ -319,14 +311,15 @@ impl BaseProviderAdapter for GeminiAdapter {
                 .header("content-type", "application/json")
                 .json(&body);
 
-            let (tx, rx) = futures::channel::mpsc::unbounded();
+            let (tx, rx) = super::runtime::stream_channel();
 
             tokio::spawn(async move {
                 let mut es = match reqwest_eventsource::EventSource::new(req) {
                     Ok(es) => es,
                     Err(e) => {
-                        let _ =
-                            tx.unbounded_send(Err(anyhow!("Failed to create event source: {}", e)));
+                        let _ = tx
+                            .send(Err(anyhow!("Failed to create event source: {}", e)))
+                            .await;
                         return;
                     }
                 };
@@ -346,26 +339,30 @@ impl BaseProviderAdapter for GeminiAdapter {
                                 if let Some(text) =
                                     v["candidates"][0]["content"]["parts"][0]["text"].as_str()
                                 {
-                                    let _ = tx.unbounded_send(Ok(
-                                        crate::providers::StreamChunk::Text(text.to_string()),
-                                    ));
+                                    let _ = tx
+                                        .send(Ok(crate::providers::StreamChunk::Text(
+                                            text.to_string(),
+                                        )))
+                                        .await;
                                 }
                             }
                         }
                         Err(err) => {
                             es.close();
-                            let _ = tx.unbounded_send(Err(anyhow!("SSE Error: {}", err)));
+                            let _ = tx.send(Err(anyhow!("SSE Error: {}", err))).await;
                             break;
                         }
                     }
                 }
 
-                let _ = tx.unbounded_send(Ok(crate::providers::StreamChunk::Done(
-                    crate::providers::TokenUsage::default(),
-                )));
+                let _ = tx
+                    .send(Ok(crate::providers::StreamChunk::Done(
+                        crate::providers::TokenUsage::default(),
+                    )))
+                    .await;
             });
 
-            Ok(Box::new(rx)
+            Ok(Box::new(Box::pin(rx))
                 as Box<
                     dyn futures::Stream<Item = Result<crate::providers::StreamChunk, anyhow::Error>>
                         + Send

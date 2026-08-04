@@ -3,7 +3,7 @@ use crate::core::traits::database::DatabasePort;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -15,21 +15,26 @@ pub struct McpActionLog {
 }
 
 pub struct ActionRecorder {
-    logs: std::sync::RwLock<Vec<McpActionLog>>,
+    logs: std::sync::RwLock<VecDeque<McpActionLog>>,
     db: Arc<dyn DatabasePort>,
 }
+
+const MAX_ACTION_LOGS: usize = 1_000;
 
 impl ActionRecorder {
     pub fn new(db: Arc<dyn DatabasePort>) -> Self {
         Self {
-            logs: std::sync::RwLock::new(Vec::new()),
+            logs: std::sync::RwLock::new(VecDeque::new()),
             db,
         }
     }
 
     pub fn record_action(&self, tool_name: String, args: String, result: String) {
         let mut logs = self.logs.write().unwrap();
-        logs.push(McpActionLog {
+        if logs.len() == MAX_ACTION_LOGS {
+            logs.pop_front();
+        }
+        logs.push_back(McpActionLog {
             timestamp: Utc::now(),
             tool_name,
             args,
@@ -38,7 +43,7 @@ impl ActionRecorder {
     }
 
     pub fn get_logs(&self) -> Vec<McpActionLog> {
-        self.logs.read().unwrap().clone()
+        self.logs.read().unwrap().iter().cloned().collect()
     }
 
     pub async fn generate_iflow_and_save(&self) -> Result<String> {

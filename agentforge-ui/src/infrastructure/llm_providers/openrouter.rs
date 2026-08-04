@@ -6,15 +6,8 @@ use gpui::SharedString;
 use std::future::Future;
 use std::pin::Pin;
 
-static RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
-
 fn get_runtime() -> &'static tokio::runtime::Runtime {
-    RUNTIME.get_or_init(|| {
-        tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .expect("Failed to initialize Tokio runtime")
-    })
+    super::runtime::shared_runtime()
 }
 
 #[derive(serde::Serialize)]
@@ -69,7 +62,6 @@ impl Default for OpenRouterAdapter {
 
 impl OpenRouterAdapter {
     pub fn new() -> Self {
-        let _guard = get_runtime().enter();
         Self {
             config: None,
             client: reqwest::Client::new(),
@@ -240,14 +232,15 @@ impl BaseProviderAdapter for OpenRouterAdapter {
                 .header("User-Agent", "AgentForgeAI")
                 .json(&request_body);
 
-            let (tx, rx) = futures::channel::mpsc::unbounded();
+            let (tx, rx) = super::runtime::stream_channel();
 
             tokio::spawn(async move {
                 let mut es = match reqwest_eventsource::EventSource::new(req) {
                     Ok(es) => es,
                     Err(e) => {
-                        let _ =
-                            tx.unbounded_send(Err(anyhow!("Failed to create event source: {}", e)));
+                        let _ = tx
+                            .send(Err(anyhow!("Failed to create event source: {}", e)))
+                            .await;
                         return;
                     }
                 };
@@ -259,16 +252,19 @@ impl BaseProviderAdapter for OpenRouterAdapter {
                         Ok(reqwest_eventsource::Event::Message(message)) => {
                             if message.data == "[DONE]" {
                                 let _ = tx
-                                    .unbounded_send(Ok(crate::providers::StreamChunk::Done(usage)));
+                                    .send(Ok(crate::providers::StreamChunk::Done(usage)))
+                                    .await;
                                 break;
                             }
                             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&message.data)
                             {
                                 if let Some(content) = v["choices"][0]["delta"]["content"].as_str()
                                 {
-                                    let _ = tx.unbounded_send(Ok(
-                                        crate::providers::StreamChunk::Text(content.to_string()),
-                                    ));
+                                    let _ = tx
+                                        .send(Ok(crate::providers::StreamChunk::Text(
+                                            content.to_string(),
+                                        )))
+                                        .await;
                                 }
                                 if let Some(u) = v.get("usage").and_then(|u| u.as_object()) {
                                     usage.input_tokens = u
@@ -289,14 +285,14 @@ impl BaseProviderAdapter for OpenRouterAdapter {
                         }
                         Err(err) => {
                             es.close();
-                            let _ = tx.unbounded_send(Err(anyhow!("SSE Error: {}", err)));
+                            let _ = tx.send(Err(anyhow!("SSE Error: {}", err))).await;
                             break;
                         }
                     }
                 }
             });
 
-            Ok(Box::new(rx)
+            Ok(Box::new(Box::pin(rx))
                 as Box<
                     dyn futures::Stream<Item = Result<crate::providers::StreamChunk, anyhow::Error>>
                         + Send

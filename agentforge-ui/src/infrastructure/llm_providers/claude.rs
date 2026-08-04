@@ -7,17 +7,6 @@ use std::env;
 use std::future::Future;
 use std::pin::Pin;
 
-static RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
-
-fn get_runtime() -> &'static tokio::runtime::Runtime {
-    RUNTIME.get_or_init(|| {
-        tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .expect("Failed to initialize Tokio runtime")
-    })
-}
-
 /// Claude provider adapter implementation using SDK V2
 /// (Tasks 1.16, 1.17, 1.18)
 pub struct ClaudeAdapter {
@@ -35,7 +24,6 @@ impl Default for ClaudeAdapter {
 
 impl ClaudeAdapter {
     pub fn new() -> Self {
-        let _guard = get_runtime().enter();
         Self {
             config: None,
             session_id: None,
@@ -266,15 +254,16 @@ impl BaseProviderAdapter for ClaudeAdapter {
                 req = req.header("authorization", format!("Bearer {}", api_key));
             }
 
-            let (tx, rx) = futures::channel::mpsc::unbounded();
+            let (tx, rx) = super::runtime::stream_channel();
 
             tokio::spawn(async move {
                 let mut usage = TokenUsage::default();
                 let mut es = match reqwest_eventsource::EventSource::new(req) {
                     Ok(es) => es,
                     Err(e) => {
-                        let _ =
-                            tx.unbounded_send(Err(anyhow!("Failed to create event source: {}", e)));
+                        let _ = tx
+                            .send(Err(anyhow!("Failed to create event source: {}", e)))
+                            .await;
                         return;
                     }
                 };
@@ -320,18 +309,18 @@ impl BaseProviderAdapter for ClaudeAdapter {
                                         }
                                     } else if type_str == "content_block_delta" {
                                         if let Some(text) = v["delta"]["text"].as_str() {
-                                            let _ = tx.unbounded_send(Ok(
-                                                crate::providers::StreamChunk::Text(
+                                            let _ = tx
+                                                .send(Ok(crate::providers::StreamChunk::Text(
                                                     text.to_string(),
-                                                ),
-                                            ));
+                                                )))
+                                                .await;
                                         }
                                     } else if type_str == "message_stop" {
                                         usage.total_tokens =
                                             usage.input_tokens + usage.output_tokens;
-                                        let _ = tx.unbounded_send(Ok(
-                                            crate::providers::StreamChunk::Done(usage),
-                                        ));
+                                        let _ = tx
+                                            .send(Ok(crate::providers::StreamChunk::Done(usage)))
+                                            .await;
                                         break;
                                     }
                                 }
@@ -339,14 +328,14 @@ impl BaseProviderAdapter for ClaudeAdapter {
                         }
                         Err(err) => {
                             es.close();
-                            let _ = tx.unbounded_send(Err(anyhow!("SSE Error: {}", err)));
+                            let _ = tx.send(Err(anyhow!("SSE Error: {}", err))).await;
                             break;
                         }
                     }
                 }
             });
 
-            Ok(Box::new(rx)
+            Ok(Box::new(Box::pin(rx))
                 as Box<
                     dyn futures::Stream<Item = Result<crate::providers::StreamChunk, anyhow::Error>>
                         + Send

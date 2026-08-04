@@ -17,20 +17,12 @@ impl Default for OpenCodeAdapter {
     }
 }
 
-static RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
-
 fn get_runtime() -> &'static tokio::runtime::Runtime {
-    RUNTIME.get_or_init(|| {
-        tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .expect("Failed to initialize Tokio runtime")
-    })
+    super::runtime::shared_runtime()
 }
 
 impl OpenCodeAdapter {
     pub fn new() -> Self {
-        let _guard = get_runtime().enter();
         Self {
             config: None,
             command_line: "opencode".to_string(),
@@ -132,7 +124,7 @@ impl BaseProviderAdapter for OpenCodeAdapter {
             .collect::<Vec<_>>()
             .join("\n");
         Box::pin(async move {
-            let (tx, rx) = futures::channel::mpsc::unbounded();
+            let (tx, rx) = super::runtime::stream_channel();
 
             tokio::spawn(async move {
                 let mut child = match tokio::process::Command::new(cmd)
@@ -143,10 +135,9 @@ impl BaseProviderAdapter for OpenCodeAdapter {
                 {
                     Ok(c) => c,
                     Err(e) => {
-                        let _ = tx.unbounded_send(Err(anyhow!(
-                            "Failed to spawn opencode command: {}",
-                            e
-                        )));
+                        let _ = tx
+                            .send(Err(anyhow!("Failed to spawn opencode command: {}", e)))
+                            .await;
                         return;
                     }
                 };
@@ -159,8 +150,9 @@ impl BaseProviderAdapter for OpenCodeAdapter {
                 let stdout = match child.stdout.take() {
                     Some(s) => s,
                     None => {
-                        let _ =
-                            tx.unbounded_send(Err(anyhow!("Failed to capture opencode stdout")));
+                        let _ = tx
+                            .send(Err(anyhow!("Failed to capture opencode stdout")))
+                            .await;
                         return;
                     }
                 };
@@ -172,23 +164,25 @@ impl BaseProviderAdapter for OpenCodeAdapter {
                         Ok(0) => break,
                         Ok(n) => {
                             let text = String::from_utf8_lossy(&buf[..n]).to_string();
-                            let _ =
-                                tx.unbounded_send(Ok(crate::providers::StreamChunk::Text(text)));
+                            let _ = tx.send(Ok(crate::providers::StreamChunk::Text(text))).await;
                         }
                         Err(e) => {
                             let _ = tx
-                                .unbounded_send(Err(anyhow!("OpenCode stdout read error: {}", e)));
+                                .send(Err(anyhow!("OpenCode stdout read error: {}", e)))
+                                .await;
                             break;
                         }
                     }
                 }
 
-                let _ = tx.unbounded_send(Ok(crate::providers::StreamChunk::Done(
-                    crate::providers::TokenUsage::default(),
-                )));
+                let _ = tx
+                    .send(Ok(crate::providers::StreamChunk::Done(
+                        crate::providers::TokenUsage::default(),
+                    )))
+                    .await;
             });
 
-            Ok(Box::new(rx)
+            Ok(Box::new(Box::pin(rx))
                 as Box<
                     dyn futures::Stream<Item = Result<crate::providers::StreamChunk, anyhow::Error>>
                         + Send

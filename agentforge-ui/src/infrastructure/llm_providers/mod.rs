@@ -9,6 +9,7 @@ pub mod opencode;
 pub mod openrouter;
 pub mod plugin;
 pub mod registry;
+mod runtime;
 
 use std::future::Future;
 use std::pin::Pin;

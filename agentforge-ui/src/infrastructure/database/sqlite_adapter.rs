@@ -153,6 +153,7 @@ impl Database {
             "PRAGMA journal_mode=WAL;
             PRAGMA synchronous=NORMAL;
             PRAGMA foreign_keys=ON;
+            PRAGMA busy_timeout=5000;
 
             CREATE TABLE IF NOT EXISTS schema_migrations (
                 version INTEGER PRIMARY KEY,
@@ -283,6 +284,13 @@ impl Database {
                 content TEXT NOT NULL,
                 sent_at TEXT NOT NULL
             );
+
+            CREATE INDEX IF NOT EXISTS idx_tasks_instance_status
+                ON tasks(instance_id, status, priority, created_at);
+            CREATE INDEX IF NOT EXISTS idx_members_team_instance
+                ON members(team_id, instance_id);
+            CREATE INDEX IF NOT EXISTS idx_messages_team_instance_time
+                ON messages(team_id, instance_id, sent_at);
 
             -- 9. Team Messages
             CREATE TABLE IF NOT EXISTS team_messages (

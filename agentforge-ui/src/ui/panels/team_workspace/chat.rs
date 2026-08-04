@@ -2676,14 +2676,18 @@ impl TeamWorkspacePanel {
                             }));
 
                             let (stream_tx, mut stream_rx) =
-                                tokio::sync::mpsc::unbounded_channel::<String>();
+                                tokio::sync::watch::channel(String::new());
                             let view_stream = view_agent.clone();
                             let db_stream = db_clone_agent.clone();
                             let msg_id_stream = msg_id.clone();
                             let session_id_stream = session_id_clone_agent.clone();
                             let msg_idx_stream = msg_idx;
                             cx.spawn(async move |cx| {
-                                while let Some(partial) = stream_rx.recv().await {
+                                while stream_rx.changed().await.is_ok() {
+                                    let partial = stream_rx.borrow_and_update().clone();
+                                    if partial.is_empty() {
+                                        continue;
+                                    }
                                     let _ = db_stream.update_team_message_content(&msg_id_stream, &partial);
                                     let Some(msg_idx) = msg_idx_stream else {
                                         continue;
@@ -2722,7 +2726,7 @@ impl TeamWorkspacePanel {
                                             .or_else(|| Some(run_id_clone_agent.clone())),
                                         None,
                                         Some(std::sync::Arc::new(move |partial| {
-                                            let _ = stream_tx.send(partial);
+                                            stream_tx.send_replace(partial);
                                         })),
                                     );
                                 let response_started_at = std::time::Instant::now();
@@ -3084,14 +3088,18 @@ impl TeamWorkspacePanel {
                                 });
 
                                 let (stream_tx, mut stream_rx) =
-                                    tokio::sync::mpsc::unbounded_channel::<String>();
+                                    tokio::sync::watch::channel(String::new());
                                 let view_stream = view.clone();
                                 let db_stream = db_clone.clone();
                                 let office_msg_id_stream = office_msg_id.clone();
                                 let session_id_stream = session_id_for_ai.clone();
                                 let msg_idx_stream = msg_idx;
                                 cx.spawn(async move |cx| {
-                                    while let Some(partial) = stream_rx.recv().await {
+                                    while stream_rx.changed().await.is_ok() {
+                                        let partial = stream_rx.borrow_and_update().clone();
+                                        if partial.is_empty() {
+                                            continue;
+                                        }
                                         let _ = db_stream.update_team_message_content(
                                             &office_msg_id_stream,
                                             &partial,
@@ -3132,7 +3140,7 @@ impl TeamWorkspacePanel {
                                         Some(cancel_flag_for_ai.clone()),
                                         Some(std::sync::Arc::new(move |partial| {
                                             if !cancel_for_stream.load(Ordering::SeqCst) {
-                                                let _ = stream_tx.send(partial);
+                                                stream_tx.send_replace(partial);
                                             }
                                         })),
                                     );

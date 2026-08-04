@@ -24,7 +24,6 @@ pub struct MessageQueue {
     sender: mpsc::Sender<TeamMessage>,
     receiver: Arc<Mutex<mpsc::Receiver<TeamMessage>>>,
     config: QueueConfig,
-    current_size: Arc<Mutex<usize>>,
 }
 
 impl MessageQueue {
@@ -34,36 +33,24 @@ impl MessageQueue {
             sender,
             receiver: Arc::new(Mutex::new(receiver)),
             config,
-            current_size: Arc::new(Mutex::new(0)),
         }
     }
 
     pub async fn enqueue(&self, message: TeamMessage) -> Result<(), String> {
-        let mut size = self.current_size.lock().await;
-        if *size >= self.config.max_size {
-            return Err("Queue is full. Backpressure applied.".to_string());
-        }
-
-        match self.sender.send(message).await {
-            Ok(_) => {
-                *size += 1;
-                Ok(())
+        match self.sender.try_send(message) {
+            Ok(()) => Ok(()),
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                Err("Queue is full. Backpressure applied.".to_string())
             }
-            Err(e) => Err(format!("Failed to enqueue message: {}", e)),
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                Err("Failed to enqueue message: queue is closed".to_string())
+            }
         }
     }
 
     pub async fn dequeue(&self) -> Option<TeamMessage> {
         let mut rx = self.receiver.lock().await;
-        if let Some(msg) = rx.recv().await {
-            let mut size = self.current_size.lock().await;
-            if *size > 0 {
-                *size -= 1;
-            }
-            Some(msg)
-        } else {
-            None
-        }
+        rx.recv().await
     }
 
     pub async fn process_with_retry<F, Fut>(&self, mut processor: F)
@@ -97,5 +84,31 @@ impl MessageQueue {
                 // In a real system, we'd send this to a dead letter queue (DLQ)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn message(content: &str) -> TeamMessage {
+        TeamMessage::new_broadcast(
+            "instance".to_string(),
+            "sender".to_string(),
+            content.to_string(),
+        )
+    }
+
+    #[tokio::test]
+    async fn bounded_queue_applies_backpressure_without_a_counter_lock() {
+        let queue = MessageQueue::new(QueueConfig {
+            max_size: 1,
+            ..QueueConfig::default()
+        });
+
+        queue.enqueue(message("first")).await.unwrap();
+        assert!(queue.enqueue(message("second")).await.is_err());
+        assert_eq!(queue.dequeue().await.unwrap().content, "first");
+        queue.enqueue(message("third")).await.unwrap();
     }
 }

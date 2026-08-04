@@ -20,7 +20,6 @@ impl Default for IFlowAdapter {
 
 impl IFlowAdapter {
     pub fn new() -> Self {
-        let _guard = get_runtime().enter();
         Self {
             config: None,
             workflow_id: None,
@@ -134,7 +133,7 @@ impl BaseProviderAdapter for IFlowAdapter {
             .collect::<Vec<_>>()
             .join("\n");
         Box::pin(async move {
-            let (tx, rx) = futures::channel::mpsc::unbounded();
+            let (tx, rx) = super::runtime::stream_channel();
 
             tokio::spawn(async move {
                 let mut command = tokio::process::Command::new(cmd);
@@ -149,8 +148,9 @@ impl BaseProviderAdapter for IFlowAdapter {
                 {
                     Ok(c) => c,
                     Err(e) => {
-                        let _ =
-                            tx.unbounded_send(Err(anyhow!("Failed to spawn iflow command: {}", e)));
+                        let _ = tx
+                            .send(Err(anyhow!("Failed to spawn iflow command: {}", e)))
+                            .await;
                         return;
                     }
                 };
@@ -163,7 +163,9 @@ impl BaseProviderAdapter for IFlowAdapter {
                 let stdout = match child.stdout.take() {
                     Some(s) => s,
                     None => {
-                        let _ = tx.unbounded_send(Err(anyhow!("Failed to capture iflow stdout")));
+                        let _ = tx
+                            .send(Err(anyhow!("Failed to capture iflow stdout")))
+                            .await;
                         return;
                     }
                 };
@@ -175,23 +177,25 @@ impl BaseProviderAdapter for IFlowAdapter {
                         Ok(0) => break,
                         Ok(n) => {
                             let text = String::from_utf8_lossy(&buf[..n]).to_string();
-                            let _ =
-                                tx.unbounded_send(Ok(crate::providers::StreamChunk::Text(text)));
+                            let _ = tx.send(Ok(crate::providers::StreamChunk::Text(text))).await;
                         }
                         Err(e) => {
-                            let _ =
-                                tx.unbounded_send(Err(anyhow!("iFlow stdout read error: {}", e)));
+                            let _ = tx
+                                .send(Err(anyhow!("iFlow stdout read error: {}", e)))
+                                .await;
                             break;
                         }
                     }
                 }
 
-                let _ = tx.unbounded_send(Ok(crate::providers::StreamChunk::Done(
-                    crate::providers::TokenUsage::default(),
-                )));
+                let _ = tx
+                    .send(Ok(crate::providers::StreamChunk::Done(
+                        crate::providers::TokenUsage::default(),
+                    )))
+                    .await;
             });
 
-            Ok(Box::new(rx)
+            Ok(Box::new(Box::pin(rx))
                 as Box<
                     dyn futures::Stream<Item = Result<crate::providers::StreamChunk, anyhow::Error>>
                         + Send
@@ -205,13 +209,6 @@ impl BaseProviderAdapter for IFlowAdapter {
     }
 }
 
-static RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
-
 fn get_runtime() -> &'static tokio::runtime::Runtime {
-    RUNTIME.get_or_init(|| {
-        tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .expect("Failed to initialize Tokio runtime")
-    })
+    super::runtime::shared_runtime()
 }

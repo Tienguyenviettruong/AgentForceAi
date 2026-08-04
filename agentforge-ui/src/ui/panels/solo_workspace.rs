@@ -1,5 +1,7 @@
 mod chat;
 mod model;
+mod remote;
+mod remote_view;
 mod sections;
 mod sidebar;
 
@@ -64,19 +66,7 @@ pub struct SoloWorkspacePanel {
     solo_mention_query: Option<String>,
     solo_mention_start: Option<usize>,
     solo_mention_selection_index: usize,
-    remote_windows: Vec<crate::infrastructure::desktop_monitor::DesktopWindowPreview>,
-    remote_refreshing: bool,
-    remote_last_refreshed: Option<String>,
-    remote_selected_window: Option<isize>,
-    remote_stream_frame: Option<std::sync::Arc<gpui::RenderImage>>,
-    remote_stream_frame_size: Option<(u32, u32)>,
-    remote_stream_error: Option<String>,
-    remote_streaming: bool,
-    remote_stream_generation: usize,
-    remote_viewer_expanded: bool,
-    remote_control_enabled: bool,
-    remote_viewer_bounds: Option<gpui::Bounds<gpui::Pixels>>,
-    remote_control_message: Option<String>,
+    remote: remote::RemoteState,
     _solo_subscriptions: Vec<Subscription>,
 }
 
@@ -201,19 +191,7 @@ impl SoloWorkspacePanel {
             solo_mention_query: None,
             solo_mention_start: None,
             solo_mention_selection_index: 0,
-            remote_windows: Vec::new(),
-            remote_refreshing: false,
-            remote_last_refreshed: None,
-            remote_selected_window: None,
-            remote_stream_frame: None,
-            remote_stream_frame_size: None,
-            remote_stream_error: None,
-            remote_streaming: false,
-            remote_stream_generation: 0,
-            remote_viewer_expanded: false,
-            remote_control_enabled: false,
-            remote_viewer_bounds: None,
-            remote_control_message: None,
+            remote: remote::RemoteState::default(),
             _solo_subscriptions: vec![effort_subscription],
         };
         let prompt_subscription = cx.subscribe_in(

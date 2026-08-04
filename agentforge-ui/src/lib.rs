@@ -147,7 +147,6 @@ impl AppState {
                 .build()
                 .expect("Failed to init tokio runtime"),
         );
-        crate::providers::embeddings::prewarm_embedding_model();
         let obsidian_watcher = std::sync::Arc::new(std::sync::Mutex::new(None));
         let initial_mode = db
             .get_setting("orchestration_mode")

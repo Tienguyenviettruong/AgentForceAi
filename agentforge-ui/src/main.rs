@@ -6,6 +6,7 @@ use std::borrow::Cow;
 /// An asset source that loads customized local assets from the `./assets` folder.
 #[derive(RustEmbed)]
 #[folder = "./assets"]
+#[exclude = "pet/*.png"]
 pub struct LocalAssets;
 
 pub struct CombinedAssets;
